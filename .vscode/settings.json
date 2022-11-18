@@ -1,0 +1,14 @@
+{
+    "editor.parameterHints.enabled": true,
+    "editor.quickSuggestions": {
+        "other": "on",
+        "comments": "on",
+        "strings": "on"
+    },
+    "C_Cpp.intelliSenseEngine": "Default",
+    "files.associations": {
+        "stdio.h": "c",
+        "lualib.h": "c",
+        "lua.h": "c"
+    }
+}

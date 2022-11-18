@@ -1,0 +1,16 @@
+[submodule "deps/luajit2"]
+	path = deps/luajit2
+	url = git@github.com:openresty/luajit2.git
+	branch = v2.1-agentzh
+[submodule "deps/base64"]
+	path = deps/base64
+	url = git@github.com:aklomp/base64.git
+	branch = master
+[submodule "deps/jemalloc"]
+	path = deps/jemalloc
+	url = git@github.com:jemalloc/jemalloc.git
+	branch = master
+[submodule "deps/libuv"]
+	path = deps/libuv
+	url = git@github.com:libuv/libuv.git
+	branch = v1.x

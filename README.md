@@ -5,9 +5,11 @@ a simple game server
 ## build
 
 ```bash
+# build
 cmake -H. -Bbuild
 cmake --build build
-
+# test
+ctest --test-dir build
 ```
 
 ### macos

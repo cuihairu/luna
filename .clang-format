@@ -1,4 +1,4 @@
-# jemalloc targets clang-format version 8.  We include every option it supports
+# luna targets clang-format version 1.  We include every option it supports
 # here, but comment out the ones that aren't relevant for us.
 ---
 # AccessModifierOffset: -2
@@ -63,7 +63,7 @@ IndentWrappedFunctionNames: false
 # JavaScriptQuotes: Leave
 # JavaScriptWrapImports: True
 KeepEmptyLinesAtTheStartOfBlocks: false
-Language: Cpp
+Language: C
 MacroBlockBegin: ''
 MacroBlockEnd: ''
 MaxEmptyLinesToKeep: 1

@@ -8,8 +8,7 @@ message(STATUS "CMAKE_MODULE_PATH:${CMAKE_MODULE_PATH}")
 # option
 option(ENABLE_UNIT_TESTS "Enable unit tests" ON)
 message(STATUS "Enable testing :${ENABLE_UNIT_TESTS}")
-
-
+# git submodules
 option(CHECKOUT_GIT_SUBMODULE "Check out git submodules during build" ON)
 message(STATUS "CHECKOUT_GIT_SUBMODULE:${CHECKOUT_GIT_SUBMODULE}")
 include(FetchSubmodules)
@@ -28,7 +27,7 @@ ExternalProject_Add(
     SOURCE_DIR "${PROJECT_SOURCE_DIR}/deps/luajit2/src"
     DOWNLOAD_COMMAND ""
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND MACOSX_DEPLOYMENT_TARGET=11.6 make all
+    BUILD_COMMAND make all
     BUILD_IN_SOURCE true
     INSTALL_COMMAND ""
 )

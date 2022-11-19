@@ -17,7 +17,7 @@ include(FetchSubmodules)
 # luajit2
 include(ExternalProject)
 set(LUAJIT_LIB "${PROJECT_SOURCE_DIR}/deps/luajit2/src/libluajit.a")
-if(WIN)
+if(WIN32)
     set(LUAJIT_LIB "${PROJECT_SOURCE_DIR}/deps/luajit2/src/libluajit-5.1.dll.a")
 endif()
 

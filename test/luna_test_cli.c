@@ -53,6 +53,20 @@ static int run_luna_piped(const char *input, const char *args)
     return 0;
 }
 
+/* run `env luna <args>` through sh (env prefixes like "LUNA_COLOR=1") */
+static int run_luna_env(const char *env, const char *args)
+{
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd), "%s %s %s 2>&1", env, LUNA_BIN, args);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    size_t n = fread(outbuf, 1, sizeof(outbuf) - 1, p);
+    outbuf[n] = '\0';
+    int status = pclose(p);
+    last_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return 0;
+}
+
 /* -- script group ------------------------------------------------------ */
 
 static void test_script_runs_and_gets_args(void **state)
@@ -161,6 +175,29 @@ static void test_interactive_help_injected(void **state)
     assert_non_null(strstr(outbuf, "function("));
 }
 
+/* -- color / degradation --------------------------------------------------- */
+
+static void test_color_forced_by_env(void **state)
+{
+    (void)state;
+    /* not a TTY, but LUNA_COLOR=1 forces colors on (Out label + value) */
+    run_luna_env("LUNA_COLOR=1", "-e '40 + 2'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "\x1b[")); /* colored */
+    assert_non_null(strstr(outbuf, "Out[1]:"));
+    assert_non_null(strstr(outbuf, "42"));
+}
+
+static void test_color_disabled_by_env(void **state)
+{
+    (void)state;
+    /* LUNA_NO_COLOR wins even when LUNA_COLOR is also set */
+    run_luna_env("LUNA_COLOR=1 LUNA_NO_COLOR=1", "-e '40 + 2'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "Out[1]: 42"));
+    assert_null(strstr(outbuf, "\x1b["));
+}
+
 /* -- help / usage -------------------------------------------------------- */
 
 static void test_help_smoke(void **state)
@@ -195,6 +232,8 @@ int main(void)
         cmocka_unit_test(test_interactive_after_script),
         cmocka_unit_test(test_interactive_error_keeps_going),
         cmocka_unit_test(test_interactive_help_injected),
+        cmocka_unit_test(test_color_forced_by_env),
+        cmocka_unit_test(test_color_disabled_by_env),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),
     };

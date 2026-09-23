@@ -282,8 +282,18 @@ static int k_colors(lua_State *L)
     int tty = 0;
 #endif
     const char *term = getenv("TERM");
-    int ok = tty && !(term && strcmp(term, "dumb") == 0) && !getenv("NO_COLOR") &&
-             !getenv("LUNA_NO_COLOR");
+    /* NO_COLOR / LUNA_NO_COLOR win over everything (no-color.org);
+     * LUNA_COLOR=1/0 forces the answer either way — CI tests rely on it. */
+    if (getenv("NO_COLOR") || getenv("LUNA_NO_COLOR")) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    const char *force = getenv("LUNA_COLOR");
+    if (force && *force) {
+        lua_pushboolean(L, strcmp(force, "0") != 0);
+        return 1;
+    }
+    int ok = tty && !(term && strcmp(term, "dumb") == 0);
     lua_pushboolean(L, ok);
     return 0;
 }

@@ -14,6 +14,7 @@ local kernel = require "kernel"
 -- REPL and plugins can require them by name
 package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, "=(luna/introspect)"))
 package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
+package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/highlight)"))
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 
 local parser = argparse("luna", kernel.version() .. " — " ..
@@ -66,7 +67,8 @@ end
 -- Unlike interactive input, trailing incomplete chunks are an error:
 -- there is no next line to continue with.
 local function run_eval(code)
-    local session = repl.new({ chunk_name = "eval" })
+    local session = repl.new({ chunk_name = "eval",
+        color = kernel.colors() and not opts.no_color })
     local status = session:feed(code)
     if status == "continue" then
         io.stderr:write("luna: -e code is incomplete\n")
@@ -79,9 +81,11 @@ local function run_eval(code)
 end
 
 -- Interactive console. Works on a TTY (line-based until the line editor
--- lands) and degrades gracefully to piped stdin.
+-- lands) and degrades gracefully to piped stdin. Colors require a TTY
+-- (kernel.colors, which honors NO_COLOR/LUNA_COLOR) and stay off with
+-- --no-color.
 local function run_console()
-    return repl.run({ color = not opts.no_color })
+    return repl.run({ color = kernel.colors() and not opts.no_color })
 end
 
 if opts.eval then

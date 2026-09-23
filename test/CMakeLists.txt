@@ -13,7 +13,7 @@ add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
 
 # REPL session: evaluation, multi-line chunks, SIGINT abort
 add_executable(luna_test_repl luna_test_repl.c)
-target_link_libraries(luna_test_repl PRIVATE cmocka-static lualib luna_kernel)
+target_link_libraries(luna_test_repl PRIVATE cmocka-static lualib lpeg luna_kernel)
 add_test(NAME repl COMMAND luna_test_repl)
 
 # CLI: script / eval / interactive launch modes through the real binary
@@ -31,6 +31,14 @@ add_test(NAME complete COMMAND luna_test_complete)
 
 # Introspection: repr, help/whos, ?-sugar
 add_executable(luna_test_introspect luna_test_introspect.c)
-target_link_libraries(luna_test_introspect PRIVATE cmocka-static lualib luna_kernel)
+target_link_libraries(luna_test_introspect PRIVATE cmocka-static lualib lpeg luna_kernel)
 add_test(NAME introspect COMMAND luna_test_introspect)
+
+# Syntax highlighting: scintillua/LPeg rendering, extension point,
+# no-color degradation, colored session output
+add_executable(luna_test_highlight luna_test_highlight.c)
+target_link_libraries(luna_test_highlight PRIVATE cmocka-static lualib lpeg luna_kernel)
+target_compile_definitions(luna_test_highlight PRIVATE
+        LUNA_TEST_LEXERS_DIR="${CMAKE_BINARY_DIR}/luna_modules/lexers")
+add_test(NAME highlight COMMAND luna_test_highlight)
 

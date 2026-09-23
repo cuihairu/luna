@@ -10,11 +10,26 @@
 local kernel = require "kernel"
 local complete = require "luna.complete"
 local intro = require "luna.introspect"
+local highlight = require "luna.highlight"
 
 local repl = {}
 
+-- ANSI accents for chrome (prompts, labels, errors); value rendering
+-- goes through luna.highlight instead.
+local RESET = "\27[0m"
+local COLOR_IN = "\27[1;32m"  -- bold green: prompts, banner
+local COLOR_OUT = "\27[1;35m" -- bold magenta: Out[n] labels
+local COLOR_ERR = "\27[31m"   -- red: errors
+
 local function emit(text)
     kernel.write(text)
+end
+
+local function paint(text, code, on)
+    if not on then
+        return text
+    end
+    return code .. text .. RESET
 end
 
 -- Display goes through luna.introspect: quoted strings, limited tables,
@@ -35,6 +50,7 @@ function repl.new(opts)
     self.out = {}            -- Out[n] -> first value, IPython-style
     self.last = nil          -- _
     self.chunk_name = opts.chunk_name or "repl"
+    self.color = opts.color and true or false -- no-TTY degradation
     return self
 end
 
@@ -87,7 +103,7 @@ function Session:feed(line)
     self.in_n = self.in_n + 1
 
     if status == "error" and not wrapped_ok then
-        emit(err .. "\n")
+        emit(paint(tostring(err), COLOR_ERR, self.color) .. "\n")
         return "error"
     end
 
@@ -95,7 +111,7 @@ function Session:feed(line)
 
     local res = table.pack(kernel.exec(src, self.chunk_name .. "[" .. self.in_n .. "]"))
     if not res[1] then
-        emit(tostring(res[2]) .. "\n")
+        emit(paint(tostring(res[2]), COLOR_ERR, self.color) .. "\n")
         return "error"
     end
 
@@ -118,7 +134,8 @@ function Session:feed(line)
         for i = 2, res.n do
             parts[#parts + 1] = repr(res[i])
         end
-        emit("Out[" .. n .. "]: " .. table.concat(parts, "  ") .. "\n")
+        emit(paint("Out[" .. n .. "]: ", COLOR_OUT, self.color) ..
+            highlight.render(table.concat(parts, "  "), self.color) .. "\n")
     end
     return "ok"
 end
@@ -127,7 +144,7 @@ end
 function Session:show_help(expr)
     local res = table.pack(kernel.exec("return " .. expr, self.chunk_name .. "[help]"))
     if not res[1] then
-        emit(tostring(res[2]) .. "\n")
+        emit(paint(tostring(res[2]), COLOR_ERR, self.color) .. "\n")
         return
     end
     emit(intro.help(res[2]))
@@ -148,13 +165,17 @@ end
 
 -- Interactive driver. Editing and history come with the line-editor
 -- integration; for now the terminal's canonical mode reads lines.
+-- argt.color turns on ANSI chrome and value highlighting; it comes from
+-- kernel.colors() && --no-color in the entry, so it is false without a
+-- TTY unless LUNA_COLOR forces it.
 function repl.run(argt)
     argt = argt or {}
-    local session = repl.new()
+    local session = repl.new({ color = argt.color })
     local tty = kernel.tty()
 
     if tty then
-        emit(kernel.version() .. " — " .. _VERSION .. " interactive console\n")
+        emit(paint(kernel.version() .. " — " .. _VERSION ..
+            " interactive console\n", COLOR_IN, session.color))
         emit("Type ^D to exit.\n")
     end
 
@@ -170,7 +191,7 @@ function repl.run(argt)
     while true do
         kernel.clear_interrupt()
         if tty then
-            io.write(session:prompt())
+            io.write(paint(session:prompt(), COLOR_IN, session.color))
             io.stdout:flush()
         end
         local line = io.read("l")

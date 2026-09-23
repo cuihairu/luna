@@ -9,8 +9,15 @@
 #include "luna_kernel.h"
 #include "luna_lua.h" /* generated: embedded Lua entry + repl sources */
 
+/* lpeg.c has no lpeg.h; this is its single exported entry point. */
+int luaopen_lpeg(lua_State *L);
+
 #ifndef LUNA_MODULES_DIR
 #define LUNA_MODULES_DIR "./luna_modules"
+#endif
+
+#ifndef LUNA_LEXERS_DIR
+#define LUNA_LEXERS_DIR "./luna_modules/lexers"
 #endif
 
 #ifndef LUNA_SO_EXT
@@ -107,6 +114,8 @@ int main(int argc, char *argv[])
 
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
+    lua_pop(L, 1); /* registered, resolved on demand via require */
 
     setup_module_paths(L);
 
@@ -117,6 +126,10 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
     lua_pushlstring(L, LUNA_LUA_INTROSPECT, sizeof(LUNA_LUA_INTROSPECT) - 1);
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
+    lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
+    lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
+    lua_pushstring(L, LUNA_LEXERS_DIR);
+    lua_setglobal(L, "__LUNA_LEXERS_DIR");
 
     push_arg_table(L, argc, argv);
 

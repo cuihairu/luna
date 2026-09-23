@@ -16,3 +16,9 @@
 [submodule "deps/argparse"]
 	path = deps/argparse
 	url = https://github.com/mpeterv/argparse.git
+[submodule "deps/lpeg"]
+	path = deps/lpeg
+	url = https://github.com/roberto-ieru/LPeg.git
+[submodule "deps/scintillua"]
+	path = deps/scintillua
+	url = https://github.com/orbitalquark/scintillua.git

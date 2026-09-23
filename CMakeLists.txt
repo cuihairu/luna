@@ -30,6 +30,13 @@ endif()
 
 include_directories("${PROJECT_SOURCE_DIR}/deps/lua")
 
+# LPeg 1.1.0 (deps/lpeg): pattern-matching engine required by the
+# scintillua lexers; exposed to Lua as require "lpeg" from luna_main.
+file(GLOB LPEG_SOURCES "${PROJECT_SOURCE_DIR}/deps/lpeg/*.c")
+list(LENGTH LPEG_SOURCES LPEG_SOURCE_COUNT)
+add_library(lpeg STATIC ${LPEG_SOURCES})
+target_include_directories(lpeg PUBLIC "${PROJECT_SOURCE_DIR}/deps/lpeg")
+
 # thin C kernel exposed to Lua as require "kernel"
 add_library(luna_kernel STATIC src/luna_kernel.c src/luna_kernel.h)
 target_include_directories(luna_kernel PUBLIC
@@ -41,12 +48,14 @@ file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua" LUNA_LUA_COMPLETE)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/introspect.lua" LUNA_LUA_INTROSPECT)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/highlight.lua" LUNA_LUA_HIGHLIGHT)
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua"
-        "${PROJECT_SOURCE_DIR}/lua/luna/introspect.lua")
+        "${PROJECT_SOURCE_DIR}/lua/luna/introspect.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/highlight.lua")
 configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/generated")
@@ -60,7 +69,7 @@ list(APPEND luna_sources
 )
 
 add_executable(luna ${luna_sources})
-target_link_libraries(luna lualib luna_kernel)
+target_link_libraries(luna lualib lpeg luna_kernel)
 
 # bundled modules: argparse is vendored as a submodule and staged into
 # the build tree under luna_modules/ so require "argparse" resolves the
@@ -72,8 +81,22 @@ file(COPY "${PROJECT_SOURCE_DIR}/deps/argparse/src/argparse.lua"
 file(WRITE "${LUNA_MODULES_DIR}/argparse/init.lua"
      "return require \"argparse.argparse\"\n")
 
+# scintillua's lexer engine and the Lua lexer are staged the same way:
+# require "lexer" resolves through luna_modules/?.lua, and highlight
+# adds luna_modules/lexers to package.path — scintillua derives its
+# lexer-file search from package.path entries ending in /?.lua, so that
+# one element serves both the engine and the lexer definitions.
+file(MAKE_DIRECTORY "${LUNA_MODULES_DIR}/lexers")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/scintillua/lexers/lexer.lua"
+     DESTINATION "${LUNA_MODULES_DIR}")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/scintillua/lexers/lexer.lua"
+     DESTINATION "${LUNA_MODULES_DIR}/lexers")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/scintillua/lexers/lua.lua"
+     DESTINATION "${LUNA_MODULES_DIR}/lexers")
+
 target_compile_definitions(luna PRIVATE
         LUNA_MODULES_DIR="${LUNA_MODULES_DIR}"
+        LUNA_LEXERS_DIR="${LUNA_MODULES_DIR}/lexers"
         LUNA_SO_EXT="${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
 if (ENABLE_UNIT_TESTS)

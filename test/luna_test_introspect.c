@@ -16,6 +16,8 @@
 #include "luna_kernel.h"
 #include "luna_lua.h" /* generated: embedded repl + introspect sources */
 
+int luaopen_lpeg(lua_State *L); /* repl requires luna.highlight -> lpeg */
+
 static lua_State *L;
 static char outbuf[65536];
 static size_t outlen;
@@ -33,15 +35,20 @@ static int sink_append(lua_State *l)
 
 static void preload_modules(void)
 {
+    luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
+    lua_pop(L, 1);
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
     lua_pushlstring(L, LUNA_LUA_INTROSPECT, sizeof(LUNA_LUA_INTROSPECT) - 1);
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
     lua_setglobal(L, "__LUNA_REPL_SRC");
+    lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
+    lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
     assert_int_equal(luaL_dostring(L,
                        "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
-                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))"),
+                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
+                       "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))"),
                      LUA_OK);
 }
 

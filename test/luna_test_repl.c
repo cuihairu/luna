@@ -12,6 +12,8 @@
 #include "luna_kernel.h"
 #include "luna_lua.h" /* generated: embedded repl + complete sources */
 
+int luaopen_lpeg(lua_State *L); /* no lpeg.h in deps/lpeg; repl needs highlight */
+
 /* Output captured from kernel.write() (via kernel.sink). */
 static char outbuf[65536];
 static size_t outlen;
@@ -47,6 +49,8 @@ static int setup_session(void **state)
 
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
+    lua_pop(L, 1);
 
     /* route output into outbuf */
     lua_getglobal(L, "kernel");
@@ -60,9 +64,12 @@ static int setup_session(void **state)
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
     lua_pushlstring(L, LUNA_LUA_INTROSPECT, sizeof(LUNA_LUA_INTROSPECT) - 1);
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
+    lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
+    lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
     if (luaL_dostring(L,
                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
-                      "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))") != LUA_OK) {
+                      "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
+                      "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))") != LUA_OK) {
         fail_msg("cannot preload modules: %s", lua_tostring(L, -1));
     }
 

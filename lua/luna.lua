@@ -9,6 +9,10 @@
 -- The REPL stays the entry point: node ships a REPL, so does luna.
 local argparse = require "argparse"
 local kernel = require "kernel"
+
+-- embedded policy modules (see cmake/luna_lua.h.in); preloaded so the
+-- REPL and plugins can require them by name
+package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 
 local parser = argparse("luna", kernel.version() .. " — " ..

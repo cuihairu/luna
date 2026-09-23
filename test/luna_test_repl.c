@@ -10,7 +10,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
-#include "luna_lua.h" /* generated: embedded repl source */
+#include "luna_lua.h" /* generated: embedded repl + complete sources */
 
 /* Output captured from kernel.write() (via kernel.sink). */
 static char outbuf[65536];
@@ -55,7 +55,13 @@ static int setup_session(void **state)
     assert_int_equal(lua_pcall(L, 1, 0, 0), LUA_OK);
     lua_pop(L, 1);
 
-    /* embed the repl source as the entry expects, then create a session */
+    /* embed the policy modules the entry preloads, then create a session */
+    lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
+    lua_setglobal(L, "__LUNA_COMPLETE_SRC");
+    if (luaL_dostring(L, "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))") != LUA_OK) {
+        fail_msg("cannot preload complete: %s", lua_tostring(L, -1));
+    }
+
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
     lua_setglobal(L, "__LUNA_REPL_SRC");
     const char *src = "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"

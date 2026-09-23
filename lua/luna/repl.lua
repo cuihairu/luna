@@ -8,6 +8,7 @@
 -- All output goes through kernel.write() (funnel: sink function or
 -- stdout), so sessions run headless in tests.
 local kernel = require "kernel"
+local complete = require "luna.complete"
 
 local repl = {}
 
@@ -111,6 +112,12 @@ function Session:prompt()
         return "... "
     end
     return "In [" .. (self.in_n + 1) .. "]: "
+end
+
+-- Tab completion hook for the line editor (replxx callbacks call this
+-- through the kernel). Candidates are insert-strings.
+function Session:completions(line)
+    return complete.line(line)
 end
 
 -- Interactive driver. Editing and history come with the line-editor

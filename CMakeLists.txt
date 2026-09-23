@@ -30,6 +30,23 @@ endif()
 
 include_directories("${PROJECT_SOURCE_DIR}/deps/lua")
 
+# thin C kernel exposed to Lua as require "kernel"
+add_library(luna_kernel STATIC src/luna_kernel.c src/luna_kernel.h)
+target_include_directories(luna_kernel PUBLIC
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_BINARY_DIR}/generated")
+
+# embed lua/luna.lua + lua/luna/repl.lua into the binary (raw strings)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
+# re-configure when the embedded sources change
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/lua/luna.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua")
+configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
+               "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
+include_directories("${PROJECT_BINARY_DIR}/generated")
+
 list(APPEND luna_sources
         src/luna.c
         src/luna.h
@@ -39,7 +56,7 @@ list(APPEND luna_sources
 )
 
 add_executable(luna ${luna_sources})
-target_link_libraries(luna lualib)
+target_link_libraries(luna lualib luna_kernel)
 
 if (ENABLE_UNIT_TESTS)
     enable_testing()

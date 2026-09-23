@@ -1,0 +1,9 @@
+/* Generated from lua/*.lua at configure time — do not edit. */
+#ifndef LUNA_LUA_H
+#define LUNA_LUA_H
+
+static const char LUNA_LUA_ENTRY[] = R"LUNA_ENTRY(@LUNA_LUA_ENTRY@)LUNA_ENTRY";
+
+static const char LUNA_LUA_REPL[] = R"LUNA_REPL(@LUNA_LUA_REPL@)LUNA_REPL";
+
+#endif

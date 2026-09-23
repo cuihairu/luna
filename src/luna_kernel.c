@@ -190,16 +190,20 @@ static int luna_msghandler(lua_State *L)
     return 1;
 }
 
-/* kernel.exec(chunk, [name]) -> ok, ... | false, errmsg
+/* kernel.exec(chunk, [name], [args...]) -> ok, ... | false, errmsg
  *
  * Runs a complete chunk under the interrupt count hook; on error the
- * message carries a full traceback. */
+ * message carries a full traceback. Arguments after the optional name
+ * become the chunk's `...`, matching the standalone interpreter's
+ * script convention. */
 static int k_exec(lua_State *L)
 {
     size_t len;
     const char *chunk = luaL_checklstring(L, 1, &len);
     const char *name = luaL_optstring(L, 2, "=(repl)");
-    int base = lua_gettop(L);
+    if (lua_gettop(L) >= 2)
+        lua_remove(L, 2); /* drop the name slot; script args shift down */
+    int nargs = lua_gettop(L) - 1; /* chunk + script args */
 
     if (luaL_loadbufferx(L, chunk, len, name, NULL) != LUA_OK) {
         const char *msg = lua_tostring(L, -1);
@@ -210,13 +214,16 @@ static int k_exec(lua_State *L)
         return 2;
     }
 
-    /* stack: [chunk, name, func] -> [chunk, name, msgh, func] */
+    /* stack: [chunk, (args...), func] -> [chunk, msgh, func, (args...)]:
+     * the handler sits below the function, the function below its args,
+     * exactly the layout lua_pcall(nargs) expects. */
     lua_pushcfunction(L, luna_msghandler);
-    lua_insert(L, base + 1);
-    int msghi = base + 1; /* stack index of the handler */
+    lua_insert(L, 2);
+    lua_rotate(L, 3, 1);
+    int msghi = 2; /* stack index of the handler */
 
     lua_sethook(L, luna_count_hook, LUA_MASKCOUNT, 100000);
-    int status = lua_pcall(L, 0, LUA_MULTRET, msghi);
+    int status = lua_pcall(L, nargs, LUA_MULTRET, msghi);
     lua_sethook(L, NULL, 0, 0);
     luna_interrupt_flag = 0; /* consumed or stale: either way, reset */
 
@@ -285,7 +292,7 @@ static int k_colors(lua_State *L)
 static int k_version(lua_State *L)
 {
     lua_pushliteral(L, "luna 0.1.0");
-    return 0;
+    return 1;
 }
 
 /* ------------------------------------------------------------------ */

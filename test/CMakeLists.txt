@@ -15,3 +15,12 @@ add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
 add_executable(luna_test_repl luna_test_repl.c)
 target_link_libraries(luna_test_repl PRIVATE cmocka-static lualib luna_kernel)
 add_test(NAME repl COMMAND luna_test_repl)
+
+# CLI: script / eval / interactive launch modes through the real binary
+add_executable(luna_test_cli luna_test_cli.c)
+target_link_libraries(luna_test_cli PRIVATE cmocka-static lualib luna_kernel)
+target_compile_definitions(luna_test_cli PRIVATE
+        LUNA_BIN="$<TARGET_FILE:luna>"
+        LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME cli COMMAND luna_test_cli)
+

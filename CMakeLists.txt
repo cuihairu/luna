@@ -58,6 +58,20 @@ list(APPEND luna_sources
 add_executable(luna ${luna_sources})
 target_link_libraries(luna lualib luna_kernel)
 
+# bundled modules: argparse is vendored as a submodule and staged into
+# the build tree under luna_modules/ so require "argparse" resolves the
+# same way user project modules will.
+set(LUNA_MODULES_DIR "${CMAKE_BINARY_DIR}/luna_modules")
+file(MAKE_DIRECTORY "${LUNA_MODULES_DIR}/argparse")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/argparse/src/argparse.lua"
+     DESTINATION "${LUNA_MODULES_DIR}/argparse")
+file(WRITE "${LUNA_MODULES_DIR}/argparse/init.lua"
+     "return require \"argparse.argparse\"\n")
+
+target_compile_definitions(luna PRIVATE
+        LUNA_MODULES_DIR="${LUNA_MODULES_DIR}"
+        LUNA_SO_EXT="${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
 if (ENABLE_UNIT_TESTS)
     enable_testing()
     add_subdirectory(test)

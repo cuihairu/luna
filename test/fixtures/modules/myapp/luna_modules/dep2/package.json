@@ -1,0 +1,6 @@
+{
+    "name": "dep2",
+    "version": "1.0.0",
+    "main": "lib/entry.lua",
+    "description": "manifest-driven fixture package"
+}

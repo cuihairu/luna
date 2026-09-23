@@ -25,3 +25,15 @@
 [submodule "deps/replxx"]
 	path = deps/replxx
 	url = https://github.com/AmokHuginnsson/replxx.git
+[submodule "deps/luafilesystem"]
+	path = deps/luafilesystem
+	url = https://github.com/keplerproject/luafilesystem.git
+[submodule "deps/luasocket"]
+	path = deps/luasocket
+	url = https://github.com/diegonehab/luasocket.git
+[submodule "deps/lua-zlib"]
+	path = deps/lua-zlib
+	url = https://github.com/brimworks/lua-zlib.git
+[submodule "deps/luaossl"]
+	path = deps/luaossl
+	url = https://github.com/wahern/luaossl.git

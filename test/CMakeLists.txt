@@ -47,3 +47,15 @@ add_executable(luna_test_magic luna_test_magic.c)
 target_link_libraries(luna_test_magic PRIVATE cmocka-static lualib lpeg luna_kernel)
 add_test(NAME magic COMMAND luna_test_magic)
 
+# Module system: luna_modules resolution, manifests, stdlib modules
+add_executable(luna_test_modules luna_test_modules.c)
+target_link_libraries(luna_test_modules PRIVATE cmocka-static lualib lfs luasocket lua_zlib)
+if(LUNA_HAVE_OPENSSL)
+    target_link_libraries(luna_test_modules PRIVATE luaossl)
+    target_compile_definitions(luna_test_modules PRIVATE LUNA_HAVE_OPENSSL=1)
+endif()
+target_compile_definitions(luna_test_modules PRIVATE
+        LUNA_TEST_MODULES_DIR="${CMAKE_BINARY_DIR}/luna_modules"
+        FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/modules")
+add_test(NAME modules COMMAND luna_test_modules)
+

@@ -13,6 +13,43 @@
 int luaopen_lpeg(lua_State *L);
 int luaopen_luna_line(lua_State *L); /* src/luna_line.c: replxx bridge */
 
+/* stdlib module backends (batch 8): one C entry point per library. */
+int luaopen_lfs(lua_State *L);        /* luafilesystem */
+int luaopen_socket_core(lua_State *L); /* luasocket */
+int luaopen_mime_core(lua_State *L);  /* luasocket mime */
+int luaopen_zlib(lua_State *L);       /* lua-zlib */
+
+#ifdef LUNA_HAVE_OPENSSL
+/* luaossl: every submodule Lua layer requires "_openssl.<sub>". */
+int luaopen__openssl(lua_State *L);
+int luaopen__openssl_compat(lua_State *L);
+int luaopen__openssl_bignum(lua_State *L);
+int luaopen__openssl_pkey(lua_State *L);
+int luaopen__openssl_pubkey(lua_State *L);
+int luaopen__openssl_ec_group(lua_State *L);
+int luaopen__openssl_x509_name(lua_State *L);
+int luaopen__openssl_x509_altname(lua_State *L);
+int luaopen__openssl_x509_extension(lua_State *L);
+int luaopen__openssl_x509_cert(lua_State *L);
+int luaopen__openssl_x509_csr(lua_State *L);
+int luaopen__openssl_x509_crl(lua_State *L);
+int luaopen__openssl_x509_chain(lua_State *L);
+int luaopen__openssl_x509_store(lua_State *L);
+int luaopen__openssl_x509_store_context(lua_State *L);
+int luaopen__openssl_pkcs12(lua_State *L);
+int luaopen__openssl_ssl_context(lua_State *L);
+int luaopen__openssl_ssl(lua_State *L);
+int luaopen__openssl_x509_verify_param(lua_State *L);
+int luaopen__openssl_digest(lua_State *L);
+int luaopen__openssl_hmac(lua_State *L);
+int luaopen__openssl_cipher(lua_State *L);
+int luaopen__openssl_kdf(lua_State *L);
+int luaopen__openssl_ocsp_response(lua_State *L);
+int luaopen__openssl_ocsp_basic(lua_State *L);
+int luaopen__openssl_rand(lua_State *L);
+int luaopen__openssl_des(lua_State *L);
+#endif
+
 #ifndef LUNA_MODULES_DIR
 #define LUNA_MODULES_DIR "./luna_modules"
 #endif
@@ -91,6 +128,59 @@ static int dbg_msgh(lua_State *L)
     return 1;
 }
 
+/* Register the stdlib backends into package.loaded (glob off) so the
+ * pure-Lua layers — socket.lua needing socket.core, openssl/init.lua
+ * needing _openssl.pkey and friends — resolve without shared objects. */
+static void register_c_modules(lua_State *L)
+{
+    static const struct {
+        const char *name;
+        lua_CFunction open;
+    } mods[] = {
+        { "lfs", luaopen_lfs },
+        { "socket.core", luaopen_socket_core },
+        { "mime.core", luaopen_mime_core },
+        /* C core sits at zlib.core; the user-facing "zlib" module is
+         * the thin wrapper in luna_modules/zlib/ (one-shot helpers on
+         * top of the streaming API) */
+        { "zlib.core", luaopen_zlib },
+#ifdef LUNA_HAVE_OPENSSL
+        { "_openssl", luaopen__openssl },
+        { "_openssl.compat", luaopen__openssl_compat },
+        { "_openssl.bignum", luaopen__openssl_bignum },
+        { "_openssl.pkey", luaopen__openssl_pkey },
+        { "_openssl.pubkey", luaopen__openssl_pubkey },
+        { "_openssl.ec_group", luaopen__openssl_ec_group },
+        { "_openssl.x509.name", luaopen__openssl_x509_name },
+        { "_openssl.x509.altname", luaopen__openssl_x509_altname },
+        { "_openssl.x509.extension", luaopen__openssl_x509_extension },
+        { "_openssl.x509.cert", luaopen__openssl_x509_cert },
+        { "_openssl.x509.csr", luaopen__openssl_x509_csr },
+        { "_openssl.x509.crl", luaopen__openssl_x509_crl },
+        { "_openssl.x509.chain", luaopen__openssl_x509_chain },
+        { "_openssl.x509.store", luaopen__openssl_x509_store },
+        { "_openssl.x509.store_context", luaopen__openssl_x509_store_context },
+        { "_openssl.pkcs12", luaopen__openssl_pkcs12 },
+        { "_openssl.ssl.context", luaopen__openssl_ssl_context },
+        { "_openssl.ssl", luaopen__openssl_ssl },
+        { "_openssl.x509.verify_param", luaopen__openssl_x509_verify_param },
+        { "_openssl.digest", luaopen__openssl_digest },
+        { "_openssl.hmac", luaopen__openssl_hmac },
+        { "_openssl.cipher", luaopen__openssl_cipher },
+        { "_openssl.kdf", luaopen__openssl_kdf },
+        { "_openssl.ocsp.response", luaopen__openssl_ocsp_response },
+        { "_openssl.ocsp.basic", luaopen__openssl_ocsp_basic },
+        { "_openssl.rand", luaopen__openssl_rand },
+        { "_openssl.des", luaopen__openssl_des },
+#endif
+        { NULL, NULL },
+    };
+    for (int i = 0; mods[i].name; i++) {
+        luaL_requiref(L, mods[i].name, mods[i].open, 0);
+        lua_pop(L, 1);
+    }
+}
+
 static int run_chunk(lua_State *L, const char *src, const char *name)
 {
     if (luaL_dostring(L, src) != LUA_OK) {
@@ -120,6 +210,8 @@ int main(int argc, char *argv[])
     luaL_requiref(L, "linedit", luaopen_luna_line, 0);
     lua_pop(L, 1);
 
+    register_c_modules(L);
+
     setup_module_paths(L);
 
     /* embedded sources for the entry chunk */
@@ -133,6 +225,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
     lua_pushlstring(L, LUNA_LUA_MAGIC, sizeof(LUNA_LUA_MAGIC) - 1);
     lua_setglobal(L, "__LUNA_MAGIC_SRC");
+    lua_pushlstring(L, LUNA_LUA_MODULES, sizeof(LUNA_LUA_MODULES) - 1);
+    lua_setglobal(L, "__LUNA_MODULES_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
 

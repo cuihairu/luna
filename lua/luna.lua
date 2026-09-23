@@ -16,6 +16,12 @@ package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, "=(luna/
 package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
 package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/highlight)"))
 package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, "=(luna/magic)"))
+package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, "=(luna/modules)"))
+
+-- Node-style resolution for project packages: relative requires and
+-- bare names walking up luna_modules/ directories, manifests honored.
+require("luna.modules").install()
+
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 
 local parser = argparse("luna", kernel.version() .. " — " ..

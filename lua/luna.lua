@@ -12,6 +12,7 @@ local kernel = require "kernel"
 
 -- embedded policy modules (see cmake/luna_lua.h.in); preloaded so the
 -- REPL and plugins can require them by name
+package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, "=(luna/introspect)"))
 package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 

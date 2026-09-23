@@ -29,3 +29,8 @@ add_executable(luna_test_complete luna_test_complete.c)
 target_link_libraries(luna_test_complete PRIVATE cmocka-static lualib luna_kernel)
 add_test(NAME complete COMMAND luna_test_complete)
 
+# Introspection: repr, help/whos, ?-sugar
+add_executable(luna_test_introspect luna_test_introspect.c)
+target_link_libraries(luna_test_introspect PRIVATE cmocka-static lualib luna_kernel)
+add_test(NAME introspect COMMAND luna_test_introspect)
+

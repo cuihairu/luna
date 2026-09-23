@@ -152,6 +152,15 @@ static void test_interactive_error_keeps_going(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 42"));
 }
 
+static void test_interactive_help_injected(void **state)
+{
+    (void)state;
+    /* the console injects help()/whos() — pipe one call in */
+    run_luna_piped("help(print)\\n", "");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "function("));
+}
+
 /* -- help / usage -------------------------------------------------------- */
 
 static void test_help_smoke(void **state)
@@ -185,6 +194,7 @@ int main(void)
         cmocka_unit_test(test_interactive_multiline_piped),
         cmocka_unit_test(test_interactive_after_script),
         cmocka_unit_test(test_interactive_error_keeps_going),
+        cmocka_unit_test(test_interactive_help_injected),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),
     };

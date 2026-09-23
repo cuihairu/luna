@@ -115,6 +115,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_REPL_SRC");
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
+    lua_pushlstring(L, LUNA_LUA_INTROSPECT, sizeof(LUNA_LUA_INTROSPECT) - 1);
+    lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
 
     push_arg_table(L, argc, argv);
 

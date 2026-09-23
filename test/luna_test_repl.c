@@ -58,8 +58,12 @@ static int setup_session(void **state)
     /* embed the policy modules the entry preloads, then create a session */
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
-    if (luaL_dostring(L, "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))") != LUA_OK) {
-        fail_msg("cannot preload complete: %s", lua_tostring(L, -1));
+    lua_pushlstring(L, LUNA_LUA_INTROSPECT, sizeof(LUNA_LUA_INTROSPECT) - 1);
+    lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
+    if (luaL_dostring(L,
+                      "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
+                      "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))") != LUA_OK) {
+        fail_msg("cannot preload modules: %s", lua_tostring(L, -1));
     }
 
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
@@ -129,7 +133,7 @@ static void test_eval_out_register(void **state)
     out_len_reset();
     assert_string_equal(feed("'abc' .. 'd'"), "ok");
     assert_string_equal(feed("Out[1] .. '!'"), "ok");
-    assert_non_null(strstr(outbuf, "Out[2]: abcd!"));
+    assert_non_null(strstr(outbuf, "Out[2]: 'abcd!'")); /* quoted by repr */
 }
 
 static void test_eval_syntax_error_reported(void **state)
@@ -240,7 +244,7 @@ static void test_interrupt_hook_installed_only_during_exec(void **state)
     luna_kernel_request_interrupt();
     out_len_reset();
     assert_string_equal(feed("('x'):rep(3)"), "ok");
-    assert_non_null(strstr(outbuf, "Out[1]: xxx"));
+    assert_non_null(strstr(outbuf, "Out[1]: 'xxx'"));
 }
 
 /* -- runner ----------------------------------------------------------- */

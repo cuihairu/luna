@@ -9,6 +9,7 @@
 -- stdout), so sessions run headless in tests.
 local kernel = require "kernel"
 local complete = require "luna.complete"
+local intro = require "luna.introspect"
 
 local repl = {}
 
@@ -16,10 +17,10 @@ local function emit(text)
     kernel.write(text)
 end
 
--- Plain tostring-based display for now; luna.help.repr takes over
--- once introspection lands.
+-- Display goes through luna.introspect: quoted strings, limited tables,
+-- function signatures.
 local function repr(v)
-    return tostring(v)
+    return intro.repr(v)
 end
 
 local Session = {}
@@ -52,6 +53,21 @@ function Session:feed(line)
     end
     if line == "" and not self.pending then
         return "ok" -- blank input: nothing to do, not numbered
+    end
+
+    -- IPython-style help sugar: "?expr" or "expr?". Neither form is
+    -- valid Lua, so interception here is unambiguous.
+    local help_target = line:match("^%s*%?+%s*(.-)%s*$")
+    if help_target and help_target ~= "" then
+        self.in_n = self.in_n + 1
+        self:show_help(help_target)
+        return "ok"
+    end
+    local trailing = line:match("^(.-)%s*%?+%s*$")
+    if trailing and trailing ~= "" then
+        self.in_n = self.in_n + 1
+        self:show_help(trailing)
+        return "ok"
     end
 
     local chunk = self:build(line)
@@ -107,6 +123,16 @@ function Session:feed(line)
     return "ok"
 end
 
+-- Evaluate expr and describe the resulting value (help sugar target).
+function Session:show_help(expr)
+    local res = table.pack(kernel.exec("return " .. expr, self.chunk_name .. "[help]"))
+    if not res[1] then
+        emit(tostring(res[2]) .. "\n")
+        return
+    end
+    emit(intro.help(res[2]))
+end
+
 function Session:prompt()
     if self.pending then
         return "... "
@@ -130,6 +156,15 @@ function repl.run(argt)
     if tty then
         emit(kernel.version() .. " — " .. _VERSION .. " interactive console\n")
         emit("Type ^D to exit.\n")
+    end
+
+    -- interactive conveniences, IPython-style (not injected for plain
+    -- script runs: the entry never calls run() there)
+    _G.help = function(v)
+        emit(intro.help(v))
+    end
+    _G.whos = function()
+        emit(intro.whos())
     end
 
     while true do

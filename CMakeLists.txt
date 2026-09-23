@@ -36,16 +36,17 @@ target_include_directories(luna_kernel PUBLIC
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_BINARY_DIR}/generated")
 
-# embed lua/luna.lua + lua/luna/repl.lua + lua/luna/complete.lua into
-# the binary (raw strings)
+# embed the entry plus policy modules into the binary (raw strings)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua" LUNA_LUA_COMPLETE)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/introspect.lua" LUNA_LUA_INTROSPECT)
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua"
-        "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua")
+        "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/introspect.lua")
 configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/generated")

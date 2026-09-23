@@ -22,3 +22,6 @@
 [submodule "deps/scintillua"]
 	path = deps/scintillua
 	url = https://github.com/orbitalquark/scintillua.git
+[submodule "deps/replxx"]
+	path = deps/replxx
+	url = https://github.com/AmokHuginnsson/replxx.git

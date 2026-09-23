@@ -15,6 +15,7 @@ local kernel = require "kernel"
 package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, "=(luna/introspect)"))
 package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
 package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/highlight)"))
+package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, "=(luna/magic)"))
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 
 local parser = argparse("luna", kernel.version() .. " — " ..

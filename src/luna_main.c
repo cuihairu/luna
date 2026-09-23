@@ -11,6 +11,7 @@
 
 /* lpeg.c has no lpeg.h; this is its single exported entry point. */
 int luaopen_lpeg(lua_State *L);
+int luaopen_luna_line(lua_State *L); /* src/luna_line.c: replxx bridge */
 
 #ifndef LUNA_MODULES_DIR
 #define LUNA_MODULES_DIR "./luna_modules"
@@ -116,6 +117,8 @@ int main(int argc, char *argv[])
     lua_pop(L, 1);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1); /* registered, resolved on demand via require */
+    luaL_requiref(L, "linedit", luaopen_luna_line, 0);
+    lua_pop(L, 1);
 
     setup_module_paths(L);
 
@@ -128,8 +131,27 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
     lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
     lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
+    lua_pushlstring(L, LUNA_LUA_MAGIC, sizeof(LUNA_LUA_MAGIC) - 1);
+    lua_setglobal(L, "__LUNA_MAGIC_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
+
+    /* snapshot the initial global names so %reset keeps the runtime's
+     * own environment (stdlibs, kernel, ...) and clears only user state */
+    lua_newtable(L);
+    int base_idx = lua_gettop(L);
+    lua_pushglobaltable(L);
+    lua_pushnil(L);
+    while (lua_next(L, base_idx + 1) != 0) {
+        if (lua_type(L, -2) == LUA_TSTRING) {
+            lua_pushvalue(L, -2);
+            lua_pushboolean(L, 1);
+            lua_rawset(L, base_idx);
+        }
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1); /* the globals table */
+    lua_setglobal(L, "__LUNA_BASE_GLOBALS");
 
     push_arg_table(L, argc, argv);
 

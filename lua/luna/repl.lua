@@ -71,6 +71,25 @@ function Session:feed(line)
         return "ok" -- blank input: nothing to do, not numbered
     end
 
+    -- %magic commands: never valid Lua, intercept before evaluation.
+    -- Lazy require keeps the session core runnable without the module.
+    if line:sub(1, 1) == "%" then
+        local mname, marg = line:match("^%%(%S+)%s*(.-)%s*$")
+        if mname then
+            self.in_n = self.in_n + 1
+            self.inputs = self.inputs or {}
+            self.inputs[self.in_n] = line
+            local okm, magic = pcall(require, "luna.magic")
+            if okm then
+                local okd, err = magic.dispatch(self, mname, marg)
+                if not okd then
+                    emit(paint(tostring(err), COLOR_ERR, self.color) .. "\n")
+                end
+            end
+            return "ok"
+        end
+    end
+
     -- IPython-style help sugar: "?expr" or "expr?". Neither form is
     -- valid Lua, so interception here is unambiguous.
     local help_target = line:match("^%s*%?+%s*(.-)%s*$")
@@ -101,6 +120,8 @@ function Session:feed(line)
     end
     self.pending = nil
     self.in_n = self.in_n + 1
+    self.inputs = self.inputs or {}
+    self.inputs[self.in_n] = line
 
     if status == "error" and not wrapped_ok then
         emit(paint(tostring(err), COLOR_ERR, self.color) .. "\n")
@@ -173,6 +194,25 @@ function repl.run(argt)
     local session = repl.new({ color = argt.color })
     local tty = kernel.tty()
 
+    -- Line editor (replxx bridge): editing, history recall, real-time
+    -- highlighting and Tab completion. TTY only; piped stdin keeps the
+    -- canonical io.read loop.
+    local okl, linedit = pcall(require, "linedit")
+    local editor = tty and okl
+    local home = os.getenv("HOME")
+    local hist_path = home and (home .. "/.luna_history") or nil
+    if editor then
+        linedit.set_completion(function(line)
+            return session:completions(line)
+        end)
+        linedit.set_highlighter(function(line)
+            return highlight.color_map(line)
+        end)
+        if hist_path then
+            pcall(linedit.history_load, hist_path)
+        end
+    end
+
     if tty then
         emit(paint(kernel.version() .. " — " .. _VERSION ..
             " interactive console\n", COLOR_IN, session.color))
@@ -190,13 +230,22 @@ function repl.run(argt)
 
     while true do
         kernel.clear_interrupt()
-        if tty then
+        local line
+        if editor then
+            line = linedit.read(session:prompt())
+        else
             io.write(paint(session:prompt(), COLOR_IN, session.color))
             io.stdout:flush()
+            line = io.read("l")
         end
-        local line = io.read("l")
+        if editor and line and line ~= "" then
+            linedit.history_add(line)
+        end
         local status = session:feed(line)
         if status == "done" then
+            if editor and hist_path then
+                pcall(linedit.history_save, hist_path)
+            end
             if tty then
                 emit("\n")
             end

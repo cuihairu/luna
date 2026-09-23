@@ -1,0 +1,195 @@
+/* luna_line.c — replxx bridge exposed to Lua as require "linedit".
+ *
+ * One process-wide replxx instance; callbacks dispatch back into Lua
+ * through registry refs, with failures swallowed (line editing must
+ * never take the interpreter down). The editor itself is only used on
+ * a TTY — repl.run keeps its plain io.read loop for piped stdin.
+ */
+#include <string.h>
+
+#include "lua.h"
+#include "lauxlib.h"
+
+#include "replxx.h"
+
+static Replxx *g_rx = NULL;
+static lua_State *g_L = NULL;
+static int g_completion_ref = -1; /* LUA_NOREF until set */
+static int g_highlight_ref = -1;
+
+static Replxx *ensure_rx(lua_State *L)
+{
+    if (!g_rx) {
+        g_rx = replxx_init();
+        g_L = L;
+        replxx_set_completion_callback(g_rx, NULL, NULL);
+    }
+    return g_rx;
+}
+
+/* completion callback: fn(input) -> {insert-string, ...} */
+static void luna_completion_cb(const char *input, replxx_completions *cp,
+                               int *context_len, void *userdata)
+{
+    (void)context_len; /* keep replxx's word-break-derived context */
+    (void)userdata;
+    if (!g_L || g_completion_ref < 0)
+        return;
+    lua_rawgeti(g_L, LUA_REGISTRYINDEX, g_completion_ref);
+    lua_pushstring(g_L, input);
+    if (lua_pcall(g_L, 1, 1, 0) != LUA_OK) {
+        lua_pop(g_L, 1); /* error message; stay quiet */
+        return;
+    }
+    if (!lua_istable(g_L, -1)) {
+        lua_pop(g_L, 1);
+        return;
+    }
+    size_t n = lua_rawlen(g_L, -1);
+    for (size_t i = 1; i <= n && i <= 1000; i++) {
+        lua_rawgeti(g_L, -1, (int)i);
+        const char *cand = lua_tostring(g_L, -1);
+        if (cand)
+            replxx_add_completion(cp, cand);
+        lua_pop(g_L, 1);
+    }
+    lua_pop(g_L, 1);
+}
+
+/* highlighter callback: fn(input) -> { [bytepos+1] = replxx color int }
+ * replxx wants one color per unicode codepoint, lexer spans are byte
+ * based — walk the UTF-8 and map each codepoint to its first byte. */
+static void luna_highlight_cb(const char *input, ReplxxColor *colors,
+                              int size, void *userdata)
+{
+    (void)userdata;
+    if (!g_L || g_highlight_ref < 0 || size <= 0)
+        return;
+    lua_rawgeti(g_L, LUA_REGISTRYINDEX, g_highlight_ref);
+    lua_pushstring(g_L, input);
+    if (lua_pcall(g_L, 1, 1, 0) != LUA_OK) {
+        lua_pop(g_L, 1);
+        return;
+    }
+    size_t blen = strlen(input);
+    int cp = 0;
+    for (size_t b = 0; b < blen && cp < size;) {
+        unsigned char c = (unsigned char)input[b];
+        size_t width = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0) ? 2
+                       : ((c & 0xF0) == 0xE0) ? 3
+                       : ((c & 0xF8) == 0xF0) ? 4
+                                              : 1;
+        lua_rawgeti(g_L, -1, (int)b + 1);
+        if (lua_isnil(g_L, -1))
+            colors[cp] = REPLXX_COLOR_DEFAULT;
+        else
+            colors[cp] = (ReplxxColor)lua_tointeger(g_L, -1);
+        lua_pop(g_L, 1);
+        b += width;
+        cp++;
+    }
+    for (; cp < size; cp++)
+        colors[cp] = REPLXX_COLOR_DEFAULT;
+    lua_pop(g_L, 1);
+}
+
+/* linedit.set_completion(fn | nil) */
+static int lline_set_completion(lua_State *L)
+{
+    if (lua_isnoneornil(L, 1)) {
+        g_completion_ref = -1;
+        return 0;
+    }
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    ensure_rx(L);
+    lua_pushvalue(L, 1);
+    g_completion_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replxx_set_completion_callback(g_rx, luna_completion_cb, NULL);
+    /* '.'/':' break chains so dotted completions replace only the
+     * trailing segment (string.fo -> <string.>|format) */
+    replxx_set_word_break_characters(g_rx, " \t\r\n,:()[]{}");
+    return 0;
+}
+
+/* linedit.set_highlighter(fn | nil) */
+static int lline_set_highlighter(lua_State *L)
+{
+    if (lua_isnoneornil(L, 1)) {
+        g_highlight_ref = -1;
+        replxx_set_highlighter_callback(g_rx, NULL, NULL);
+        return 0;
+    }
+    luaL_checktype(L, 1, LUA_TFUNCTION);
+    ensure_rx(L);
+    lua_pushvalue(L, 1);
+    g_highlight_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replxx_set_highlighter_callback(g_rx, luna_highlight_cb, NULL);
+    return 0;
+}
+
+/* linedit.read(prompt) -> line | nil, err */
+static int lline_read(lua_State *L)
+{
+    size_t plen;
+    const char *prompt = luaL_optlstring(L, 1, "", &plen);
+    Replxx *rx = ensure_rx(L);
+    replxx_set_no_color(g_rx, 0);
+    const char *line = replxx_input(rx, prompt);
+    if (!line) {
+        lua_pushnil(L);
+        lua_pushstring(L, "eof");
+        return 2;
+    }
+    lua_pushstring(L, line);
+    return 1;
+}
+
+/* linedit.history_add(line) */
+static int lline_history_add(lua_State *L)
+{
+    const char *line = luaL_checkstring(L, 1);
+    replxx_history_add(ensure_rx(L), line);
+    return 0;
+}
+
+/* linedit.history_load(path) -> ok | nil, err */
+static int lline_history_load(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    if (replxx_history_load(ensure_rx(L), path) != 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "cannot load history file");
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* linedit.history_save(path) -> ok | nil, err */
+static int lline_history_save(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    if (replxx_history_save(ensure_rx(L), path) != 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "cannot save history file");
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static const luaL_Reg lline_funcs[] = {
+    { "read", lline_read },
+    { "set_completion", lline_set_completion },
+    { "set_highlighter", lline_set_highlighter },
+    { "history_add", lline_history_add },
+    { "history_load", lline_history_load },
+    { "history_save", lline_history_save },
+    { NULL, NULL },
+};
+
+int luaopen_luna_line(lua_State *L)
+{
+    luaL_newlib(L, lline_funcs);
+    return 1;
+}

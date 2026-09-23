@@ -42,3 +42,8 @@ target_compile_definitions(luna_test_highlight PRIVATE
         LUNA_TEST_LEXERS_DIR="${CMAKE_BINARY_DIR}/luna_modules/lexers")
 add_test(NAME highlight COMMAND luna_test_highlight)
 
+# Magic commands: %time/%timeit/%hist/... and the register extension point
+add_executable(luna_test_magic luna_test_magic.c)
+target_link_libraries(luna_test_magic PRIVATE cmocka-static lualib lpeg luna_kernel)
+add_test(NAME magic COMMAND luna_test_magic)
+

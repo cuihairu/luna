@@ -126,4 +126,50 @@ function highlight.render(text, colors)
     return res
 end
 
+-- Per-byte color map for the line editor's real-time highlighter
+-- callback (replxx wants one color per codepoint; the C bridge walks
+-- the UTF-8 and maps codepoints to their first byte). Values are
+-- replxx ReplxxColor integers (16-color base); unlisted tags stay
+-- default so the map stays sparse.
+local replxx_codes = {
+    keyword              = 9,  -- bright red
+    string               = 10, -- bright green
+    number               = 14, -- bright cyan
+    comment              = 8,  -- gray
+    ["function"]         = 11, -- yellow
+    ["function.builtin"] = 11,
+    ["function.method"]  = 11,
+    constant             = 13, -- bright magenta
+    ["constant.builtin"] = 13,
+    label                = 13,
+    attribute            = 13,
+    error                = 9,
+}
+
+function highlight.color_map(text)
+    local map = {}
+    local lex = ensure_lexer()
+    if lex then
+        local ok, tags = pcall(lex.lex, lex, text, 0)
+        if ok and type(tags) == "table" then
+            local pos = 1
+            for i = 1, #tags, 2 do
+                local tag, span_end = tags[i], tags[i + 1]
+                if type(tag) ~= "string" or type(span_end) ~= "number"
+                    or span_end <= pos or span_end > #text + 1 then
+                    break
+                end
+                local code = replxx_codes[tag]
+                if code then
+                    for b = pos, span_end - 1 do
+                        map[b] = code
+                    end
+                end
+                pos = span_end
+            end
+        end
+    end
+    return map
+end
+
 return highlight

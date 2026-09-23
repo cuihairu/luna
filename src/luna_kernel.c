@@ -258,7 +258,7 @@ static int k_millis(lua_State *L)
 #endif
     lua_Integer ms = (lua_Integer)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
     lua_pushinteger(L, ms);
-    return 0;
+    return 1;
 }
 
 static int k_tty(lua_State *L)
@@ -269,7 +269,7 @@ static int k_tty(lua_State *L)
 #else
     lua_pushboolean(L, 0);
 #endif
-    return 0;
+    return 1;
 }
 
 /* colors allowed: interactive terminal, TERM not "dumb", and neither
@@ -295,7 +295,7 @@ static int k_colors(lua_State *L)
     }
     int ok = tty && !(term && strcmp(term, "dumb") == 0);
     lua_pushboolean(L, ok);
-    return 0;
+    return 1;
 }
 
 /* kernel.version() -> string */

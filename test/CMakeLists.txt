@@ -7,5 +7,5 @@ add_executable(${PROJECT_NAME} ${luna_test_sources})
 target_compile_features(${PROJECT_NAME} PRIVATE c_std_11)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-        cmocka-static ${LUAJIT_LIB})
+        cmocka-static lualib)
 add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})

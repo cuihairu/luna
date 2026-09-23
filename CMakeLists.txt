@@ -13,30 +13,22 @@ option(CHECKOUT_GIT_SUBMODULE "Check out git submodules during build" ON)
 message(STATUS "CHECKOUT_GIT_SUBMODULE:${CHECKOUT_GIT_SUBMODULE}")
 include(FetchSubmodules)
 
-# luajit2
-include(ExternalProject)
-set(LUAJIT_LIB "${PROJECT_SOURCE_DIR}/deps/luajit2/src/libluajit.a")
-if(WIN32)
-    set(LUAJIT_LIB "${PROJECT_SOURCE_DIR}/deps/luajit2/src/libluajit-5.1.dll.a")
+# official Lua 5.4 (deps/lua, pinned tag v5.4.9)
+# core sources live at the repo root; exclude the standalone
+# interpreter/amalgamation/debug-driver translation units.
+file(GLOB LUA_CORE_SOURCES "${PROJECT_SOURCE_DIR}/deps/lua/*.c")
+list(FILTER LUA_CORE_SOURCES EXCLUDE REGEX "/(lua|onelua|ltests)\\.c$")
+list(LENGTH LUA_CORE_SOURCES LUA_CORE_COUNT)
+message(STATUS "lua core sources: ${LUA_CORE_COUNT}")
+
+add_library(lualib STATIC ${LUA_CORE_SOURCES})
+target_include_directories(lualib PUBLIC "${PROJECT_SOURCE_DIR}/deps/lua")
+# libm: implicit on macOS, explicit on Linux (pow/log/...); dl: loadlib.c
+if(UNIX)
+    target_link_libraries(lualib PUBLIC m ${CMAKE_DL_LIBS})
 endif()
 
-message(STATUS "luajit lib:${LUAJIT_LIB}")
-
-ExternalProject_Add(
-    luajit
-    SOURCE_DIR "${PROJECT_SOURCE_DIR}/deps/luajit2/src"
-    DOWNLOAD_COMMAND ""
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND make all
-    BUILD_IN_SOURCE true
-    INSTALL_COMMAND ""
-)
-
-include_directories(
-    "${PROJECT_SOURCE_DIR}/deps/luajit2/src/"
-    "${PROJECT_SOURCE_DIR}/deps/luajit2/src/host/"
-    "${PROJECT_SOURCE_DIR}/deps/jemalloc/include/"
-)
+include_directories("${PROJECT_SOURCE_DIR}/deps/lua")
 
 list(APPEND luna_sources
         src/luna.c
@@ -47,7 +39,7 @@ list(APPEND luna_sources
 )
 
 add_executable(luna ${luna_sources})
-target_link_libraries(luna ${LUAJIT_LIB})
+target_link_libraries(luna lualib)
 
 if (ENABLE_UNIT_TESTS)
     enable_testing()

@@ -223,6 +223,10 @@ static int run_chunk(lua_State *L, const char *src, const char *name)
 int main(int argc, char *argv[])
 {
     signal(SIGINT, luna_on_sigint);
+    /* writing a socket whose peer died must surface as an EPIPE error
+     * (luasocket's send, the attach frame) — never as a process-killing
+     * signal: pcall can't catch SIGPIPE */
+    signal(SIGPIPE, SIG_IGN);
     install_sigusr1();
 
     lua_State *L = luaL_newstate();

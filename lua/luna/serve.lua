@@ -73,16 +73,107 @@ local function drop_client()
     serve.client = nil
 end
 
--- Evaluate one command line in the live state; returns the framed
--- response. The caller suspends and reinstalls any count hook around
--- step(): kernel.exec installs its own SIGINT hook while it runs.
+-- Thin attach session: just enough of the REPL session shape for the
+-- magics to work remotely (%hist reads inputs, %reset clears the out
+-- registers).
+local attach_session = { inputs = {}, out = {}, out_n = 0 }
+
+-- Cap on captured output per command: a run-away print loop inside
+-- the target must not grow an unbounded frame.
+local MAX_CAPTURE = 64 * 1024
+
+-- Install a capture sink: kernel output lands in acc AND mirrors to
+-- the target's own stdout, so both consoles see the same stream.
+local function capture_start(acc)
+    kernel.sink(function(s)
+        if #acc < MAX_CAPTURE then
+            acc[#acc + 1] = s
+        end
+        io.write(s)
+    end)
+end
+
+-- Assemble a status frame; body lines always end before the \30 line
+-- so line-based readers never see a glued terminator.
+local function frame(status, body)
+    if body and body ~= "" then
+        if body:sub(-1) ~= "\n" then
+            body = body .. "\n"
+        end
+        return status .. "\n" .. body .. "\30\n"
+    end
+    return status .. "\n\30\n"
+end
+
+-- One command line from the attach client. Lines starting with the
+-- \1 control byte are meta requests (completion candidates); % lines
+-- dispatch through the target's own magic table; "?expr" / "expr?"
+-- describe a value; everything else evaluates as Lua. While a command
+-- runs, kernel output is captured and echoed to the client — a remote
+-- session reads like the target console would.
 local function dispatch(line)
+    if line:sub(1, 1) == "\1" then
+        local input = line:match("^%s*\1complete%s+(.-)%s*$") or ""
+        local okc, complete = pcall(require, "luna.complete")
+        if not okc then
+            return frame("ERR", "completion engine unavailable")
+        end
+        local parts = {}
+        for _, cand in ipairs(complete.line(input) or {}) do
+            parts[#parts + 1] = tostring(cand)
+        end
+        return frame("OK", #parts > 0 and table.concat(parts, "\n") or nil)
+    end
+
+    attach_session.inputs[#attach_session.inputs + 1] = line
+
+    if line:sub(1, 1) == "%" then
+        local name, arg = line:match("^%%(%S+)%s*(.-)%s*$")
+        if not name then
+            return frame("ERR", "empty magic")
+        end
+        if name == "exit" then
+            -- the attach client must not kill the target process
+            return frame("EXIT", "%exit inside attach detaches the client")
+        end
+        local okm, magic = pcall(require, "luna.magic")
+        if not okm then
+            return frame("ERR", "magics unavailable")
+        end
+        local acc = {}
+        capture_start(acc)
+        local okd, err = pcall(magic.dispatch, attach_session, name, arg)
+        kernel.sink(nil)
+        if not okd then
+            return frame("ERR", tostring(err))
+        end
+        return frame("OK", table.concat(acc))
+    end
+
+    local sugar = line:match("^%s*%?(.+)$")
+    if not sugar then
+        sugar = line:match("^(.-)%s*%?$")
+    end
+    if sugar and sugar ~= "" then
+        local acc = {}
+        capture_start(acc)
+        local res = table.pack(kernel.exec("return " .. sugar, "=attach[help]"))
+        kernel.sink(nil)
+        if not res[1] then
+            return frame("ERR", table.concat(acc) .. tostring(res[2]))
+        end
+        return frame("OK", table.concat(acc) .. intro.help(res[2]))
+    end
+
+    local acc = {}
+    capture_start(acc)
     local res = table.pack(kernel.exec("return " .. line, "=attach"))
     if not res[1] then
         res = table.pack(kernel.exec(line, "=attach"))
     end
+    kernel.sink(nil)
     if not res[1] then
-        return "ERR\n" .. tostring(res[2]) .. "\n\30\n"
+        return frame("ERR", table.concat(acc) .. tostring(res[2]))
     end
     local parts = {}
     for i = 2, res.n do
@@ -91,7 +182,7 @@ local function dispatch(line)
     if #parts == 0 then
         parts[1] = "nil"
     end
-    return "OK\n" .. table.concat(parts, "\n") .. "\n\30\n"
+    return frame("OK", table.concat(acc) .. table.concat(parts, "\n"))
 end
 
 -- One poll: accept a pending connection if any, drain readable input,

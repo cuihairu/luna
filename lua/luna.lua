@@ -132,6 +132,35 @@ local function run_attach(pid)
     client:settimeout(30)
     local okl, linedit = pcall(require, "linedit")
     local editor = kernel.tty() and okl
+    if editor then
+        -- Tab completion runs remotely: send the meta line, wake the
+        -- target's editor, and turn the framed candidate list back
+        -- into the shape linedit expects.
+        linedit.set_completion(function(input)
+            local ok_s = pcall(function()
+                return client:send("\1complete " .. input .. "\n")
+            end)
+            if not ok_s then
+                return {}
+            end
+            pcall(kernel.wake, tonumber(pid))
+            local acc = {}
+            while true do
+                local ok_r, repart = pcall(function()
+                    return client:receive("*l")
+                end)
+                if not ok_r or repart == nil or repart == "\30" then
+                    break
+                end
+                acc[#acc + 1] = repart
+            end
+            if acc[1] ~= "OK" then
+                return {}
+            end
+            -- the completion bridge wants a table, not varargs
+            return { table.unpack(acc, 2) }
+        end)
+    end
     io.write("attached to " .. pid .. " — %detach or ^D to leave\n")
     while true do
         local line
@@ -177,6 +206,10 @@ local function run_attach(pid)
             local body = table.concat(acc, "\n", 2)
             if status == "OK" then
                 print(body)
+            elseif status == "EXIT" then
+                -- the target refused to die: %exit means detach here
+                print(body)
+                break
             else
                 io.stderr:write(body .. "\n")
             end

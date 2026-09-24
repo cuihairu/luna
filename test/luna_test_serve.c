@@ -40,7 +40,7 @@ static void run(lua_State *l, const char *code)
 /* run(code) returning one string from the stack */
 static const char *eval_string(const char *code)
 {
-    static char buf[512];
+    static char buf[16384]; /* %whos frames carry the whole globals list */
     run(L, code);
     const char *s = lua_tostring(L, -1);
     snprintf(buf, sizeof(buf), "%s", s ? s : "(nil)");
@@ -69,9 +69,15 @@ static int setup_serve(void **state)
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
     lua_pushlstring(L, LUNA_LUA_SERVE, sizeof(LUNA_LUA_SERVE) - 1);
     lua_setglobal(L, "__LUNA_SERVE_SRC");
+    lua_pushlstring(L, LUNA_LUA_MAGIC, sizeof(LUNA_LUA_MAGIC) - 1);
+    lua_setglobal(L, "__LUNA_MAGIC_SRC");
+    lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
+    lua_setglobal(L, "__LUNA_COMPLETE_SRC");
     run(L,
         "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
         "package.preload['luna.serve'] = assert(load(__LUNA_SERVE_SRC, '=(luna/serve)'))\n"
+        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))\n"
+        "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
         "S = require('luna.serve')\n"
         "assert(S.start())\n"
         "C = require('socket.unix')()\n"
@@ -152,6 +158,45 @@ static void test_error_reply_is_framed_and_isolated(void **state)
                         "OK|2");
 }
 
+static void test_print_output_is_captured_into_frame(void **state)
+{
+    (void)state;
+    /* kernel output during the command rides in the frame body, with
+     * the result repr after it */
+    const char *reply =
+        eval_string("return exchange('print(\"hello\") return 7')");
+    assert_non_null(strstr(reply, "hello"));
+    assert_non_null(strstr(reply, "7"));
+}
+
+static void test_magic_runs_against_live_state(void **state)
+{
+    (void)state;
+    run(L, "attachgx = 5");
+    const char *reply = eval_string("return exchange('%whos')");
+    assert_memory_equal(reply, "OK|", 3);
+    assert_non_null(strstr(reply, "attachgx"));
+}
+
+static void test_exit_magic_detaches_and_target_survives(void **state)
+{
+    (void)state;
+    const char *reply = eval_string("return exchange('%exit')");
+    assert_memory_equal(reply, "EXIT|", 5);
+    /* the target process is still alive and serving */
+    assert_string_equal(eval_string("return exchange('return 1 + 1')"),
+                        "OK|2");
+}
+
+static void test_completion_meta_line(void **state)
+{
+    (void)state;
+    const char *reply =
+        eval_string("return exchange('\1complete attachg')");
+    assert_memory_equal(reply, "OK|", 3);
+    assert_non_null(strstr(reply, "attachgx"));
+}
+
 static void test_stop_clears_socket_and_poll_noops(void **state)
 {
     (void)state;
@@ -223,11 +268,20 @@ static void test_sigusr1_releases_idle_editor(void **state)
 
 int main(void)
 {
+    /* a closed peer must yield EPIPE from socket writes, not a
+     * process-killing signal (same policy as luna_main.c) */
+    signal(SIGPIPE, SIG_IGN);
+
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_socket_file_created),
         cmocka_unit_test(test_statement_gets_nil_reply),
         cmocka_unit_test(test_expression_evaluates_in_live_state),
         cmocka_unit_test(test_error_reply_is_framed_and_isolated),
+        cmocka_unit_test(test_print_output_is_captured_into_frame),
+        cmocka_unit_test(test_magic_runs_against_live_state),
+        cmocka_unit_test(test_exit_magic_detaches_and_target_survives),
+        cmocka_unit_test(test_completion_meta_line),
+        /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test(test_sigusr1_releases_idle_editor),
     };

@@ -321,15 +321,17 @@ static const luaL_Reg loop_funcs[] = {
 /* -- async file IO (loop.fs) ----------------------------------------------
  *
  * Node-shaped: readFile(path, cb(err, data)), writeFile(path, data,
- * cb(err)), stat(path, cb(err, st)). The actual IO runs on libuv's
- * threadpool; completion callbacks are delivered on the loop thread,
- * so Lua is only ever touched here. Each operation pins its callback
- * in the registry until it finishes — and counts as a live user handle,
- * so the loop stays keep-alive while any IO is in flight. */
+ * cb(err)), appendFile, stat(path, cb(err, st)), plus the directory
+ * face — readdir/mkdir/rmdir/unlink/rename, cb(err) (or cb(nil, names)
+ * for readdir). The actual IO runs on libuv's threadpool; completion
+ * callbacks are delivered on the loop thread, so Lua is only ever
+ * touched here. Each operation pins its callback in the registry until
+ * it finishes — and counts as a live user handle, so the loop stays
+ * keep-alive while any IO is in flight. */
 
 #include <fcntl.h>
 
-enum { FS_READ, FS_WRITE, FS_STAT };
+enum { FS_READ, FS_WRITE, FS_STAT, FS_READDIR, FS_ONCE };
 
 struct fsop {
     uv_fs_t req;       /* first member: fsop == (struct fsop *)req */
@@ -338,6 +340,7 @@ struct fsop {
     int kind;
     int errcode;       /* failure seen mid-chain, surfaced at the end */
     int fd;            /* -1 while closed */
+    int openflags;     /* writeFile/appendFile open mode */
     char *data;        /* writeFile payload / readFile buffer */
     size_t size;
     size_t have;       /* readFile: bytes actually read */
@@ -413,6 +416,17 @@ static void fs_finish(struct fsop *op)
             lua_setfield(L, -2, "mtime");
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mode);
             lua_setfield(L, -2, "mode");
+        } else if (op->kind == FS_READDIR) {
+            /* drain the scandir list: uv_fs_scandir_next walks it and
+             * UV_EOF ends it; the strings are copied into Lua here,
+             * uv_fs_req_cleanup (in fsop_free) frees the list */
+            lua_createtable(L, 0, 8);
+            uv_dirent_t ent;
+            int i = 1;
+            while (uv_fs_scandir_next(&op->req, &ent) != UV_EOF) {
+                lua_pushstring(L, ent.name);
+                lua_rawseti(L, -2, i++);
+            }
         } else {
             lua_pushnil(L); /* writeFile: pad to two args */
         }
@@ -448,6 +462,27 @@ static void fs_fail(struct fsop *op)
 static void fs_done(uv_fs_t *req)
 {
     fs_finish((struct fsop *)req);
+}
+
+/* single-shot ops (mkdir/rmdir/unlink/rename): the request IS the op */
+static void fs_once_done(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        op->errcode = (int)req->result;
+    }
+    fs_finish(op);
+}
+
+/* readdir: scandir already listed everything; the names are drained
+ * inside fs_finish (FS_READDIR branch) */
+static void fs_scandir_done(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        op->errcode = (int)req->result;
+    }
+    fs_finish(op);
 }
 
 static void fs_read_read(uv_fs_t *req)
@@ -528,18 +563,15 @@ static void fs_write_open(uv_fs_t *req)
         return;
     }
     op->fd = (int)req->result;
+    /* shared by writeFile (O_TRUNC) and appendFile (O_APPEND): the
+     * open flag set lives in op->openflags, set by each entry */
     uv_buf_t buf = uv_buf_init(op->data, (unsigned)op->size);
     uv_fs_req_cleanup(req);
     uv_fs_write(&g_loop, req, op->fd, &buf, 1, -1, fs_write_write);
 }
 
-static void fs_stat_stat(uv_fs_t *req)
-{
-    /* statbuf survives uv_fs_req_cleanup? it does not: copy what we
-     * report before finishing — but fs_finish reads op->req.statbuf, so
-     * just finish without cleanup order worries (fsop_free cleans up) */
-    fs_finish((struct fsop *)req);
-}
+/* stat shares fs_once_done: its result is the whole op, and a failed
+ * stat must surface as cb(err) — not a zeroed statbuf table */
 
 /* loop.fs.readFile(path, cb) */
 static int l_fs_read_file(lua_State *L)
@@ -571,8 +603,85 @@ static int l_fs_write_file(lua_State *L)
         return luaL_error(L, "loop.fs: out of memory");
     }
     memcpy(op->data, data, len);
-    uv_fs_open(&g_loop, &op->req, path,
-               O_WRONLY | O_CREAT | O_TRUNC, 0644, fs_write_open);
+    op->openflags = O_WRONLY | O_CREAT | O_TRUNC;
+    uv_fs_open(&g_loop, &op->req, path, op->openflags, 0644, fs_write_open);
+    return 0;
+}
+
+/* loop.fs.appendFile(path, data, cb) */
+static int l_fs_append_file(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    size_t len;
+    const char *data = luaL_checklstring(L, 2, &len);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 3, FS_WRITE);
+    op->size = len;
+    op->data = malloc(len ? len : 1);
+    if (!op->data) {
+        lua_pushlightuserdata(L, op);
+        lua_pushnil(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+        luaL_unref(L, LUA_REGISTRYINDEX, op->cbref);
+        keepalive_close();
+        free(op);
+        return luaL_error(L, "loop.fs: out of memory");
+    }
+    memcpy(op->data, data, len);
+    op->openflags = O_WRONLY | O_CREAT | O_APPEND;
+    uv_fs_open(&g_loop, &op->req, path, op->openflags, 0644, fs_write_open);
+    return 0;
+}
+
+/* loop.fs.readdir(path, cb) -> cb(nil, {"a.txt", ...}) */
+static int l_fs_readdir(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_READDIR);
+    uv_fs_scandir(&g_loop, &op->req, path, 0, fs_scandir_done);
+    return 0;
+}
+
+/* loop.fs.mkdir(path, cb) — mode 0777, umask applies as usual */
+static int l_fs_mkdir(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_ONCE);
+    uv_fs_mkdir(&g_loop, &op->req, path, 0777, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.rmdir(path, cb) */
+static int l_fs_rmdir(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_ONCE);
+    uv_fs_rmdir(&g_loop, &op->req, path, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.unlink(path, cb) */
+static int l_fs_unlink(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_ONCE);
+    uv_fs_unlink(&g_loop, &op->req, path, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.rename(old, new, cb) */
+static int l_fs_rename(lua_State *L)
+{
+    const char *old = luaL_checkstring(L, 1);
+    const char *new = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 3, FS_ONCE);
+    /* libuv's PATH2 macro copies both strings into the request */
+    uv_fs_rename(&g_loop, &op->req, old, new, fs_once_done);
     return 0;
 }
 
@@ -582,14 +691,20 @@ static int l_fs_stat(lua_State *L)
     const char *path = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     struct fsop *op = fsop_new(L, 2, FS_STAT);
-    uv_fs_stat(&g_loop, &op->req, path, fs_stat_stat);
+    uv_fs_stat(&g_loop, &op->req, path, fs_once_done);
     return 0;
 }
 
 static const luaL_Reg fs_funcs[] = {
     { "readFile", l_fs_read_file },
     { "writeFile", l_fs_write_file },
+    { "appendFile", l_fs_append_file },
     { "stat", l_fs_stat },
+    { "readdir", l_fs_readdir },
+    { "mkdir", l_fs_mkdir },
+    { "rmdir", l_fs_rmdir },
+    { "unlink", l_fs_unlink },
+    { "rename", l_fs_rename },
     { NULL, NULL },
 };
 

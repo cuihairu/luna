@@ -35,7 +35,7 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 
 ## loop.fs:异步文件 IO
 
-`loop.fs` 把 libuv 线程池上的文件操作接进同一套回调约定——Node 的 `fs` 三件套,错误沿用 Node 的"回调首参"风格:
+`loop.fs` 把 libuv 线程池上的文件操作接进同一套回调约定——Node 的 `fs` 风格,读、写、统计加目录管理,错误沿用 Node 的"回调首参"风格:
 
 ```lua
 local fs = require("loop").fs
@@ -57,12 +57,19 @@ loop.run()
 | 调用 | 成功回调 | 失败回调 |
 | --- | --- | --- |
 | `fs.readFile(path, cb)` | `cb(nil, data)`(整个文件为一个字符串) | `cb(err)` |
-| `fs.writeFile(path, data, cb)` | `cb(nil)` | `cb(err)` |
+| `fs.writeFile(path, data, cb)` | `cb(nil)`(覆盖写,不存在则创建) | `cb(err)` |
+| `fs.appendFile(path, data, cb)` | `cb(nil)`(追加写,不存在则创建) | `cb(err)` |
 | `fs.stat(path, cb)` | `cb(nil, st)`,`st` 含 `size` / `mtime` / `mode` | `cb(err)` |
+| `fs.readdir(path, cb)` | `cb(nil, names)`——文件名数组,不含 `.`/`..`,顺序不作保证 | `cb(err)` |
+| `fs.mkdir(path, cb)` | `cb(nil)`(mode 0777,umask 照常生效;**非递归**,父目录须已存在) | `cb(err)` |
+| `fs.rmdir(path, cb)` | `cb(nil)`(只删空目录) | `cb(err)` |
+| `fs.unlink(path, cb)` | `cb(nil)` | `cb(err)` |
+| `fs.rename(old, new, cb)` | `cb(nil)`(原子改名/移动;new 已存在则覆盖) | `cb(err)` |
 
 - **IO 在线程池,回调在循环线程**:大文件读写不阻塞定时器;回调照常经隔离执行,抛错不影响循环;
-- **错误是字符串**:libuv 的 `uv_strerror` 直出(如 `no such file or directory`),与 Node 的 Error 对象相比是刻意简化——Lua 里 `err ~= nil` 判定即可;
-- **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成。
+- **错误是字符串**:libuv 的 `uv_strerror` 直出(如 `no such file or directory`),与 Node 的 Error 对象相比是刻意简化——Lua 里 `err ~= nil` 判定即可,stat 读不存在的路径同样走 `cb(err)`;
+- **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成;
+- **readdir 底层是 `uv_fs_scandir`**:一次线程池调用列出全部条目,名字在交付前拷入 Lua,列表由 libuv 自行回收。
 
 ## loop.net:异步套接字
 
@@ -158,7 +165,7 @@ loop.run()
 - **spawn 失败同步抛错**:命令不存在等 exec 失败由 libuv 在 `uv_spawn` 里同步带回,`run` 直接 raise——与 `listen` 的绑定错误同款;`pcall` 接住后循环照常排空,不留悬空句柄;
 - **交付条件是"退出 + 双管道 EOF"**:子进程死了内核必然关掉它的 fd,所以聚合回调确定性地到达,输出不会因缓冲未排空而截断;
 - **没有 shell**:`cmd` 不经 `/bin/sh`,管道、通配、`~` 一概不展开——要 shell 语义就 `run("sh", {"-c", "..."})`,和 Node `spawn`/`exec` 的分野一致;
-- **stdin 被忽略**(首片):需要向子进程写数据、流式收发输出的接口留给后续批次;
+- **stdin 被忽略**:`run` 不接子进程的 stdin——要写就用 `process.spawn`(下一节),三路 stdio 都是普通 sock;
 - **错误是字符串**:与 `loop.fs`/`loop.net` 相同,`uv_strerror` 直出。
 
 ## process.spawn:流式子进程

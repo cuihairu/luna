@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <setjmp.h>
 #include <string.h>
+#include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -239,6 +240,136 @@ static void test_fs_write_of_empty_data_roundtrips(void **state)
         "end)\n"
         "assert(loop.run())\n"
         "return out"), "true:true");
+}
+
+static void test_fs_stat_of_a_missing_path_yields_error(void **state)
+{
+    (void)state;
+    /* regression: stat's callback ignored req->result, so a failed
+     * stat was delivered as success with a zeroed statbuf */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.stat('/tmp/luna-loop-fs-no-such-path', function(e, st)\n"
+        "  out = tostring(e ~= nil) .. '|' .. tostring(st)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|nil");
+}
+
+static void test_fs_append_file_extends(void **state)
+{
+    (void)state;
+    (void)system("rm -f /tmp/luna-loop-fs-append.txt"); /* O_APPEND accumulates across runs */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.appendFile('/tmp/luna-loop-fs-append.txt', 'x', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.appendFile('/tmp/luna-loop-fs-append.txt', 'y', function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.readFile('/tmp/luna-loop-fs-append.txt', function(e3, d)\n"
+        "      out = tostring(e3 == nil) .. ':' .. tostring(d)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:xy");
+}
+
+static void test_fs_readdir_lists_entries(void **state)
+{
+    (void)state;
+    (void)system("rm -rf /tmp/luna-loop-fs-dir");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.mkdir('/tmp/luna-loop-fs-dir', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.writeFile('/tmp/luna-loop-fs-dir/alpha.txt', 'a', function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.writeFile('/tmp/luna-loop-fs-dir/beta.md', 'b', function(e3)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      fs.readdir('/tmp/luna-loop-fs-dir', function(e4, names)\n"
+        "        assert(e4 == nil, e4)\n"
+        "        table.sort(names)\n"
+        "        out = table.concat(names, ',')\n"
+        "        fs.readdir('/tmp/luna-loop-fs-no-such-dir', function(e5)\n"
+        "          out = out .. '|' .. tostring(e5 ~= nil)\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "alpha.txt,beta.md|true");
+}
+
+static void test_fs_mkdir_rmdir_roundtrip(void **state)
+{
+    (void)state;
+    (void)system("rm -rf /tmp/luna-loop-fs-mk");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.mkdir('/tmp/luna-loop-fs-mk', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.stat('/tmp/luna-loop-fs-mk', function(e2, st)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    local was_there = st.mode ~= nil\n"
+        "    fs.rmdir('/tmp/luna-loop-fs-mk', function(e3)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      fs.stat('/tmp/luna-loop-fs-mk', function(e4)\n"
+        "        out = tostring(was_there) .. '|' .. tostring(e4 ~= nil)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|true");
+}
+
+static void test_fs_unlink_removes_file(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-unlink.txt', 'bye', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.unlink('/tmp/luna-loop-fs-unlink.txt', function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.readFile('/tmp/luna-loop-fs-unlink.txt', function(e3)\n"
+        "      out = tostring(e3 ~= nil)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true");
+}
+
+static void test_fs_rename_moves_file(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-src.txt', 'moved-payload', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.rename('/tmp/luna-loop-fs-src.txt', '/tmp/luna-loop-fs-dst.txt',\n"
+        "    function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.readFile('/tmp/luna-loop-fs-dst.txt', function(e3, data)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      out = tostring(data)\n"
+        "      fs.readFile('/tmp/luna-loop-fs-src.txt', function(e4)\n"
+        "        out = out .. '|' .. tostring(e4 ~= nil)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "moved-payload|true");
 }
 
 /* -- net: a one-shot echo server on a real socket --------------------- */
@@ -779,6 +910,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_read_of_a_missing_file_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_stat_reports_size, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_write_of_empty_data_roundtrips, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_stat_of_a_missing_path_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_append_file_extends, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_readdir_lists_entries, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_mkdir_rmdir_roundtrip, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_unlink_removes_file, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_rename_moves_file, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

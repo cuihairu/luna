@@ -25,14 +25,19 @@
  * server offers port()/close(). Each open socket or listener holds the
  * loop alive until its uv_close lands, like Node.
  *
- * loop.process: the aggregate sibling of Node's child_process.spawn.
- * run(cmd, args, [opts], cb) execs without a shell, captures the
- * child's stdout/stderr into memory, and delivers cb(nil, res) once
- * the child exited AND both capture pipes reached EOF:
- * res = {status, signal?, stdout, stderr}. opts takes {cwd=path}.
- * run() returns the proc handle at once (pid/kill); spawn failures
- * throw synchronously, like listen(). A killed child reports
- * signal = <number> with a meaningless status, mirroring libuv. */
+ * loop.process: the two shapes of Node's child_process, on one
+ * contract. run(cmd, args, [opts], cb) is the aggregate sibling of
+ * exec: no shell, stdout/stderr captured into memory, cb(nil, res)
+ * delivered once the child exited AND both capture pipes reached EOF
+ * (res = {status, signal?, stdout, stderr}). spawn(cmd, args, [opts],
+ * onExit) hands out ordinary loop.net socks as stdio — stdin
+ * writable, stdout/stderr readable — and its onExit mirrors Node's
+ * 'exit': it fires on process exit regardless of the streams, which
+ * keep flowing until closed (net's "must close" contract). opts takes
+ * {cwd=path}; run/spawn return the proc handle at once (pid/kill/
+ * stdin/stdout/stderr); spawn failures throw synchronously, like
+ * listen(); a killed child reports signal = <number> with a
+ * meaningless status, mirroring libuv. */
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -598,7 +603,10 @@ static const luaL_Reg fs_funcs[] = {
  *   sock:write(data, cb(err))    flushes, cb optional
  *   sock:read(cb)                cb(nil, chunk) per chunk, cb(nil, nil)
  *                                at EOF, cb(err) on error; repeats
- *   sock:end(cb(err))            half-close (FIN), reads keep working
+ *   sock:shutdown(cb(err))       half-close (FIN), reads keep working
+ *                                ('end' is a Lua keyword — the method is
+ *                                spelled shutdown; 'end' stays callable
+ *                                as sock['end'] for symmetry)
  *   sock:close()                 idempotent, drops every callback
  *
  * The registry pins the userdata until uv_close completes — an open
@@ -727,8 +735,10 @@ static void on_resolved(uv_getaddrinfo_t *ai, int status, struct addrinfo *res)
     uv_freeaddrinfo(res);
 }
 
-/* both dials share this: allocate, pin, keep-alive */
-static struct sock *sock_new(lua_State *L, int kind)
+/* allocate, pin, keep-alive — everything but the handle init: spawn's
+ * stdio pipes must exist (initialized) before uv_spawn points its
+ * containers at them, so l_process_spawn inits them itself */
+static struct sock *sock_new_uninit(lua_State *L, int kind)
 {
     struct sock *s = lua_newuserdata(L, sizeof(*s));
     memset(s, 0, sizeof(*s));
@@ -741,12 +751,19 @@ static struct sock *sock_new(lua_State *L, int kind)
     lua_setmetatable(L, -2);
     lua_pushvalue(L, -1);
     s->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    keepalive_open();
+    return s;
+}
+
+/* both dials share this: allocate, pin, keep-alive */
+static struct sock *sock_new(lua_State *L, int kind)
+{
+    struct sock *s = sock_new_uninit(L, kind);
     if (kind == SOCK_TCP) {
         uv_tcp_init(&g_loop, &s->h.tcp);
     } else {
         uv_pipe_init(&g_loop, &s->h.pipe, 0);
     }
-    keepalive_open();
     return s;
 }
 
@@ -855,6 +872,39 @@ static int l_sock_write(lua_State *L)
     return 0;
 }
 
+/* streaming read delivery: a chunk keeps the callback registered (the
+ * stream keeps flowing); the terminal deliveries — EOF (nil, nil) and
+ * errors — consume it, like every one-shot callback here. */
+static void sock_read_deliver(struct sock *s, int errcode,
+                              const char *data, size_t len)
+{
+    lua_State *L = s->L;
+    int ref = s->readref;
+    int terminal = (errcode != 0) || (data == NULL);
+    if (ref == LUA_NOREF || ref == LUA_REFNIL) {
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    lua_pushnil(L);
+    if (errcode != 0) {
+        lua_pushstring(L, uv_strerror(errcode));
+    } else if (data) {
+        lua_pushlstring(L, data, len);
+    } else {
+        lua_pushnil(L);                    /* (nil, nil): EOF */
+    }
+    if (terminal) {
+        s->readref = LUA_NOREF;
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    }
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: net callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
 static void on_read(uv_stream_t *st, ssize_t n, const uv_buf_t *buf)
 {
     struct sock *s = (struct sock *)st;
@@ -866,9 +916,9 @@ static void on_read(uv_stream_t *st, ssize_t n, const uv_buf_t *buf)
         }
         s->got_eof = 1;
         if (n == UV_EOF) {
-            sock_deliver(s, &s->readref, 0, 0, NULL, 0); /* (nil, nil) */
+            sock_read_deliver(s, 0, NULL, 0); /* (nil, nil) */
         } else {
-            sock_deliver(s, &s->readref, (int)n, 0, NULL, 0);
+            sock_read_deliver(s, (int)n, NULL, 0);
         }
         return;
     }
@@ -876,7 +926,7 @@ static void on_read(uv_stream_t *st, ssize_t n, const uv_buf_t *buf)
         free(buf->base); /* nothing read this round, keep going */
         return;
     }
-    sock_deliver(s, &s->readref, 0, 0, buf->base, (size_t)n);
+    sock_read_deliver(s, 0, buf->base, (size_t)n);
     free(buf->base);
 }
 
@@ -916,7 +966,9 @@ static void on_shutdown(uv_shutdown_t *req, int status)
     sock_deliver(s, &s->endref, status < 0 ? status : 0, 0, NULL, 0);
 }
 
-/* sock:end(cb(err)?) — half-close: the peer sees EOF, reads keep working */
+/* sock:shutdown(cb(err)?) — half-close: the peer sees EOF, reads keep
+ * working. Named shutdown because 'end' is a Lua keyword: sock:end()
+ * does not parse, and sock['end'](sock, cb) loses the colon sugar. */
 static int l_sock_end(lua_State *L)
 {
     struct sock *s = luaL_checkudata(L, 1, "loop.sock");
@@ -1186,7 +1238,8 @@ static int server_tostring(lua_State *L)
 static const luaL_Reg sock_funcs[] = {
     { "write", l_sock_write },
     { "read", l_sock_read },
-    { "end", l_sock_end },
+    { "shutdown", l_sock_end },
+    { "end", l_sock_end },  /* bracket-callable alias: 'end' is a keyword */
     { "close", l_sock_close },
     { NULL, NULL },
 };
@@ -1225,20 +1278,46 @@ struct piper {
     size_t len, cap;
 };
 
+enum { PROC_RUN, PROC_SPAWN };
+
 struct proc {
     uv_process_t h;      /* first member: proc == (struct proc *)handle */
     lua_State *L;
+    int mode;            /* PROC_RUN (capture) or PROC_SPAWN (stdio socks) */
     int selfref;         /* registry -> userdata, dropped at delivery */
     int cbref;           /* completion callback */
     int exit_seen, proc_closed, pipes_closed, delivered;
     int64_t status;      /* exit code (meaningful only when signum == 0) */
     int signum;
+    /* PROC_RUN: capture pipes, buffers moved here at pipe EOF */
     struct piper *out, *err;
-    char *out_data, *err_data; /* capture buffers, moved here at pipe EOF */
+    char *out_data, *err_data;
     size_t out_len, err_len;
+    /* PROC_SPAWN: the three stdio socks; the refs pin the userdatas
+     * until delivery (then ownership of live ones goes to the caller,
+     * held only by each sock's own selfref, like any net socket) */
+    struct sock *in_s, *out_s, *err_s;
+    int inref, outref, errref;
 };
 
 static void proc_try_close(struct proc *pr);
+
+/* allocate, pin, keep-alive — shared by run/spawn */
+static struct proc *proc_new(lua_State *L, int mode)
+{
+    struct proc *pr = lua_newuserdata(L, sizeof(*pr));
+    memset(pr, 0, sizeof(*pr));
+    pr->L = L;
+    pr->mode = mode;
+    pr->selfref = LUA_NOREF;
+    pr->cbref = LUA_NOREF;
+    pr->inref = pr->outref = pr->errref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.process");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    pr->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    return pr;
+}
 
 /* spawn-failure path: nobody is left to own the pipers */
 static void on_piper_gone_dead(uv_handle_t *handle)
@@ -1319,13 +1398,18 @@ static void on_proc_exit(uv_process_t *h, int64_t status, int signum)
     uv_close((uv_handle_t *)h, on_proc_handle_closed);
 }
 
-/* deliver cb(nil, res) once the child exited, the process handle is
- * closed, and both capture pipes drained; then drop the pin. The
- * callback still runs with the pin held — it can raise, like any. */
+/* deliver cb(nil, res) once the child exited and the process handle is
+ * closed — plus, for run(), both capture pipes drained. spawn() does
+ * NOT wait for the stdio pipes: a pipe nobody reads never EOFs, so
+ * onExit mirrors Node's 'exit' and the streams keep flowing afterwards.
+ * The callback still runs with every pin held — it can raise, like
+ * any. */
 static void proc_try_close(struct proc *pr)
 {
-    if (pr->delivered || !pr->exit_seen || !pr->proc_closed ||
-        pr->pipes_closed < 2) {
+    if (pr->delivered || !pr->exit_seen || !pr->proc_closed) {
+        return;
+    }
+    if (pr->mode == PROC_RUN && pr->pipes_closed < 2) {
         return;
     }
     pr->delivered = 1;
@@ -1341,19 +1425,34 @@ static void proc_try_close(struct proc *pr)
         lua_pushinteger(L, pr->signum);
         lua_setfield(L, -2, "signal");
     }
-    lua_pushlstring(L, pr->out_data ? pr->out_data : "", pr->out_len);
-    lua_setfield(L, -2, "stdout");
-    lua_pushlstring(L, pr->err_data ? pr->err_data : "", pr->err_len);
-    lua_setfield(L, -2, "stderr");
+    if (pr->mode == PROC_RUN) {
+        lua_pushlstring(L, pr->out_data ? pr->out_data : "", pr->out_len);
+        lua_setfield(L, -2, "stdout");
+        lua_pushlstring(L, pr->err_data ? pr->err_data : "", pr->err_len);
+        lua_setfield(L, -2, "stderr");
+    }
+    if (pr->mode == PROC_SPAWN) {
+        /* drop the pins BEFORE delivery: onExit already mirrors Node's
+         * 'exit', and inside it p:stdout() must read nil — a live sock
+         * is held only by its own selfref (dropped when the user
+         * closes it), a dead one can finally be collected */
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->inref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->outref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->errref);
+        pr->inref = pr->outref = pr->errref = LUA_NOREF;
+        pr->in_s = pr->out_s = pr->err_s = NULL;
+    }
     if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
         const char *msg = lua_tostring(L, -1);
         fprintf(stderr, "loop: process callback error: %s\n",
                 msg ? msg : lua_typename(L, lua_type(L, -1)));
         lua_pop(L, 1);
     }
-    free(pr->out_data);
-    free(pr->err_data);
-    pr->out_data = pr->err_data = NULL;
+    if (pr->mode == PROC_RUN) {
+        free(pr->out_data);
+        free(pr->err_data);
+        pr->out_data = pr->err_data = NULL;
+    }
     keepalive_close();
     luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
     pr->selfref = LUA_NOREF;
@@ -1392,54 +1491,62 @@ static int l_proc_kill(lua_State *L)
     return 1;
 }
 
-/* loop.process.run(cmd, args?, [opts], cb(nil, res)) -> proc.
- * opts: { cwd = path }. Spawn failures throw, like listen(). */
-static int l_process_run(lua_State *L)
+/* the shared preamble of run/spawn — (cmd, args?, opts {cwd}?, cb).
+ * Sets *nargs and *cbidx; an opts table is replaced by its anchored
+ * cwd string at slot 3 (NULL when unset). Returns cmd. */
+static const char *proc_parse_args(lua_State *L, int *nargs, int *cbidx,
+                                   const char **cwd)
 {
     const char *cmd = luaL_checkstring(L, 1);
-    int nargs = 0;
+    *nargs = 0;
+    *cwd = NULL;
     if (!lua_isnoneornil(L, 2)) {
         luaL_checktype(L, 2, LUA_TTABLE);
-        nargs = (int)lua_rawlen(L, 2);
-        for (int i = 1; i <= nargs; i++) {
+        *nargs = (int)lua_rawlen(L, 2);
+        for (int i = 1; i <= *nargs; i++) {
             lua_rawgeti(L, 2, i);
             luaL_argcheck(L, !lua_isnil(L, -1) && lua_tostring(L, -1), 2,
                           "args must be strings");
             lua_pop(L, 1);
         }
     }
-    /* run(cmd, args, cb) or run(cmd, args, {cwd=...}, cb) — keeping the
-     * cwd string anchored on the stack beats strdup'ing it */
-    int cbidx = 3;
-    const char *cwd = NULL;
+    *cbidx = 3;
     if (lua_istable(L, 3)) {
         lua_getfield(L, 3, "cwd");
         if (!lua_isnil(L, -1)) {
-            cwd = lua_tostring(L, -1);
+            *cwd = lua_tostring(L, -1);
         }
-        lua_replace(L, 3);
-        cbidx = 4;
+        lua_replace(L, 3); /* anchor the cwd string on the stack */
+        *cbidx = 4;
     }
-    luaL_checktype(L, cbidx, LUA_TFUNCTION);
+    luaL_checktype(L, *cbidx, LUA_TFUNCTION);
+    return cmd;
+}
 
-    struct proc *pr = lua_newuserdata(L, sizeof(*pr));
-    memset(pr, 0, sizeof(*pr));
-    pr->L = L;
-    luaL_getmetatable(L, "loop.process");
-    lua_setmetatable(L, -2);
-    lua_pushvalue(L, -1);
-    pr->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
-    pr->cbref = pin_cb(L, cbidx);
+/* copy argv out of Lua: the stack slots die when we return */
+static void proc_free_argv(char **args)
+{
+    if (!args) {
+        return;
+    }
+    for (int i = 0; args[i]; i++) {
+        free(args[i]);
+    }
+    free(args);
+}
 
-    /* copy argv out of Lua FIRST: no uv handle exists yet, so an
-     * allocation failure here can just drop the refs and raise */
+/* NULL on failure (a partial array is freed); no uv handle exists
+ * while this runs, so failing callers just drop their pins */
+static char **proc_build_argv(lua_State *L, const char *cmd, int nargs)
+{
     char **args = malloc(((size_t)nargs + 2) * sizeof(char *));
     if (!args) {
-        goto oom;
+        return NULL;
     }
     args[0] = malloc(strlen(cmd) + 1);
     if (!args[0]) {
-        goto oom_after_args;
+        free(args);
+        return NULL;
     }
     strcpy(args[0], cmd);
     for (int i = 0; i < nargs; i++) {
@@ -1448,17 +1555,70 @@ static int l_process_run(lua_State *L)
         args[i + 1] = malloc(strlen(a) + 1);
         if (!args[i + 1]) {
             lua_pop(L, 1);
-            goto oom_after_args;
+            args[i + 1] = NULL;
+            proc_free_argv(args);
+            return NULL;
         }
         strcpy(args[i + 1], a);
         lua_pop(L, 1);
     }
     args[nargs + 1] = NULL;
+    return args;
+}
 
+/* spawn-failure tail: every handle the attempt opened gets closed,
+ * every pin dropped, then throw — the run still drains afterwards */
+static int proc_spawn_error(lua_State *L, struct proc *pr, int rc)
+{
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
+    pr->cbref = LUA_NOREF;
+    pr->selfref = LUA_NOREF;
+    if (pr->mode == PROC_RUN) {
+        uv_close((uv_handle_t *)&pr->out->p, on_piper_gone_dead);
+        uv_close((uv_handle_t *)&pr->err->p, on_piper_gone_dead);
+    } else {
+        sock_close(pr->in_s);
+        sock_close(pr->out_s);
+        sock_close(pr->err_s);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->inref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->outref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->errref);
+    }
+    return luaL_error(L, "loop.process: spawn failed: %s", uv_strerror(rc));
+}
+
+static void proc_options_of(uv_process_options_t *opts, char **args,
+                            const char *cwd, uv_stdio_container_t *io)
+{
+    memset(opts, 0, sizeof(*opts));
+    opts->exit_cb = on_proc_exit;
+    opts->file = args[0];
+    opts->args = args;
+    opts->cwd = cwd;
+    opts->stdio_count = 3;
+    opts->stdio = io;
+}
+
+/* loop.process.run(cmd, args?, [opts], cb(nil, res)) -> proc.
+ * opts: { cwd = path }. Spawn failures throw, like listen(). */
+static int l_process_run(lua_State *L)
+{
+    int nargs, cbidx;
+    const char *cwd;
+    const char *cmd = proc_parse_args(L, &nargs, &cbidx, &cwd);
+    struct proc *pr = proc_new(L, PROC_RUN);
+    pr->cbref = pin_cb(L, cbidx);
+    char **args = proc_build_argv(L, cmd, nargs);
     pr->out = calloc(1, sizeof(*pr->out));
     pr->err = calloc(1, sizeof(*pr->err));
-    if (!pr->out || !pr->err) {
-        goto oom_after_args;
+    if (!args || !pr->out || !pr->err) {
+        proc_free_argv(args);
+        free(pr->out);
+        free(pr->err);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
+        return luaL_error(L, "loop.process: out of memory");
     }
     pr->out->owner = pr;
     pr->err->owner = pr;
@@ -1473,56 +1633,114 @@ static int l_process_run(lua_State *L)
     io[2].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
     io[2].data.stream = (uv_stream_t *)pr->err;
     uv_process_options_t opts;
-    memset(&opts, 0, sizeof opts);
-    opts.exit_cb = on_proc_exit;
-    opts.file = args[0];
-    opts.args = args;
-    opts.cwd = cwd;
-    opts.stdio_count = 3;
-    opts.stdio = io;
+    proc_options_of(&opts, args, cwd, io);
 
     int rc = uv_spawn(&g_loop, &pr->h, &opts);
-    for (int i = 0; i < nargs + 1; i++) {
-        free(args[i]);
-    }
-    free(args);
+    proc_free_argv(args);
     if (rc != 0) {
-        luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
-        luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
-        pr->cbref = LUA_NOREF;
-        pr->selfref = LUA_NOREF;
-        uv_close((uv_handle_t *)&pr->out->p, on_piper_gone_dead);
-        uv_close((uv_handle_t *)&pr->err->p, on_piper_gone_dead);
-        return luaL_error(L, "loop.process: spawn failed: %s",
-                          uv_strerror(rc));
+        return proc_spawn_error(L, pr, rc);
     }
     keepalive_open();
     uv_read_start((uv_stream_t *)pr->out, on_proc_alloc, on_proc_read);
     uv_read_start((uv_stream_t *)pr->err, on_proc_alloc, on_proc_read);
     return 1;
+}
 
-oom:
-    free(args);
-oom_after_args:
-    if (args) {
-        for (int i = 0; args[i]; i++) {
-            free(args[i]);
-        }
-        free(args);
+/* loop.process.spawn(cmd, args?, [opts], onExit(nil, res)) -> proc
+ * with live stdio: proc:stdin()/stdout()/stderr() hand out ordinary
+ * socks (stdin writable, stdout/stderr readable). onExit mirrors
+ * Node's 'exit' — it fires on process exit regardless of the streams,
+ * which keep flowing until the user closes them. */
+static int l_process_spawn(lua_State *L)
+{
+    int nargs, cbidx;
+    const char *cwd;
+    const char *cmd = proc_parse_args(L, &nargs, &cbidx, &cwd);
+    struct proc *pr = proc_new(L, PROC_SPAWN);
+    pr->cbref = pin_cb(L, cbidx);
+
+    /* the stdio socks must exist, initialized, before uv_spawn points
+     * the containers at them; each pins itself and opens its own
+     * keep-alive — the spawn-failure tail balances all of it */
+    pr->in_s = sock_new_uninit(L, SOCK_PIPE);
+    pr->inref = luaL_ref(L, LUA_REGISTRYINDEX);
+    pr->out_s = sock_new_uninit(L, SOCK_PIPE);
+    pr->outref = luaL_ref(L, LUA_REGISTRYINDEX);
+    pr->err_s = sock_new_uninit(L, SOCK_PIPE);
+    pr->errref = luaL_ref(L, LUA_REGISTRYINDEX);
+    uv_pipe_init(&g_loop, &pr->in_s->h.pipe, 0);
+    uv_pipe_init(&g_loop, &pr->out_s->h.pipe, 0);
+    uv_pipe_init(&g_loop, &pr->err_s->h.pipe, 0);
+
+    char **args = proc_build_argv(L, cmd, nargs);
+    if (!args) {
+        return proc_spawn_error(L, pr, UV_ENOMEM);
     }
-    luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
-    luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
-    return luaL_error(L, "loop.process: out of memory");
+
+    uv_stdio_container_t io[3];
+    io[0].flags = UV_CREATE_PIPE | UV_READABLE_PIPE; /* child reads it */
+    io[0].data.stream = (uv_stream_t *)&pr->in_s->h.pipe;
+    io[1].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
+    io[1].data.stream = (uv_stream_t *)&pr->out_s->h.pipe;
+    io[2].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
+    io[2].data.stream = (uv_stream_t *)&pr->err_s->h.pipe;
+    uv_process_options_t opts;
+    proc_options_of(&opts, args, cwd, io);
+
+    int rc = uv_spawn(&g_loop, &pr->h, &opts);
+    proc_free_argv(args);
+    if (rc != 0) {
+        return proc_spawn_error(L, pr, rc);
+    }
+    keepalive_open();
+    pr->in_s->connected = pr->out_s->connected = pr->err_s->connected = 1;
+    return 1;
+}
+
+/* proc:stdin()/stdout()/stderr() — the stdio socks of a spawn(); nil
+ * once delivered (ownership released at onExit). */
+static int proc_stdio_get(lua_State *L, struct proc *pr, int ref)
+{
+    luaL_argcheck(L, pr->mode == PROC_SPAWN, 1,
+                  "run() procs have no stdio streams");
+    if (ref == LUA_NOREF) {
+        lua_pushnil(L);
+    } else {
+        lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    }
+    return 1;
+}
+
+static int l_proc_stdin(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    return proc_stdio_get(L, pr, pr->inref);
+}
+
+static int l_proc_stdout(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    return proc_stdio_get(L, pr, pr->outref);
+}
+
+static int l_proc_stderr(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    return proc_stdio_get(L, pr, pr->errref);
 }
 
 static const luaL_Reg proc_funcs[] = {
     { "pid", l_proc_pid },
     { "kill", l_proc_kill },
+    { "stdin", l_proc_stdin },
+    { "stdout", l_proc_stdout },
+    { "stderr", l_proc_stderr },
     { NULL, NULL },
 };
 
 static const luaL_Reg process_funcs[] = {
     { "run", l_process_run },
+    { "spawn", l_process_spawn },
     { NULL, NULL },
 };
 

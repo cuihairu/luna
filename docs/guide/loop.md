@@ -114,21 +114,21 @@ loop.run()
 | `server:close(cb?)` | 幂等关闭;回调在句柄真正关闭后落地 |
 | `sock:write(data, cb(err)?)` | 写出载荷,送达后回调(载荷由实现持有到回调落地) |
 | `sock:read(cb)` | 流式读:每块 `cb(nil, chunk)`;对端 EOF 是 `cb(nil, nil)`;出错 `cb(err)`;再次调用即换回调 |
-| `sock:end(cb(err)?)` | 半关闭(FIN):对端读到 EOF,本端仍可继续读 |
+| `sock:shutdown(cb(err)?)` | 半关闭(FIN):对端读到 EOF,本端仍可继续读;不叫 `end` 是因为它是 Lua 关键字(`sock:end()` 无法解析) |
 | `sock:close()` | 幂等关闭;打开的 socket 或 server 让 `run()` 持续——和 Node 一样,完事必须关 |
 
 行为约定:
 
 - **连接失败走回调**:DNS 失败或拒连从 `cb(err)` 出来,失败的 socket 自行收尾,循环照常排空到自然返回;
 - **EOF 是 `(nil, nil)`**:对端关闭让下一次 `read` 回调拿到 `err=nil, chunk=nil`——用 `chunk == nil` 判结束,语义对齐 Node 流的 end;
-- **半关闭**:`end()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
+- **半关闭**:`shutdown()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
 - **连接回调常驻**:`onConn(err, sock)` 对每个连接交付一次,引用由实现持有;accept 出错(如 fd 耗尽)也从它的 `err` 出来,不掀翻循环;
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。
 
 ## loop.process:异步子进程
 
-`loop.process` 是循环的第四块:`child_process.spawn` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付:
+`loop.process` 是循环的第四块,两个入口:`run` 是 `child_process.exec` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付;`spawn` 则把三路 stdio 直接交成普通的 `loop.net` sock,流式收发:
 
 ```lua
 local loop = require("loop")
@@ -160,3 +160,38 @@ loop.run()
 - **没有 shell**:`cmd` 不经 `/bin/sh`,管道、通配、`~` 一概不展开——要 shell 语义就 `run("sh", {"-c", "..."})`,和 Node `spawn`/`exec` 的分野一致;
 - **stdin 被忽略**(首片):需要向子进程写数据、流式收发输出的接口留给后续批次;
 - **错误是字符串**:与 `loop.fs`/`loop.net` 相同,`uv_strerror` 直出。
+
+## process.spawn:流式子进程
+
+`spawn` 是聚合的流式反面:三路 stdio 就是三个普通的 `loop.net` sock——`write`/`read`/`shutdown`/`close` 全套语义原样适用,读回调同样 `cb(nil, chunk)` 流式多块、`cb(nil, nil)` 是 EOF:
+
+```lua
+local process = require("loop").process
+
+local p                       -- 拆开声明:回调里读 p(见 net 的作用域提醒)
+p = process.spawn("cat", {}, function(err, res)
+    print("exit", res.status)                 -- 退出即交付,不等流
+end)
+p:stdout():read(function(e, chunk)
+    if chunk then io.write(chunk) else p:stdout():close() end
+end)
+p:stdin():write("ping", function(e2)
+    p:stdin():shutdown(function() p:stdin():close() end)  -- 半关说"发完了"
+end)
+p:stderr():close()            -- 不读的流也要关
+
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `process.spawn(cmd, args?, opts?, cb)` | 同 `run` 的参数;立刻返回 proc 句柄;退出回调 `cb(nil, res)` 只带 `status`/`signal`,不含捕获输出 |
+| `proc:stdin()` / `proc:stdout()` / `proc:stderr()` | 取三路 stdio 对应的 sock;**退出交付之后返回 nil** |
+
+行为约定:
+
+- **onExit 对齐 Node 的 `'exit'`**:子进程退出即交付,**不等** stdout/stderr 排空——没人读的管道永远不会 EOF,等它就死了;退出后流照常继续可读;
+- **流是普通的 net sock**:EOF 之外没有隐式收尾——读完了要 `close`,不读的流也要 `close`(打开的 sock 撑着循环,和 `loop.net` 的"完事必须关"同一条);
+- **句柄只能取到交付前**:`p:stdout()` 在退出回调里已经是 nil——要在回调里用 sock,先把局部变量抓在 spawn 之后:`local out = p:stdout()`;
+- **写侧说完用 `shutdown`**:cat 这类读到 EOF 才退出的程序,靠半关闭(不是 `close`,那会连读侧一起扔)说"我发完了";
+- **stdin/stdout/stderr 独立**:三路互不相干,stderr 的 EOF 不影响 stdout——分路读正是 spawn 相对 run 的意义。

@@ -635,6 +635,135 @@ static void test_proc_spawn_failure_throws_and_drains(void **state)
         "threw-and-drained");
 }
 
+/* regression: a chunk delivery used to consume the read callback, so
+ * only the FIRST chunk (and no EOF) ever reached Lua. Two writes with
+ * a pause in between force two separate chunk events plus the EOF. */
+static void *two_chunks_main(void *arg)
+{
+    int fd = (int)(intptr_t)arg;
+    int c = accept(fd, NULL, NULL);
+    if (c < 0) {
+        return NULL;
+    }
+    ssize_t n = write(c, "a", 1);
+    (void)n;
+    usleep(200 * 1000);
+    n = write(c, "b", 1);
+    (void)n;
+    close(c);
+    return NULL;
+}
+
+static void test_net_read_survives_multiple_chunks(void **state)
+{
+    (void)state;
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, two_chunks_main,
+                                    (void *)(intptr_t)fd), 0);
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "local got, done = '', nil\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  assert(e == nil)\n"
+        "  sock:read(function(e2, chunk)\n"
+        "    if chunk then got = got .. chunk\n"
+        "    else done = 'eof' sock:close() end\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return got .. '|' .. tostring(done)", port);
+    assert_string_equal(eval_string(code), "ab|eof");
+    pthread_join(th, NULL);
+    close(fd);
+}
+
+/* -- process.spawn: live stdio as ordinary socks ----------------------- */
+
+static void test_proc_spawn_cat_roundtrip(void **state)
+{
+    (void)state;
+    /* stdin write + half-close, stdout read to EOF: the full sock face
+     * over a child's stdio pipes */
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local got, code\n"
+        "local p = process.spawn('cat', {}, function(e, r)\n"
+        "  code = r.status .. '/' .. tostring(r.signal)\n"
+        "end)\n"
+        "p:stdout():read(function(e2, chunk)\n"
+        "  if chunk then got = chunk else p:stdout():close() end\n"
+        "end)\n"
+        "p:stdin():write('ping', function(e3)\n"
+        "  assert(e3 == nil)\n"
+        "  p:stdin():shutdown(function() p:stdin():close() end)\n"
+        "end)\n"
+        "p:stderr():close()          -- unread streams must be closed\n"
+        "assert(loop.run())\n"
+        "return got .. '|' .. code"), "ping|0/nil");
+}
+
+static void test_proc_spawn_stderr_is_separate(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local got\n"
+        "local p = process.spawn('sh', {'-c', 'echo err-out >&2'},\n"
+        "  function() end)\n"
+        "local se = p:stderr()       -- hoist: sh exits at once, so the\n"
+        "se:read(function(e, chunk)  -- proc may deliver before this pipe\n"
+        "  if chunk then got = chunk else se:close() end  -- EOFs; by then\n"
+        "end)                        -- p:stderr() is nil by contract\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "assert(loop.run())\n"
+        "return got"), "err-out\n");
+}
+
+static void test_proc_spawn_exit_fires_without_readers(void **state)
+{
+    (void)state;
+    /* onExit mirrors Node 'exit': it fires on process exit even though
+     * stdout was never read (its EOF can only be seen by a reader) —
+     * and unread socks still close cleanly, so the run drains */
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local sig\n"
+        "local p = process.spawn('sleep', {'30'}, function(e, r)\n"
+        "  sig = tostring(r.signal)\n"
+        "end)\n"
+        "loop.setImmediate(function() assert(p:kill(15)) end)\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "assert(loop.run())\n"
+        "return sig"), "15");
+}
+
+static void test_proc_spawn_stdio_become_nil_after_exit(void **state)
+{
+    (void)state;
+    /* ownership is released at onExit: the accessors hand out the
+     * socks while the child runs, nil afterwards */
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local before, after\n"
+        "local p                       -- split decl: the callback reads p\n"
+        "p = process.spawn('echo', {'x'}, function()\n"
+        "  after = tostring(p:stdout())\n"
+        "end)\n"
+        "before = tostring(p:stdout())\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "assert(loop.run())\n"
+        "return tostring(before:find('loop.sock') ~= nil) .. '|' .. after"),
+        "true|nil");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -656,11 +785,16 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_tcp_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_read_survives_multiple_chunks, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_echo_captures_stdout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_exit_code_and_stderr, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_cwd_option, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_kill_reports_signal, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_spawn_failure_throws_and_drains, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_spawn_cat_roundtrip, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_spawn_stderr_is_separate, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_spawn_exit_fires_without_readers, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_spawn_stdio_become_nil_after_exit, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

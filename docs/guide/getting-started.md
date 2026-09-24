@@ -2,7 +2,7 @@
 
 ## 构建
 
-依赖:CMake ≥ 3.16 与 C 编译器;其余(Lua 5.4、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
+依赖:CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
 
 ```bash
 # Linux / macOS

@@ -20,7 +20,7 @@
 │   (replxx,附 attach 唤醒线程)+ C 模块注册    │
 │   (lfs/socket/zlib/…)                       │
 ├────────────────────────────────────────────┤
-│ Lua 5.4 官方虚拟机 + LPeg + deps 第三方库     │
+│ Lua 5.5 官方虚拟机 + LPeg + deps 第三方库     │
 └────────────────────────────────────────────┘
 ```
 
@@ -29,7 +29,7 @@
 - **C 内核尽量薄**:只做 C 擅长且必须进 C 的事——信号(SIGINT)、毫秒时钟、isatty、输出汇聚点(sink)、replxx 桥。REPL 的行为逻辑全是 Lua,因为逻辑变化频率高,放 Lua 层改起来不需要懂 C,插件也能读懂并替换;
 - **策略层随二进制分发**:repl/highlight/… 在编译期由 CMake 嵌成 C raw string(`cmake/luna_lua.h.in` 生成头),用户拿到的单文件二进制行为完整;同时源文件即文档,`lua/luna/` 可直接阅读;
 - **扩展点即边界**:四组注册 API(`magic.register`、`complete.add_source`、`highlight.set`、返回 `modules` 表)是插件唯一入口。策略层内部结构对插件不可见,策略层重构不破坏插件;
-- **官方 Lua 是内核**:luna 不含自制解释器;所有"语言层"能力来自官方 Lua 5.4 + LPeg,升级 Lua 只动 `deps/`。
+- **官方 Lua 是内核**:luna 不含自制解释器;所有"语言层"能力来自官方 Lua 5.5 + LPeg,升级 Lua 只动 `deps/`。
 
 ## 与 Node.js 的对照
 
@@ -100,7 +100,7 @@
 
 ### 其余
 
-- **Lua 5.4**:官方源码,不用 LuaJIT(5.4 语义 + 维护优先);
+- **Lua 5.5**:官方源码,不用 LuaJIT(5.5 语义 + 维护优先);
 - **LPeg**:scintillua 的依赖,亦是将来 lexer 插件的运行时;
 - **luafilesystem**(keplerproject)、**luasocket**(Diego Nehab):各自领域的事实标准,不重新选;
 - **libuv**:`deps/` 已入库、尚未接线——见下节。

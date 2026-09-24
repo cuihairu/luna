@@ -1,6 +1,6 @@
 # luna
 
-IPython 式的 Lua 交互环境,按 Node.js 运行时的方式生长:多行续行、实时语法高亮、Tab 补全、`In[n]`/`Out[n]` 会话、`%time` 风格魔法命令;模块解析沿 `luna_modules/` 逐级上溯,目录插件提供魔法命令 / 补全源 / 高亮规则 / 模块注入四个扩展点。内核是官方 Lua 5.4,标准库(json/fs/net/http/zlib/crypto)绑定成熟 C 库并随二进制分发。
+IPython 式的 Lua 交互环境,按 Node.js 运行时的方式生长:多行续行、实时语法高亮、Tab 补全、`In[n]`/`Out[n]` 会话、`%time` 风格魔法命令;模块解析沿 `luna_modules/` 逐级上溯,目录插件提供魔法命令 / 补全源 / 高亮规则 / 模块注入四个扩展点。内核是官方 Lua 5.5,标准库(json/fs/net/http/zlib/crypto)绑定成熟 C 库并随二进制分发。
 
 文档站:https://cuihairu.github.io/luna (源码在 [`docs/`](docs/),VitePress)。
 

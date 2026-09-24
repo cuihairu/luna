@@ -15,7 +15,7 @@ option(CHECKOUT_GIT_SUBMODULE "Check out git submodules during build" ON)
 message(STATUS "CHECKOUT_GIT_SUBMODULE:${CHECKOUT_GIT_SUBMODULE}")
 include(FetchSubmodules)
 
-# official Lua 5.4 (deps/lua, pinned tag v5.4.9)
+# official Lua 5.5 (deps/lua, pinned tag v5.5.1)
 # core sources live at the repo root; exclude the standalone
 # interpreter/amalgamation/debug-driver translation units.
 file(GLOB LUA_CORE_SOURCES "${PROJECT_SOURCE_DIR}/deps/lua/*.c")

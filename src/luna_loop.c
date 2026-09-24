@@ -338,6 +338,8 @@ static int handle_tostring(lua_State *L)
     return 1;
 }
 
+static int l_signal(lua_State *L); /* defined with the sigwatch block */
+
 static const luaL_Reg loop_funcs[] = {
     { "setTimeout", l_set_timeout },
     { "setInterval", l_set_interval },
@@ -348,6 +350,7 @@ static const luaL_Reg loop_funcs[] = {
     { "run", l_run },
     { "stop", l_stop },
     { "now", l_now },
+    { "signal", l_signal },
     { NULL, NULL },
 };
 
@@ -887,6 +890,119 @@ static int fswatch_tostring(lua_State *L)
 
 static const luaL_Reg fswatch_funcs[] = {
     { "close", l_fswatch_close },
+    { NULL, NULL },
+};
+
+/* -- signals (loop.signal) ---------------------------------------------
+ *
+ * process.on('SIGTERM', fn), libuv-shaped: loop.signal(sig, cb) keeps a
+ * resident callback for one signal; every watcher watching the same
+ * signal is delivered (libuv fans out). SIGINT and SIGUSR1 are refused:
+ * ^C stays the loop's interrupt key and SIGUSR1 is the attach doorbell
+ * — both have owners already, and libuv installs its own handler via
+ * sigaction, so re-registering them here would fight those owners. */
+
+struct sigwatch {
+    uv_signal_t h;
+    int closed;
+    lua_State *L;
+    int selfref, cbref;
+};
+
+static void on_sigwatch_closed(uv_handle_t *h)
+{
+    struct sigwatch *w = (struct sigwatch *)h;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->selfref);
+    w->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+static void sigwatch_close(struct sigwatch *w)
+{
+    if (w->closed) {
+        return;
+    }
+    w->closed = 1;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->cbref);
+    w->cbref = LUA_NOREF;
+    uv_close((uv_handle_t *)&w->h, on_sigwatch_closed);
+}
+
+/* Synchronous close for the start-failure path — same reason as
+ * fswatch_close_now: the finish callback only runs when the loop turns,
+ * and a caller who just caught this throw may never run it again. */
+static void sigwatch_close_now(struct sigwatch *w)
+{
+    w->closed = 1;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->cbref);
+    w->cbref = LUA_NOREF;
+    uv_close((uv_handle_t *)&w->h, NULL);
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->selfref);
+    w->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+static void on_signal(uv_signal_t *h, int signum)
+{
+    struct sigwatch *w = (struct sigwatch *)h;
+    lua_State *L = w->L;
+    if (w->closed || w->cbref == LUA_NOREF) {
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, w->cbref);
+    lua_pushinteger(L, signum);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: signal callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+/* loop.signal(signum, cb) -> watcher */
+static int l_signal(lua_State *L)
+{
+    lua_Integer sig = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, sig > 0 && sig < 65, 1, "signal number out of range");
+    luaL_argcheck(L, sig != SIGINT && sig != SIGUSR1, 1,
+                  "signal is reserved (SIGINT: ^C interrupt, SIGUSR1: attach)");
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct sigwatch *w = lua_newuserdata(L, sizeof(*w));
+    memset(w, 0, sizeof(*w));
+    w->L = L;
+    w->cbref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.sigwatch");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    w->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    uv_signal_init(&g_loop, &w->h);
+    w->cbref = pin_cb(L, 2);
+    keepalive_open();
+    int rc = uv_signal_start(&w->h, on_signal, (int)sig);
+    if (rc != 0) {
+        sigwatch_close_now(w);
+        return luaL_error(L, "loop.signal: start failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+static int l_sigwatch_close(lua_State *L)
+{
+    struct sigwatch *w = luaL_checkudata(L, 1, "loop.sigwatch");
+    sigwatch_close(w);
+    return 0;
+}
+
+static int sigwatch_tostring(lua_State *L)
+{
+    struct sigwatch *w = luaL_checkudata(L, 1, "loop.sigwatch");
+    lua_pushfstring(L, "loop.sigwatch(%s): %p",
+                    w->closed ? "closed" : "open", (void *)w);
+    return 1;
+}
+
+static const luaL_Reg sigwatch_funcs[] = {
+    { "close", l_sigwatch_close },
     { NULL, NULL },
 };
 
@@ -2366,6 +2482,13 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.sigwatch")) {
+        luaL_newlib(L, sigwatch_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, sigwatch_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     luaL_newlib(L, loop_funcs);
     luaL_newlib(L, fs_funcs);
     lua_setfield(L, -2, "fs");
@@ -2375,5 +2498,22 @@ int luaopen_luna_loop(lua_State *L)
     lua_setfield(L, -2, "process");
     luaL_newlib(L, udp_funcs);
     lua_setfield(L, -2, "udp");
+    /* named signal numbers for loop.signal, Linux-standard; SIGKILL and
+     * SIGSTOP are listed but the kernel never delivers them */
+    static const struct { const char *name; int num; } sig_names[] = {
+        { "HUP", SIGHUP },       { "INT", SIGINT },       { "QUIT", SIGQUIT },
+        { "ILL", SIGILL },       { "ABRT", SIGABRT },     { "FPE", SIGFPE },
+        { "KILL", SIGKILL },     { "SEGV", SIGSEGV },     { "PIPE", SIGPIPE },
+        { "ALRM", SIGALRM },     { "TERM", SIGTERM },     { "USR1", SIGUSR1 },
+        { "USR2", SIGUSR2 },     { "CHLD", SIGCHLD },     { "CONT", SIGCONT },
+        { "STOP", SIGSTOP },     { "TSTP", SIGTSTP },     { "TTIN", SIGTTIN },
+        { "TTOU", SIGTTOU },
+    };
+    lua_createtable(L, 0, (int)(sizeof(sig_names) / sizeof(sig_names[0])));
+    for (size_t i = 0; i < sizeof(sig_names) / sizeof(sig_names[0]); i++) {
+        lua_pushinteger(L, sig_names[i].num);
+        lua_setfield(L, -2, sig_names[i].name);
+    }
+    lua_setfield(L, -2, "sig");
     return 1;
 }

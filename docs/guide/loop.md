@@ -101,6 +101,38 @@ loop.run()
 - **watch 不保证送达**:进程崩溃前的最后一批变化、watch 建立之前的变化,一概不知——它与 tail/同步扫描是互补而非替代;
 - **监视的删除以错误出场**:被监听的目录本身被删,`onEvent(err, ...)` 收到错误,watcher 随之失效。
 
+## loop.signal:异步信号
+
+`loop.signal` 是循环的第六块:把 Unix 信号接进回调世界——守护进程式脚本的优雅退出(收到 SIGTERM 先关 server、刷盘,再退)就是它的主场:
+
+```lua
+local loop = require("loop")
+
+local closing = false
+loop.signal(loop.sig.TERM, function(num)
+    if closing then return end
+    closing = true
+    print("graceful shutdown on signal " .. num)
+    -- 关 server、刷盘……然后最后一个句柄关闭,run() 自然返回
+end)
+
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `loop.signal(signum, cb)` | 注册常驻信号回调 `cb(signum)`;同号多个 watcher **都会**收到(libuv 扇出);返回 watcher |
+| `loop.sig.HUP / INT / QUIT / … / TERM / USR1 / USR2 / …` | 信号编号常量表(Linux 标准:`TERM`=15、`USR2`=12……) |
+| `watcher:close()` | 幂等关闭;关闭后不再交付 |
+
+行为约定:
+
+- **SIGINT 与 SIGUSR1 拒绝注册**:`^C` 是循环自己的中断键(超时以 `interrupted` 抛错、退出码 130),SIGUSR1 是 attach 的门铃——这两路各有主人,`signal` 同步抛错,别碰;
+- **最后一个 watcher 关闭 = 恢复默认处置**:对同一信号的最后一个 watcher `close()` 之后,libuv 撤销自家处置、恢复内核默认——再来的信号该终止进程就终止进程。想让进程对某信号"免疫",至少留一个 watcher 在;
+- **SIGKILL/SIGSTOP 编号在表里,但内核从不交付**:这两者不可捕获,是 Unix 的规矩;
+- **回调隔离**:回调抛错只打到 stderr,循环继续;信号在循环间隙到达也不会丢——处置已装上,事件由 libuv 排队,下一轮 `run` 交付;
+- **信号不是队列**:同号信号连发,内核不排队(标准信号合并)——回调收到的次数可能少于发送次数,要计数就在回调里自己数。
+
 ## loop.net:异步套接字
 
 `loop.net` 是循环的第三块:流式套接字,客户端与服务端一对入口 × 两种传输(TCP / unix domain),同一套"回调首参"约定。

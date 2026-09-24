@@ -15,6 +15,7 @@
 #include <setjmp.h>
 #include <string.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -537,6 +538,103 @@ static void test_immediate_beats_timer_with_io_watchers(void **state)
         "end, 50)\n"
         "assert(loop.run())\n"
         "return out"), "imm,timer");
+}
+
+static void test_signal_self_delivery(void **state)
+{
+    (void)state;
+    /* register a USR2 watcher, raise the signal while the loop is not
+     * running, then let run() deliver it — the resident callback sees
+     * the signal number and closes the watcher */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local w\n"
+        "w = loop.signal(loop.sig.USR2, function(num)\n"
+        "  out = 'got:' .. num\n"
+        "  w:close()\n"
+        "end)\n"
+        "return 'armed'"), "armed");
+    kill(getpid(), SIGUSR2);
+    assert_string_equal(eval_string(
+        "assert(loop.run())\n"
+        "return out"), "got:12");
+}
+
+static void test_signal_reserved_refused(void **state)
+{
+    (void)state;
+    /* SIGINT stays the loop's ^C interrupt and SIGUSR1 is the attach
+     * doorbell: loop.signal refuses both synchronously */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local ok1, e1 = pcall(loop.signal, loop.sig.INT, function() end)\n"
+        "local ok2, e2 = pcall(loop.signal, loop.sig.USR1, function() end)\n"
+        "return tostring(ok1) .. '|' .. tostring(ok2)"),
+        "false|false");
+}
+
+static void test_signal_multiple_watchers_fanout(void **state)
+{
+    (void)state;
+    /* libuv delivers one signal to every watcher watching it */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local hits = {}\n"
+        "local wa, wb\n"
+        "wa = loop.signal(loop.sig.USR2, function()\n"
+        "  hits[#hits + 1] = 'a'\n"
+        "  if #hits == 2 then\n"
+        "    out = table.concat(hits, '')\n"
+        "    wa:close()\n"
+        "    wb:close()\n"
+        "  end\n"
+        "end)\n"
+        "wb = loop.signal(loop.sig.USR2, function()\n"
+        "  hits[#hits + 1] = 'b'\n"
+        "  if #hits == 2 then\n"
+        "    out = table.concat(hits, '')\n"
+        "    wa:close()\n"
+        "    wb:close()\n"
+        "  end\n"
+        "end)\n"
+        "return 'armed'"), "armed");
+    kill(getpid(), SIGUSR2);
+    assert_string_equal(eval_string(
+        "assert(loop.run())\n"
+        "return out"), "ab");
+}
+
+static void test_signal_close_stops_delivery(void **state)
+{
+    (void)state;
+    /* a closed watcher never delivers, but one watcher must stay on the
+     * signal: libuv restores SIG_DFL when the LAST watcher closes, and
+     * the default disposition for SIGUSR2 kills us mid-test */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local hits = {}\n"
+        "local wb\n"
+        "wb = loop.signal(loop.sig.USR2, function()\n"
+        "  hits[#hits + 1] = 'b'\n"
+        "  out = table.concat(hits, ',')\n"
+        "  wb:close()\n"
+        "end)\n"
+        "local wa = loop.signal(loop.sig.USR2, function()\n"
+        "  hits[#hits + 1] = 'a'\n"
+        "end)\n"
+        "wa:close()               -- wb stays: disposition stays installed\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'TIMEOUT' end\n"
+        "  wb:close()\n"
+        "end, 150)\n"
+        "return 'armed'"), "armed");
+    kill(getpid(), SIGUSR2);
+    assert_string_equal(eval_string(
+        "assert(loop.run())\n"
+        "return out"), "b");
 }
 
 /* -- net: a one-shot echo server on a real socket --------------------- */
@@ -1090,6 +1188,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_watch_missing_path_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_watch_close_is_idempotent, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_immediate_beats_timer_with_io_watchers, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_signal_self_delivery, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_signal_reserved_refused, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_signal_multiple_watchers_fanout, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_signal_close_stops_delivery, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

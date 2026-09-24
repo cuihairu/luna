@@ -27,7 +27,10 @@ export default defineConfig({
       },
       {
         text: '设计',
-        items: [{ text: '架构设计', link: '/architecture' }]
+        items: [
+          { text: '架构设计', link: '/architecture' },
+          { text: '事件循环后端', link: '/loop-backend-design' }
+        ]
       }
     ],
     socialLinks: [

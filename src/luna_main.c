@@ -7,6 +7,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_line.h"
 #include "luna_lua.h" /* generated: embedded Lua entry + repl sources */
 
 /* lpeg.c has no lpeg.h; this is its single exported entry point. */
@@ -18,6 +19,7 @@ int luaopen_lfs(lua_State *L);        /* luafilesystem */
 int luaopen_socket_core(lua_State *L); /* luasocket */
 int luaopen_mime_core(lua_State *L);  /* luasocket mime */
 int luaopen_zlib(lua_State *L);       /* lua-zlib */
+int luaopen_socket_unix(lua_State *L); /* luasocket unix transport: attach */
 
 #ifdef LUNA_HAVE_OPENSSL
 /* luaossl: every submodule Lua layer requires "_openssl.<sub>". */
@@ -99,6 +101,30 @@ static void luna_on_sigint(int sig)
     luna_kernel_request_interrupt();
 }
 
+/* SIGUSR1 wakes the attach poll: flag the kernel and nudge a blocked
+ * line editor (see luna_line.c's wake channel) so the REPL loop comes
+ * back around to serve.step() without waiting for user keystrokes */
+static void luna_on_sigusr1(int sig)
+{
+    (void)sig;
+    luna_kernel_request_serve();
+    luna_line_notify_wake();
+}
+
+/* Install SIGUSR1 WITHOUT SA_RESTART: glibc's signal() would auto-restart
+ * the blocked line-editor read and the wake would never surface. */
+static void install_sigusr1(void)
+{
+#ifndef _WIN32
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = luna_on_sigusr1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; /* EINTR is the point */
+    sigaction(SIGUSR1, &sa, NULL);
+#endif
+}
+
 /* arg table, same shape as the standalone interpreter:
  * arg[0] = program name, arg[1..n] = arguments. */
 static void push_arg_table(lua_State *L, int argc, char **argv)
@@ -140,6 +166,8 @@ static void register_c_modules(lua_State *L)
         { "lfs", luaopen_lfs },
         { "socket.core", luaopen_socket_core },
         { "mime.core", luaopen_mime_core },
+        /* unix transport for the attach channel (luna --attach) */
+        { "socket.unix", luaopen_socket_unix },
         /* C core sits at zlib.core; the user-facing "zlib" module is
          * the thin wrapper in luna_modules/zlib/ (one-shot helpers on
          * top of the streaming API) */
@@ -194,6 +222,7 @@ static int run_chunk(lua_State *L, const char *src, const char *name)
 int main(int argc, char *argv[])
 {
     signal(SIGINT, luna_on_sigint);
+    install_sigusr1();
 
     lua_State *L = luaL_newstate();
     if (!L) {
@@ -229,6 +258,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_MODULES_SRC");
     lua_pushlstring(L, LUNA_LUA_PLUGINS, sizeof(LUNA_LUA_PLUGINS) - 1);
     lua_setglobal(L, "__LUNA_PLUGINS_SRC");
+    lua_pushlstring(L, LUNA_LUA_SERVE, sizeof(LUNA_LUA_SERVE) - 1);
+    lua_setglobal(L, "__LUNA_SERVE_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
 

@@ -5,17 +5,81 @@
  * never take the interpreter down). The editor itself is only used on
  * a TTY — repl.run keeps its plain io.read loop for piped stdin.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "lua.h"
 #include "lauxlib.h"
 
+#include "luna_line.h"
+
 #include "replxx.h"
+
+#ifndef _WIN32
+#include <pthread.h>
+#include <unistd.h>
+#endif
 
 static Replxx *g_rx = NULL;
 static lua_State *g_L = NULL;
 static int g_completion_ref = -1; /* LUA_NOREF until set */
 static int g_highlight_ref = -1;
+
+/* ---- wake channel -------------------------------------------------
+ * replxx swallows EINTR internally and has no public way to break a
+ * blocked input() from the same thread a signal handler runs on (its
+ * async-notify paths deliberately no-op for the input thread). So the
+ * SIGUSR1 handler only writes one byte to this pipe (async-signal-
+ * safe) and a dedicated helper thread turns that into
+ * replxx_emulate_key_press(REPLXX_KEY_ENTER) — from *another* thread,
+ * which is the one case replxx's emulate path relays through its
+ * self-pipe. replxx sees a synthetic Enter, input() returns the empty
+ * line, and the REPL loop polls the attach socket. */
+#ifndef _WIN32
+static int g_wake_fd = -1;  /* read end: the wake thread blocks on it */
+static int g_wake_wfd = -1; /* write end: the signal handler writes it */
+
+static void *luna_wake_thread(void *arg)
+{
+    char b;
+    (void)arg;
+    while (read(g_wake_fd, &b, 1) == 1) {
+        Replxx *rx = g_rx; /* single assignment at init; process-lived */
+        if (rx)
+            /* COMMIT_LINE is bound to KEY::ENTER (= control('M')), not
+             * the bare '\r' codepoint -- a bare \r just rings the bell */
+            replxx_emulate_key_press(rx, REPLXX_KEY_ENTER);
+    }
+    return NULL;
+}
+
+static void start_wake_thread(void)
+{
+    int fds[2];
+    pthread_t tid;
+    if (g_wake_fd >= 0)
+        return;
+    if (pipe(fds) != 0)
+        return; /* attach wake unavailable; everything else still works */
+    g_wake_fd = fds[0];
+    g_wake_wfd = fds[1];
+    if (pthread_create(&tid, NULL, luna_wake_thread, NULL) == 0)
+        pthread_detach(tid);
+}
+
+void luna_line_notify_wake(void)
+{
+    if (g_wake_wfd >= 0) {
+        char b = 'w';
+        ssize_t ignored = write(g_wake_wfd, &b, 1);
+        (void)ignored;
+    }
+}
+#else
+void luna_line_notify_wake(void)
+{
+}
+#endif
 
 static Replxx *ensure_rx(lua_State *L)
 {
@@ -23,6 +87,9 @@ static Replxx *ensure_rx(lua_State *L)
         g_rx = replxx_init();
         g_L = L;
         replxx_set_completion_callback(g_rx, NULL, NULL);
+#ifndef _WIN32
+        start_wake_thread();
+#endif
     }
     return g_rx;
 }

@@ -8,6 +8,9 @@
 #include <time.h>
 
 #ifndef _WIN32
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -16,6 +19,19 @@
 /* ------------------------------------------------------------------ */
 
 static volatile sig_atomic_t luna_interrupt_flag = 0;
+
+/* serve flag: set by SIGUSR1 (or tests) so the REPL loop polls the
+ * attach socket — the attach client sends the signal to interrupt the
+ * blocked line editor and wake the poll */
+static volatile sig_atomic_t luna_serve_flag = 0;
+
+/* instruction ticks since the last attach poll (two hook hits apart) */
+static unsigned luna_serve_ticks = 0;
+
+void luna_kernel_request_serve(void)
+{
+    luna_serve_flag = 1;
+}
 
 void luna_kernel_request_interrupt(void)
 {
@@ -31,13 +47,73 @@ static int k_clear_interrupt(lua_State *L)
     return 0;
 }
 
+/* kernel.serve_requested() -> bool: reads and clears the serve flag
+ * (the Lua poll loop calls this before stepping the attach socket) */
+static int k_serve_requested(lua_State *L)
+{
+    (void)L;
+    lua_pushboolean(L, luna_serve_flag);
+    luna_serve_flag = 0;
+    return 1;
+}
+
+/* kernel.pid() -> integer: this process's pid (the attach socket path
+ * is derived from it, and the attach client signals it with SIGUSR1) */
+static int k_pid(lua_State *L)
+{
+    lua_pushinteger(L, (lua_Integer)getpid());
+    return 1;
+}
+
+/* kernel.wake(pid): SIGUSR1 the target so its blocked line editor
+ * returns empty and the REPL poll runs (attach client side). */
+static int k_wake(lua_State *L)
+{
+    lua_Integer pid = luaL_checkinteger(L, 1);
+    if (kill((pid_t)pid, SIGUSR1) != 0)
+        luaL_error(L, "wake: %s", strerror(errno));
+    return 0;
+}
+
+/* kernel.chmod(path, "600"): restrict the attach socket to its owner.
+ * luafilesystem 1.9 ships no chmod and spawning a shell from the
+ * runtime is not an option. */
+static int k_chmod(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    const char *modestr = luaL_checkstring(L, 2);
+    char *end;
+    long m = strtol(modestr, &end, 8);
+    if (end == modestr || *end != '\0' || m < 0 || m > 07777)
+        luaL_error(L, "chmod: bad mode \"%s\"", modestr);
+    if (chmod(path, (mode_t)m) != 0)
+        luaL_error(L, "chmod: %s", strerror(errno));
+    return 0;
+}
+
 /* Count hook installed while user code runs: aborts the chunk when a
- * SIGINT has been requested. */
+ * SIGINT has been requested, and on every second hit (~200k
+ * instructions) polls the attach socket. __LUNA_SERVE_STEP is
+ * installed by serve.start(); the poll runs with hooks suspended and
+ * this hook is reinstated on the way out, so a long script — even a
+ * loop — stays reachable from `luna --attach`. */
 static void luna_count_hook(lua_State *L, lua_Debug *ar)
 {
     (void)ar;
     if (luna_interrupt_flag)
         luaL_error(L, "interrupted (SIGINT)");
+    if (++luna_serve_ticks >= 2) {
+        luna_serve_ticks = 0;
+        lua_sethook(L, NULL, 0, 0); /* suspend during the nested exec */
+        lua_getglobal(L, "__LUNA_SERVE_STEP");
+        if (lua_isfunction(L, -1)) {
+            if (lua_pcall(L, 0, 0, 0) != LUA_OK)
+                lua_pop(L, 1); /* a failing poll must not kill the chunk */
+        } else {
+            lua_pop(L, 1);
+        }
+        lua_sethook(L, luna_count_hook, LUA_MASKCOUNT, 100000);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -313,6 +389,10 @@ static const luaL_Reg kernel_funcs[] = {
     { "write", k_write },
     { "sink", k_sink },
     { "clear_interrupt", k_clear_interrupt },
+    { "serve_requested", k_serve_requested },
+    { "pid", k_pid },
+    { "wake", k_wake },
+    { "chmod", k_chmod },
     { "millis", k_millis },
     { "tty", k_tty },
     { "colors", k_colors },

@@ -50,6 +50,9 @@ target_include_directories(replxx PUBLIC "${PROJECT_SOURCE_DIR}/deps/replxx/incl
 
 add_library(luna_line STATIC src/luna_line.c src/luna_line.h)
 target_link_libraries(luna_line PUBLIC replxx lualib)
+# the wake helper thread behind `luna --attach` (see luna_line.c)
+find_package(Threads REQUIRED)
+target_link_libraries(luna_line PUBLIC Threads::Threads)
 
 # ---- stdlib module backends (mature bindings, batch 8) -----------------
 find_package(ZLIB REQUIRED)
@@ -68,7 +71,10 @@ set(LUASOCKET_SOURCES
         deps/luasocket/src/options.c deps/luasocket/src/inet.c
         deps/luasocket/src/usocket.c deps/luasocket/src/except.c
         deps/luasocket/src/select.c deps/luasocket/src/tcp.c
-        deps/luasocket/src/udp.c deps/luasocket/src/mime.c)
+        deps/luasocket/src/udp.c deps/luasocket/src/mime.c
+        # unix domain sockets: the attach/serve channel (luna --attach)
+        deps/luasocket/src/unix.c deps/luasocket/src/unixstream.c
+        deps/luasocket/src/unixdgram.c)
 add_library(luasocket STATIC ${LUASOCKET_SOURCES})
 target_compile_definitions(luasocket PRIVATE LUASOCKET_INET_PTON)
 target_link_libraries(luasocket PUBLIC lualib)
@@ -105,6 +111,7 @@ file(READ "${PROJECT_SOURCE_DIR}/lua/luna/highlight.lua" LUNA_LUA_HIGHLIGHT)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/magic.lua" LUNA_LUA_MAGIC)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua" LUNA_LUA_MODULES)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua" LUNA_LUA_PLUGINS)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua" LUNA_LUA_SERVE)
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna.lua"
@@ -114,7 +121,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna/highlight.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/magic.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua"
-        "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua")
+        "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua")
 configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/generated")

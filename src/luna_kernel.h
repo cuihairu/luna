@@ -14,4 +14,9 @@ int luaopen_luna_kernel(lua_State *L);
  * count hook. Call from a SIGINT handler (or directly from tests). */
 void luna_kernel_request_interrupt(void);
 
+/* Signal-safe: sets the pending-serve flag. The REPL loop polls it (the
+ * attach client sends SIGUSR1 to interrupt the blocked line editor and
+ * wake the poll). Call from a SIGUSR1 handler (or directly from tests). */
+void luna_kernel_request_serve(void);
+
 #endif

@@ -228,6 +228,11 @@ function repl.run(argt)
         emit(intro.whos())
     end
 
+    -- attach poll point: an empty line from the editor means the
+    -- blocked read was interrupted (SIGUSR1 from an attach client, or
+    -- a dead pty); step the attach socket there and after every feed.
+    local serve = require("luna.serve")
+
     while true do
         kernel.clear_interrupt()
         local line
@@ -238,10 +243,14 @@ function repl.run(argt)
             io.stdout:flush()
             line = io.read("l")
         end
+        if editor and line == "" then
+            serve.step()
+        end
         if editor and line and line ~= "" then
             linedit.history_add(line)
         end
         local status = session:feed(line)
+        serve.step()
         if status == "done" then
             if editor and hist_path then
                 pcall(linedit.history_save, hist_path)

@@ -67,3 +67,12 @@ target_compile_definitions(luna_test_plugins PRIVATE
         LUNA_TEST_MODULES_DIR="${CMAKE_BINARY_DIR}/luna_modules")
 add_test(NAME plugins COMMAND luna_test_plugins)
 
+# Attach channel: unix socket serve, framed replies, error isolation
+add_executable(luna_test_serve luna_test_serve.c)
+target_link_libraries(luna_test_serve PRIVATE cmocka-static lualib lpeg luasocket luna_kernel)
+# the idle-wake test drives the real binary on a pty
+target_link_libraries(luna_test_serve PRIVATE util)
+target_compile_definitions(luna_test_serve PRIVATE
+        LUNA_BINARY="$<TARGET_FILE:luna>")
+add_test(NAME serve COMMAND luna_test_serve)
+

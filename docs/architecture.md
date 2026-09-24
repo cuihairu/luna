@@ -39,6 +39,7 @@
 | 依赖目录 | `node_modules/` 逐级上溯 | `luna_modules/` 逐级上溯 |
 | 相对 require | 相对当前文件 | 相对当前 chunk(`@` 源锚定) |
 | 包清单 | `package.json` 的 `main` | 同名清单的 `main`,缺省 `init.lua` |
+| 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
 | 全局注入 | `process`/`Buffer` | `kernel`/`Out`/`In` |
 | 标准库 | 内建 | `json`/`fs`/`net`/`http`/`zlib`/`crypto` 随二进制 |
@@ -97,6 +98,14 @@
 | **luaossl**(`wahern/luaossl`) | **入选**:覆盖面最完整(pkey/x509 全家族/ssl/store/rand/…,26 个子模块)、紧贴 OpenSSL 1.1–3.x、按子模块注册(`_openssl.<sub>`)、文档详尽 |
 | lua-openssl(zhaozg,OpenResty 生态常见) | 淘汰:API 偏 OpenSSL 原型直译,**注意归属——它不是 OpenResty 官方出品**,只是 OpenResty 发行版常带;维护节奏依赖单作者 |
 | LuaSec | 淘汰:定位是 socket TLS 封装,不做 x509/pkey 级操作 |
+
+### 包管理 —— LuaRocks(包装,不自研)
+
+| 候选 | 结论 |
+| --- | --- |
+| **包装 LuaRocks v3.13.0**(源码 vendor 进二进制,进程内调用) | **入选**:lua.org 官方主仓库收录的 Lua 包事实标准,数千 rock 现成;luna 只写四个子命令的薄包装 + `.luna/rocks` 树 + `luna.lock`(rockspec sha 必有、`.src.rock` sha 尽力而为),`--from-lock` 离线优先复现并 sha 校验 |
+| 自研 registry 客户端 | 淘汰:仓库/上传/签名/索引/依赖解析全是长期负担,生态从零开始——违背"找成熟库、不要自己写" |
+| 移植 npm 客户端 | 淘汰:拿到的是 npm 的壳(格式/解析器),货(npm 仓库里的包)不是 Lua 代码;Lua 包仍须经 LuaRocks 发布,两套仓库并存只有成本 |
 
 ### 其余
 

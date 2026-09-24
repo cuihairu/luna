@@ -25,6 +25,11 @@ message(STATUS "lua core sources: ${LUA_CORE_COUNT}")
 
 add_library(lualib STATIC ${LUA_CORE_SOURCES})
 target_include_directories(lualib PUBLIC "${PROJECT_SOURCE_DIR}/deps/lua")
+# io.popen: std Lua on POSIX; luna.rocks needs it (luarocks shells out
+# to curl/unzip), and scripts get it like any standard Lua. Lua 5.5's
+# liolib gates popen behind LUA_USE_POSIX (the old LUA_USE_POPEN knob
+# is gone).
+target_compile_definitions(lualib PUBLIC LUA_USE_POSIX)
 # libm: implicit on macOS, explicit on Linux (pow/log/...); dl: loadlib.c
 if(UNIX)
     target_link_libraries(lualib PUBLIC m ${CMAKE_DL_LIBS})
@@ -129,6 +134,7 @@ file(READ "${PROJECT_SOURCE_DIR}/lua/luna/highlight.lua" LUNA_LUA_HIGHLIGHT)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/magic.lua" LUNA_LUA_MAGIC)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua" LUNA_LUA_MODULES)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua" LUNA_LUA_PLUGINS)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/rocks.lua" LUNA_LUA_ROCKS)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua" LUNA_LUA_SERVE)
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -140,6 +146,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna/magic.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/rocks.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua")
 configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
@@ -160,6 +167,22 @@ if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna luaossl)
 endif()
 set_target_properties(luna PROPERTIES LINKER_LANGUAGE CXX)
+
+# vendored LuaRocks sources for `luna install/search/list/update`:
+# staged into the build tree (configure-time copy, like luna_modules/)
+# and located through kernel.vendor_dir at runtime. The wrapper embeds
+# them into luna's own VM - no system luarocks needed.
+set(LUNA_VENDOR_DIR "${CMAKE_BINARY_DIR}/luna_vendor/luarocks/src")
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/luna_vendor/luarocks")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/luarocks/src"
+     DESTINATION "${CMAKE_BINARY_DIR}/luna_vendor/luarocks")
+# one src/?.lua path element resolves both the core (luarocks/...) and
+# everything vendored inside it (luarocks/vendor/argparse, dkjson,
+# compat53) — the release tree keeps them under src/
+# on the kernel target: that is the translation unit that publishes it
+# to Lua as kernel.vendor_dir
+target_compile_definitions(luna_kernel PUBLIC
+    LUNA_VENDOR_DIR="${LUNA_VENDOR_DIR}")
 
 # bundled modules: argparse is vendored as a submodule and staged into
 # the build tree under luna_modules/ so require "argparse" resolves the

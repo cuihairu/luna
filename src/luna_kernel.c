@@ -430,6 +430,13 @@ int luaopen_luna_kernel(lua_State *L)
 {
     luaL_newlib(L, kernel_funcs);
 
+#ifdef LUNA_VENDOR_DIR
+    /* where the build tree staged the vendored LuaRocks sources for
+     * `luna install/search/list/update`; luna.rocks probes it lazily */
+    lua_pushstring(L, LUNA_VENDOR_DIR);
+    lua_setfield(L, -2, "vendor_dir");
+#endif
+
     /* print() routes through the funnel from now on */
     lua_pushcfunction(L, luna_print);
     lua_setglobal(L, "print");

@@ -81,3 +81,11 @@ add_test(NAME serve COMMAND luna_test_serve)
 add_executable(luna_test_loop luna_test_loop.c)
 target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel)
 add_test(NAME loop COMMAND luna_test_loop)
+
+# Package management: install → luna.lock → reproduce-from-lock, driven
+# through the real binary; the online install step needs network
+add_executable(luna_test_rocks luna_test_rocks.c)
+target_link_libraries(luna_test_rocks PRIVATE cmocka-static lualib luna_kernel)
+target_compile_definitions(luna_test_rocks PRIVATE LUNA_BIN="$<TARGET_FILE:luna>")
+add_test(NAME rocks COMMAND luna_test_rocks)
+set_tests_properties(rocks PROPERTIES TIMEOUT 300)

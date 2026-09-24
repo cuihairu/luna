@@ -18,11 +18,16 @@ package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/hi
 package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, "=(luna/magic)"))
 package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, "=(luna/modules)"))
 package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, "=(luna/plugins)"))
+package.preload["luna.rocks"] = assert(load(__LUNA_ROCKS_SRC, "=(luna/rocks)"))
 package.preload["luna.serve"] = assert(load(__LUNA_SERVE_SRC, "=(luna/serve)"))
 
 -- Node-style resolution for project packages: relative requires and
 -- bare names walking up luna_modules/ directories, manifests honored.
 require("luna.modules").install()
+
+-- Any .luna/rocks tree up the parent chain joins package.path/cpath so
+-- scripts and the REPL can require installed rocks.
+require("luna.rocks").inject_paths()
 
 local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
 
@@ -47,6 +52,17 @@ parser:option("--attach",
     "attach to a running luna's live state (its pid); interactive")
 parser:argument("script", "a .lua script to run first"):args("?")
 parser:argument("largs", "arguments passed to the script"):args("*")
+
+-- Package management: `luna install|search|list|update ...` wraps the
+-- vendored LuaRocks. Intercepted before argparse — their flags are
+-- luarocks' own (--from-lock, --tree, ...), not this parser's. The
+-- wrapper runs luarocks in-process and exits with its status; the
+-- attach socket is not open yet at this point, so there is nothing to
+-- clean up on the way out.
+local ROCKS_CMDS = { install = true, search = true, list = true, update = true }
+if arg[1] and ROCKS_CMDS[arg[1]] then
+    os.exit(require("luna.rocks").dispatch(arg))
+end
 
 local opts = parser:parse(arg)
 

@@ -24,8 +24,13 @@
 
 static char workdir[256];
 static char origdir[256];
+static int keep_workdir = 0; /* set on failure: teardown keeps the scene */
 
-/* run `luna <args>` in the scratch dir; returns the exit status */
+static char *read_all(const char *path);
+
+/* run `luna <args>` in the scratch dir; returns the exit status. On a
+ * nonzero status the child's captured output is printed — the scratch
+ * dir is also kept for post-mortem. */
 static int run_luna(const char *args)
 {
     char cmd[512];
@@ -33,9 +38,25 @@ static int run_luna(const char *args)
              "cd '%s' && timeout 150 '%s' %s > out.log 2>&1",
              workdir, LUNA_BIN, args);
     int rc = system(cmd);
-    if (rc == -1 || !WIFEXITED(rc))
+    if (rc == -1 || !WIFEXITED(rc)) {
+        keep_workdir = 1;
+        printf("luna crashed: cmd=[%s]\n", cmd);
         return -1;
-    return WEXITSTATUS(rc);
+    }
+    int code = WEXITSTATUS(rc);
+    if (code != 0) {
+        keep_workdir = 1;
+        printf("luna failed (%d): cmd=[%s] dir=[%s]\n--- out.log ---\n",
+               code, cmd, workdir);
+        char logpath[512];
+        snprintf(logpath, sizeof(logpath), "%s/out.log", workdir);
+        char *log = read_all(logpath);
+        if (log) {
+            printf("%s\n---\n", log);
+            free(log);
+        }
+    }
+    return code;
 }
 
 static void assert_file_exists(const char *path)
@@ -71,6 +92,10 @@ static int setup_rocks(void **state)
 static int teardown_rocks(void **state)
 {
     (void)state;
+    if (keep_workdir) {
+        printf("rocks-test scene kept at %s\n", workdir);
+        return 0;
+    }
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", workdir);
     if (system(cmd) != 0)

@@ -15,16 +15,20 @@
  * A pending ^C stops the run and surfaces as an "interrupted" error,
  * which the entry chunk maps to exit code 130 like a busy script.
  *
- * loop.net (first slice, client only): stream sockets with the same
- * err-first callbacks. connect(host, port) resolves asynchronously
- * (uv_getaddrinfo) then dials TCP; connectPipe(path) dials a unix
- * domain socket. A sock offers write/read/end/close; read delivers
- * cb(nil, chunk) per chunk and cb(nil, nil) at EOF. Each open socket
- * holds the loop alive until its uv_close lands, like Node. */
+ * loop.net: stream sockets with the same err-first callbacks. Client
+ * side: connect(host, port) resolves asynchronously (uv_getaddrinfo)
+ * then dials TCP; connectPipe(path) dials a unix domain socket. Server
+ * side: listen(host, port) / listenPipe(path) bind synchronously (a
+ * refused bind throws) and hand each peer to a retained connection
+ * callback as onConn(err, sock). A sock offers write/read/end/close;
+ * read delivers cb(nil, chunk) per chunk and cb(nil, nil) at EOF; a
+ * server offers port()/close(). Each open socket or listener holds the
+ * loop alive until its uv_close lands, like Node. */
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
 
 #include <uv.h>
 
@@ -941,6 +945,234 @@ static int sock_tostring(lua_State *L)
     return 1;
 }
 
+/* -- listen (server side) --------------------------------------------- */
+
+/* a listening socket. The connection callback is retained (the
+ * setInterval precedent) and invoked once per peer as
+ * onConn(err, sock) — err-first like every other callback here. */
+struct lserver {
+    union {
+        uv_tcp_t tcp;   /* first member: same address as the union */
+        uv_pipe_t pipe;
+    } h;
+    int kind, closed;
+    lua_State *L;
+    int selfref, connref, closeref;
+};
+
+static void server_close(struct lserver *sv);
+
+static void on_server_closed(uv_handle_t *handle)
+{
+    struct lserver *sv = (struct lserver *)handle;
+    keepalive_close();
+    /* the close callback must land while selfref still pins the
+     * userdata: delivering it runs arbitrary Lua, which can allocate
+     * and collect */
+    if (sv->closeref != LUA_NOREF) {
+        int ref = sv->closeref;
+        sv->closeref = LUA_NOREF;
+        lua_State *L = sv->L;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char *msg = lua_tostring(L, -1);
+            fprintf(stderr, "loop: net callback error: %s\n",
+                    msg ? msg : lua_typename(L, lua_type(L, -1)));
+            lua_pop(L, 1);
+        }
+    }
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->selfref);
+}
+
+static void server_close(struct lserver *sv)
+{
+    if (sv->closed) {
+        return;
+    }
+    sv->closed = 1;
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->connref);
+    sv->connref = LUA_NOREF;
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->closeref);
+    sv->closeref = LUA_NOREF;
+    uv_close((uv_handle_t *)&sv->h.tcp, on_server_closed);
+}
+
+/* deliver to the retained connection callback; keeps the reference */
+static void server_deliver_conn(struct lserver *sv, int errcode,
+                                struct sock *s)
+{
+    lua_State *L = sv->L;
+    if (sv->connref == LUA_NOREF) {
+        if (s) {
+            sock_close(s); /* nobody is listening for peers */
+        }
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, sv->connref);
+    if (errcode != 0) {
+        lua_pushstring(L, uv_strerror(errcode));
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, s->selfref);
+    }
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: net callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+static void on_connection(uv_stream_t *st, int status)
+{
+    struct lserver *sv = (struct lserver *)st;
+    if (sv->closed) {
+        return;
+    }
+    if (status == UV_EAGAIN) {
+        return; /* transient; the next pending connection re-triggers */
+    }
+    if (status != 0) {
+        server_deliver_conn(sv, status, NULL);
+        return;
+    }
+    struct sock *s = sock_new(sv->L, sv->kind);
+    int rc = uv_accept(st, (uv_stream_t *)&s->h.tcp);
+    if (rc != 0) {
+        sock_close(s);
+        server_deliver_conn(sv, rc, NULL);
+        return;
+    }
+    s->connected = 1;
+    server_deliver_conn(sv, 0, s);
+}
+
+/* both listens share this: allocate, pin, keep-alive */
+static struct lserver *server_new(lua_State *L, int kind)
+{
+    struct lserver *sv = lua_newuserdata(L, sizeof(*sv));
+    memset(sv, 0, sizeof(*sv));
+    sv->kind = kind;
+    sv->L = L;
+    sv->connref = LUA_NOREF;
+    sv->closeref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.server");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    sv->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    if (kind == SOCK_TCP) {
+        uv_tcp_init(&g_loop, &sv->h.tcp);
+    } else {
+        uv_pipe_init(&g_loop, &sv->h.pipe, 0);
+    }
+    keepalive_open();
+    return sv;
+}
+
+/* a bind target is nearly always written numerically: v4 first, then
+ * v6 ("0.0.0.0" binds all interfaces). Node resolves hostnames here,
+ * but that invites surprising binds — keep it explicit. */
+static int bind_addr_of(const char *host, int port,
+                        struct sockaddr_storage *ss)
+{
+    if (uv_ip4_addr(host, port, (struct sockaddr_in *)ss) == 0) {
+        return 0;
+    }
+    if (uv_ip6_addr(host, port, (struct sockaddr_in6 *)ss) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+/* loop.net.listen(host, port, onConn) -> server; port 0 = ephemeral
+ * (read it back with server:port()). Bind/listen errors throw. */
+static int l_net_listen(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, port >= 0 && port <= 65535, 2, "port out of range");
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct sockaddr_storage ss;
+    if (bind_addr_of(host, (int)port, &ss) != 0) {
+        return luaL_error(L, "loop.net: cannot bind '%s' (numeric address "
+                             "required)", host);
+    }
+    struct lserver *sv = server_new(L, SOCK_TCP);
+    sv->connref = pin_cb(L, 3);
+    int rc = uv_tcp_bind(&sv->h.tcp, (struct sockaddr *)&ss, 0);
+    if (rc == 0) {
+        rc = uv_listen((uv_stream_t *)&sv->h.tcp, SOMAXCONN, on_connection);
+    }
+    if (rc != 0) {
+        server_close(sv);
+        return luaL_error(L, "loop.net: listen failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+/* loop.net.listenPipe(path, onConn) -> server. The path must not
+ * exist (unlink first); closing does NOT remove it. */
+static int l_net_listen_pipe(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct lserver *sv = server_new(L, SOCK_PIPE);
+    sv->connref = pin_cb(L, 2);
+    int rc = uv_pipe_bind(&sv->h.pipe, path);
+    if (rc == 0) {
+        rc = uv_listen((uv_stream_t *)&sv->h.pipe, SOMAXCONN, on_connection);
+    }
+    if (rc != 0) {
+        server_close(sv);
+        return luaL_error(L, "loop.net: listen failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+/* server:close(cb?) — idempotent; the callback lands once the handle
+ * is really closed */
+static int l_server_close(lua_State *L)
+{
+    struct lserver *sv = luaL_checkudata(L, 1, "loop.server");
+    if (!lua_isnoneornil(L, 2) && sv->closeref == LUA_NOREF) {
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        sv->closeref = pin_cb(L, 2);
+    }
+    server_close(sv);
+    return 0;
+}
+
+/* server:port() — the bound TCP port (ephemeral binds report theirs) */
+static int l_server_port(lua_State *L)
+{
+    struct lserver *sv = luaL_checkudata(L, 1, "loop.server");
+    luaL_argcheck(L, sv->kind == SOCK_TCP, 1, "unix server has no port");
+    struct sockaddr_storage ss;
+    int len = sizeof ss;
+    int rc = uv_tcp_getsockname(&sv->h.tcp, (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.net: getsockname: %s", uv_strerror(rc));
+    }
+    if (ss.ss_family == AF_INET6) {
+        lua_pushinteger(L,
+                        ntohs(((struct sockaddr_in6 *)&ss)->sin6_port));
+    } else {
+        lua_pushinteger(L, ntohs(((struct sockaddr_in *)&ss)->sin_port));
+    }
+    return 1;
+}
+
+static int server_tostring(lua_State *L)
+{
+    struct lserver *sv = luaL_checkudata(L, 1, "loop.server");
+    lua_pushfstring(L, "loop.server(%s, %s): %p",
+                    sv->kind == SOCK_PIPE ? "pipe" : "tcp",
+                    sv->closed ? "closed" : "listening", (void *)sv);
+    return 1;
+}
+
 static const luaL_Reg sock_funcs[] = {
     { "write", l_sock_write },
     { "read", l_sock_read },
@@ -949,9 +1181,17 @@ static const luaL_Reg sock_funcs[] = {
     { NULL, NULL },
 };
 
+static const luaL_Reg server_funcs[] = {
+    { "close", l_server_close },
+    { "port", l_server_port },
+    { NULL, NULL },
+};
+
 static const luaL_Reg net_funcs[] = {
     { "connect", l_net_connect },
     { "connectPipe", l_net_connect_pipe },
+    { "listen", l_net_listen },
+    { "listenPipe", l_net_listen_pipe },
     { NULL, NULL },
 };
 
@@ -972,6 +1212,13 @@ int luaopen_luna_loop(lua_State *L)
         luaL_newlib(L, sock_funcs);
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, sock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.server")) {
+        luaL_newlib(L, server_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, server_tostring);
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);

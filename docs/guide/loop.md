@@ -64,9 +64,11 @@ loop.run()
 - **错误是字符串**:libuv 的 `uv_strerror` 直出(如 `no such file or directory`),与 Node 的 Error 对象相比是刻意简化——Lua 里 `err ~= nil` 判定即可;
 - **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成。
 
-## loop.net:异步套接字(客户端)
+## loop.net:异步套接字
 
-`loop.net` 是循环的第三块:流式套接字客户端,TCP 与 unix domain 一对入口,同一套"回调首参"约定,同一个 `sock` 对象:
+`loop.net` 是循环的第三块:流式套接字,客户端与服务端一对入口 × 两种传输(TCP / unix domain),同一套"回调首参"约定。
+
+客户端:connect 拿到 `sock`,写、读、半关、关:
 
 ```lua
 local net = require("loop").net
@@ -85,19 +87,41 @@ end)
 loop.run()
 ```
 
+服务端:listen 的绑定/监听错误**同步抛出**(这两步在 libuv 本就同步返回),每个进来的连接交给**常驻**的连接回调——`setInterval` 同款"留住回调"语义:
+
+```lua
+local net = require("loop").net
+
+local srv                      -- 先声明后赋值:见下方作用域提醒
+srv = net.listen("127.0.0.1", 0, function(err, sock)  -- 0 = 临时端口
+    if err then print(err) return end
+    sock:read(function(e, chunk)
+        if chunk then sock:write(chunk) else sock:close() end
+    end)                       -- 一个 echo 服务端
+end)
+print("listening on", srv:port())
+
+loop.run()
+```
+
 | 调用 | 语义 |
 | --- | --- |
 | `net.connect(host, port, cb)` | 异步 DNS 解析 + TCP 连接;`cb(err, sock)` |
 | `net.connectPipe(path, cb)` | unix domain 流套接字;`cb(err, sock)` |
+| `net.listen(host, port, onConn)` | 监听 TCP;host 须为**数字地址**(`"0.0.0.0"` = 全接口),`port 0` = 临时端口;返回 server |
+| `net.listenPipe(path, onConn)` | 监听 unix domain;路径须不存在(先 unlink),关闭**不会**删除路径 |
+| `server:port()` | 实际绑定的端口(临时端口读回用) |
+| `server:close(cb?)` | 幂等关闭;回调在句柄真正关闭后落地 |
 | `sock:write(data, cb(err)?)` | 写出载荷,送达后回调(载荷由实现持有到回调落地) |
 | `sock:read(cb)` | 流式读:每块 `cb(nil, chunk)`;对端 EOF 是 `cb(nil, nil)`;出错 `cb(err)`;再次调用即换回调 |
 | `sock:end(cb(err)?)` | 半关闭(FIN):对端读到 EOF,本端仍可继续读 |
-| `sock:close()` | 幂等关闭;打开的 socket 让 `run()` 持续——和 Node 一样,完事必须关 |
+| `sock:close()` | 幂等关闭;打开的 socket 或 server 让 `run()` 持续——和 Node 一样,完事必须关 |
 
 行为约定:
 
 - **连接失败走回调**:DNS 失败或拒连从 `cb(err)` 出来,失败的 socket 自行收尾,循环照常排空到自然返回;
 - **EOF 是 `(nil, nil)`**:对端关闭让下一次 `read` 回调拿到 `err=nil, chunk=nil`——用 `chunk == nil` 判结束,语义对齐 Node 流的 end;
 - **半关闭**:`end()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
-- **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused` 等);
-- **首片只做客户端**:监听端(listen/accept)留给后续批次;服务场景今天由 unix socket + attach 体系覆盖。
+- **连接回调常驻**:`onConn(err, sock)` 对每个连接交付一次,引用由实现持有;accept 出错(如 fd 耗尽)也从它的 `err` 出来,不掀翻循环;
+- **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
+- **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。

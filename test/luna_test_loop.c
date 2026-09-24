@@ -9,10 +9,12 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <setjmp.h>
 #include <string.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -232,7 +234,6 @@ static void test_fs_write_of_empty_data_roundtrips(void **state)
 }
 
 /* -- net: a one-shot echo server on a real socket --------------------- */
-
 /* accept one connection, echo one read back, then close both ends —
  * so the client sees its chunk, then EOF */
 static void echo_serve(int listener)
@@ -370,6 +371,188 @@ static void test_net_pipe_echo(void **state)
     unlink(path);
 }
 
+/* -- net: luna as the server, pthread as the client ------------------- */
+
+/* a real client in a thread: connect (waiting for the TCP port file or
+ * the unix path to come alive), send, read the echo back into got */
+struct client_spec {
+    int use_tcp;
+    const char *path; /* tcp: port file; pipe: socket path */
+    int rc;
+    char got[256];
+};
+
+static void *client_main(void *arg)
+{
+    struct client_spec *c = arg;
+    int fd;
+    if (c->use_tcp) {
+        int port = 0;
+        for (int i = 0; i < 5000 && !port; i++) {
+            FILE *f = fopen(c->path, "r");
+            if (f) {
+                if (fscanf(f, "%d", &port) != 1) {
+                    port = 0;
+                }
+                fclose(f);
+            }
+            if (!port) {
+                usleep(1000);
+            }
+        }
+        if (!port) {
+            c->rc = 1; /* port file never appeared */
+            return NULL;
+        }
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in a;
+        memset(&a, 0, sizeof a);
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons(port);
+        if (connect(fd, (struct sockaddr *)&a, sizeof a) != 0) {
+            close(fd);
+            c->rc = 2;
+            return NULL;
+        }
+    } else {
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        struct sockaddr_un a;
+        memset(&a, 0, sizeof a);
+        a.sun_family = AF_UNIX;
+        strncpy(a.sun_path, c->path, sizeof a.sun_path - 1);
+        int ok = 0;
+        for (int i = 0; i < 5000 && !ok; i++) {
+            if (connect(fd, (struct sockaddr *)&a, sizeof a) == 0) {
+                ok = 1;
+            } else {
+                usleep(1000);
+            }
+        }
+        if (!ok) {
+            close(fd);
+            c->rc = 2;
+            return NULL;
+        }
+    }
+    if (write(fd, "ping", 4) != 4) {
+        close(fd);
+        c->rc = 3;
+        return NULL;
+    }
+    ssize_t n = read(fd, c->got, sizeof c->got - 1);
+    if (n <= 0) {
+        close(fd);
+        c->rc = 4;
+        return NULL;
+    }
+    c->got[n] = 0;
+    close(fd);
+    return NULL;
+}
+
+/* the Lua echo server closes itself after the first echo so the run
+ * can drain; the client meanwhile learns the port from the file the
+ * listen callback wrote */
+static void test_net_tcp_server_echo(void **state)
+{
+    (void)state;
+    unlink("/tmp/luna-loop-net-srv.port");
+    struct client_spec c;
+    memset(&c, 0, sizeof c);
+    c.use_tcp = 1;
+    c.path = "/tmp/luna-loop-net-srv.port";
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, client_main, &c), 0);
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "served = 'none'\n"
+        "local srv          -- declared first: the callback below runs\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, sock)\n"
+        "  if e then served = 'conn:' .. e return end\n"
+        "  sock:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      served = chunk\n"
+        "      sock:write(chunk, function()\n"
+        "        sock:close()\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    else\n"
+        "      sock:close()\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "local f = io.open('/tmp/luna-loop-net-srv.port', 'w')\n"
+        "f:write(tostring(srv:port()))\n"
+        "f:close()\n"
+        "assert(loop.run())\n"
+        "return served");
+    const char *r = eval_string(code);
+    pthread_join(th, NULL);
+    assert_int_equal(c.rc, 0);
+    assert_string_equal(c.got, "ping");
+    assert_string_equal(r, "ping");
+    unlink("/tmp/luna-loop-net-srv.port");
+}
+
+static void test_net_pipe_server_echo(void **state)
+{
+    (void)state;
+    const char *path = "/tmp/luna-loop-net-srv.sock";
+    unlink(path);
+    struct client_spec c;
+    memset(&c, 0, sizeof c);
+    c.use_tcp = 0;
+    c.path = path;
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, client_main, &c), 0);
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "served = 'none'\n"
+        "local srv          -- declared first, see the tcp test above\n"
+        "srv = net.listenPipe('%s', function(e, sock)\n"
+        "  if e then served = 'conn:' .. e return end\n"
+        "  sock:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      served = chunk\n"
+        "      sock:write(chunk, function()\n"
+        "        sock:close()\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    else\n"
+        "      sock:close()\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return served", path);
+    const char *r = eval_string(code);
+    pthread_join(th, NULL);
+    assert_int_equal(c.rc, 0);
+    assert_string_equal(c.got, "ping");
+    assert_string_equal(r, "ping");
+    unlink(path);
+}
+
+static void test_net_listen_on_taken_port_fails(void **state)
+{
+    (void)state;
+    /* bind/listen report synchronously: EADDRINUSE throws, it does not
+     * take a callback */
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    char code[256];
+    snprintf(code, sizeof code,
+        "local ok, err = pcall(loop.net.listen, '127.0.0.1', %d, "
+        "function() end)\n"
+        "return tostring(ok) .. ',' .. "
+        "tostring(tostring(err):find('listen failed') ~= nil)", port);
+    assert_string_equal(eval_string(code), "false,true");
+    close(fd);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -388,6 +571,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_tcp_server_echo, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -81,6 +81,7 @@ add_test(NAME serve COMMAND luna_test_serve)
 add_executable(luna_test_loop luna_test_loop.c)
 target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel Threads::Threads)
 add_test(NAME loop COMMAND luna_test_loop)
+set_tests_properties(loop PROPERTIES TIMEOUT 60)
 
 # Package management: install → luna.lock → reproduce-from-lock, driven
 # through the real binary; the online install step needs network

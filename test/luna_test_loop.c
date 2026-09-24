@@ -708,7 +708,9 @@ static void test_signal_reserved_refused(void **state)
 static void test_signal_multiple_watchers_fanout(void **state)
 {
     (void)state;
-    /* libuv delivers one signal to every watcher watching it */
+    /* libuv delivers one signal to every watcher watching it —
+     * delivery ORDER is not part of the contract (it flipped to
+     * "ba" under CI load), so sort before comparing */
     assert_string_equal(eval_string(
         "local loop = loop or require('loop')\n"
         "out = 'none'\n"
@@ -717,6 +719,7 @@ static void test_signal_multiple_watchers_fanout(void **state)
         "wa = loop.signal(loop.sig.USR2, function()\n"
         "  hits[#hits + 1] = 'a'\n"
         "  if #hits == 2 then\n"
+        "    table.sort(hits)\n"
         "    out = table.concat(hits, '')\n"
         "    wa:close()\n"
         "    wb:close()\n"
@@ -725,6 +728,7 @@ static void test_signal_multiple_watchers_fanout(void **state)
         "wb = loop.signal(loop.sig.USR2, function()\n"
         "  hits[#hits + 1] = 'b'\n"
         "  if #hits == 2 then\n"
+        "    table.sort(hits)\n"
         "    out = table.concat(hits, '')\n"
         "    wa:close()\n"
         "    wb:close()\n"

@@ -772,8 +772,52 @@ static void test_signal_close_stops_delivery(void **state)
         "return out"), "b");
 }
 
+static void test_dns_lookup_resolves_localhost(void **state)
+{
+    (void)state;
+    /* /etc/hosts names resolve on the threadpool and the first v4
+     * address comes back as a printable string */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "loop.dns.lookup('localhost', function(e, addr)\n"
+        "  out = tostring(e == nil) .. ':' .. tostring(addr)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:127.0.0.1");
+}
+
+static void test_dns_lookup_of_a_missing_host_yields_error(void **state)
+{
+    (void)state;
+    /* .invalid is guaranteed never to resolve (RFC 2606): the error
+     * surfaces through the first callback argument */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "loop.dns.lookup('no-such-host.invalid', function(e, addr)\n"
+        "  out = tostring(e ~= nil) .. '|' .. tostring(addr)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|nil");
+}
+
+static void test_dns_reverse_maps_loopback(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "loop.dns.reverse('127.0.0.1', function(e, name)\n"
+        "  out = tostring(e == nil) .. ':' .. tostring(name)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:localhost");
+}
+
 static void test_unref_interval_does_not_keep_loop_alive(void **state)
 {
+    (void)state;
     (void)state;
     /* an unref'd interval runs while the loop turns but does not keep
      * it alive: run() drains on the ref'd timer and returns */
@@ -1388,6 +1432,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_unref_interval_does_not_keep_loop_alive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_unref_server_runs_but_does_not_keep, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_ref_restores_keepalive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_lookup_resolves_localhost, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_lookup_of_a_missing_host_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_reverse_maps_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

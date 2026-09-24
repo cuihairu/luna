@@ -2111,6 +2111,146 @@ static const luaL_Reg udp_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- async DNS (loop.dns) --------------------------------------------------
+ *
+ * The threadpool resolver net.connect uses internally, exposed on its
+ * own: lookup(host, cb) delivers the first address that came back,
+ * reverse(addr, cb) the first hostname. Same callback-first contract,
+ * errors as strings; the callback is registry-pinned until delivery
+ * and the lookup counts as a live user handle, like loop.fs. */
+
+#include <netdb.h>
+
+struct dnsop {
+    union {
+        uv_getaddrinfo_t a;
+        uv_getnameinfo_t n;
+    } u;               /* first member: dnsop == (struct dnsop *)&op->u */
+    lua_State *L;
+    int cbref;
+};
+
+/* one shared delivery tail: pull the pinned callback, call it with
+ * (err, value), isolate a raising callback like every other one here */
+static void dns_deliver(struct dnsop *op, const char *err, const char *value)
+{
+    lua_State *L = op->L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, op->cbref);
+    if (err) {
+        lua_pushstring(L, err);
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        if (value) {
+            lua_pushstring(L, value);
+        } else {
+            lua_pushnil(L);
+        }
+    }
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: dns callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, op->cbref);
+    keepalive_close();
+    free(op);
+}
+
+static void dns_lookup_done(uv_getaddrinfo_t *req, int status,
+                            struct addrinfo *res)
+{
+    struct dnsop *op = (struct dnsop *)req; /* u.a sits at offset 0 */
+    if (status != 0) {
+        dns_deliver(op, uv_strerror(status), NULL);
+        return;
+    }
+    char ip[64] = "";
+    /* walk the returned list to the first address with a printable
+     * form; uv_freeaddrinfo must see the head of the list */
+    for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        if ((ai->ai_family == AF_INET || ai->ai_family == AF_INET6) &&
+            uv_ip_name(ai->ai_addr, ip, sizeof(ip)) == 0) {
+            break;
+        }
+    }
+    uv_freeaddrinfo(res);
+    dns_deliver(op, NULL, ip);
+}
+
+static void dns_reverse_done(uv_getnameinfo_t *req, int status,
+                             const char *hostname, const char *service)
+{
+    (void)service; /* not delivered: Node's reverse gives the name only */
+    struct dnsop *op = (struct dnsop *)req; /* u.n sits at offset 0 */
+    dns_deliver(op, status != 0 ? uv_strerror(status) : NULL, hostname);
+}
+
+/* loop.dns.lookup(host, cb(err, addr)) */
+static int l_dns_lookup(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct dnsop *op = malloc(sizeof(*op));
+    if (!op) {
+        return luaL_error(L, "loop.dns: out of memory");
+    }
+    op->L = L;
+    lua_pushvalue(L, 2);
+    op->cbref = luaL_ref(L, LUA_REGISTRYINDEX);
+    keepalive_open();
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; /* v4 and v6 both fine, first wins */
+    int rc = uv_getaddrinfo(&g_loop, &op->u.a, dns_lookup_done, host, NULL,
+                            &hints);
+    if (rc != 0) { /* synchronous failure: no callback will come */
+        luaL_unref(L, LUA_REGISTRYINDEX, op->cbref);
+        keepalive_close();
+        free(op);
+        return luaL_error(L, "loop.dns: %s", uv_strerror(rc));
+    }
+    return 0;
+}
+
+/* loop.dns.reverse(addr, cb(err, hostname)) — numeric only, both
+ * families; a name that isn't an address throws like bind's bad host */
+static int l_dns_reverse(lua_State *L)
+{
+    const char *addr = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof(ss));
+    if (uv_ip4_addr(addr, 0, (struct sockaddr_in *)&ss) != 0 &&
+        uv_ip6_addr(addr, 0, (struct sockaddr_in6 *)&ss) != 0) {
+        return luaL_error(L, "loop.dns: not a numeric address: %s", addr);
+    }
+    struct dnsop *op = malloc(sizeof(*op));
+    if (!op) {
+        return luaL_error(L, "loop.dns: out of memory");
+    }
+    op->L = L;
+    lua_pushvalue(L, 2);
+    op->cbref = luaL_ref(L, LUA_REGISTRYINDEX);
+    keepalive_open();
+    int rc = uv_getnameinfo(&g_loop, &op->u.n, dns_reverse_done,
+                            (struct sockaddr *)&ss, 0);
+    if (rc != 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, op->cbref);
+        keepalive_close();
+        free(op);
+        return luaL_error(L, "loop.dns: %s", uv_strerror(rc));
+    }
+    return 0;
+}
+
+static const luaL_Reg dns_funcs[] = {
+    { "lookup", l_dns_lookup },
+    { "reverse", l_dns_reverse },
+    { NULL, NULL },
+};
+
 /* -- async child processes (loop.process) ---------------------------------
  *
  * run(cmd, args, [opts], cb): no shell, no PATH games beyond execvp's
@@ -2679,6 +2819,8 @@ int luaopen_luna_loop(lua_State *L)
     lua_setfield(L, -2, "process");
     luaL_newlib(L, udp_funcs);
     lua_setfield(L, -2, "udp");
+    luaL_newlib(L, dns_funcs);
+    lua_setfield(L, -2, "dns");
     /* named signal numbers for loop.signal, Linux-standard; SIGKILL and
      * SIGSTOP are listed but the kernel never delivers them */
     static const struct { const char *name; int num; } sig_names[] = {

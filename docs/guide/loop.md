@@ -170,6 +170,38 @@ loop.run()
 - **回调隔离**:回调抛错只打到 stderr,循环继续;信号在循环间隙到达也不会丢——处置已装上,事件由 libuv 排队,下一轮 `run` 交付;
 - **信号不是队列**:同号信号连发,内核不排队(标准信号合并)——回调收到的次数可能少于发送次数,要计数就在回调里自己数。
 
+## loop.dns:异步域名解析
+
+`loop.dns` 是循环的第七块:把 `net.connect` 内部用的线程池解析器独立成面——域名查地址、地址查域名,同一张"回调首参"契约:
+
+```lua
+local dns = require("loop").dns
+
+dns.lookup("example.com", function(err, addr)
+    assert(err == nil, err)
+    print(addr)               -- 93.184.216.34(或首个 v6 地址)
+end)
+
+dns.reverse("127.0.0.1", function(err, name)
+    assert(err == nil, err)
+    print(name)               -- localhost
+end)
+
+require("loop").run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `dns.lookup(host, cb)` | `cb(nil, addr)`——返回列表里**第一个**地址(v4/v6 都可);解析失败 `cb(err)` |
+| `dns.reverse(addr, cb)` | `cb(nil, hostname)`;`addr` 必须是**数字地址**(v4/v6),否则同步抛错;查不到名字走 `cb(err)` |
+
+行为约定:
+
+- **解析在线程池,回调在循环线程**:真实 DNS 查询(不命中 `/etc/hosts` 时)可能要几百毫秒,期间定时器照常转;
+- **lookup 只给第一个地址**:不给全家、不做轮询——要选地址就自己 `net.connect`,连接层本来就按同样规则解析;
+- **错误是字符串**:`uv_strerror` 直出(`name or service not known` 等),与 `loop.fs`/`loop.net` 相同;
+- **reverse 只收数字地址**:传域名进来直接同步抛错——它不是 lookup 的反义糖,是 `getnameinfo` 的直通车。
+
 ## loop.net:异步套接字
 
 `loop.net` 是循环的第三块:流式套接字,客户端与服务端一对入口 × 两种传输(TCP / unix domain),同一套"回调首参"约定。

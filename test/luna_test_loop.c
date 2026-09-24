@@ -372,6 +372,76 @@ static void test_fs_rename_moves_file(void **state)
         "return out"), "moved-payload|true");
 }
 
+static void test_udp_send_recv_loopback(void **state)
+{
+    (void)state;
+    /* two datagrams from one unbound sender: both arrive in order,
+     * the sender's ephemeral port rides along in rinfo */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local got = {}\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function(e, data, ri)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  got[#got + 1] = data\n"
+        "  if #got == 2 then\n"
+        "    out = table.concat(got, '|') .. '|' .. ri.addr .. '|' ..\n"
+        "          tostring(ri.port > 0)\n"
+        "    r:close()\n"
+        "  end\n"
+        "end)\n"
+        "local port = r:port()\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', port, function(e2)\n"
+        "  assert(e2 == nil, e2)\n"
+        "  snd:send('y', '127.0.0.1', port, function(e3)\n"
+        "    assert(e3 == nil, e3)\n"
+        "    snd:close()\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "x|y|127.0.0.1|true");
+}
+
+static void test_udp_bind_conflict_throws(void **state)
+{
+    (void)state;
+    /* the port is taken while r is still open: the second bind throws
+     * synchronously, like listen */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r\n"
+        "r = udp.bind('127.0.0.1', 0, function() end)\n"
+        "local ok, err = pcall(udp.bind, '127.0.0.1', r:port(), function() end)\n"
+        "out = tostring(ok) .. '|' ..\n"
+        "      tostring((tostring(err):find('in use')) ~= nil)\n"
+        "r:close()\n"
+        "assert(loop.run())\n"
+        "return out"), "false|true");
+}
+
+static void test_udp_send_without_callback_drains(void **state)
+{
+    (void)state;
+    /* cb-less send, auto-bind on the first send: the loop still
+     * drains once both sockets close */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function(e, data)\n"
+        "  out = tostring(data)\n"
+        "  snd:close()\n"
+        "  r:close()\n"
+        "end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('no-cb', '127.0.0.1', r:port())\n"
+        "assert(loop.run())\n"
+        "return out"), "no-cb");
+}
+
 /* -- net: a one-shot echo server on a real socket --------------------- */
 /* accept one connection, echo one read back, then close both ends —
  * so the client sees its chunk, then EOF */
@@ -916,6 +986,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_mkdir_rmdir_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_unlink_removes_file, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_rename_moves_file, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_recv_loopback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_bind_conflict_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_without_callback_drains, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

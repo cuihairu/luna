@@ -1373,6 +1373,283 @@ static const luaL_Reg net_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- async datagrams (loop.udp) -------------------------------------------
+ *
+ * Node's dgram, cut down to luna's face: udp.bind(host, port, onMsg)
+ * delivers every datagram as onMsg(err, data, rinfo) with rinfo =
+ * {addr=, port=} — the callback is retained like listen's onConn, and
+ * recv errors surface through the same err-first slot without tearing
+ * the socket down. udp.socket() returns an unbound sender whose
+ * send(data, host, port, cb(err)) is one-shot per datagram; libuv
+ * binds it to an ephemeral port on the first send. A bound (or sent-
+ * from) socket keeps the loop alive — same contract as loop.net:
+ * when the work is done, the work must be closed. */
+
+struct udpsock {
+    uv_udp_t h;
+    int closed;
+    lua_State *L;
+    int selfref, msgref;
+};
+
+/* uv_write needs the payload alive until the callback: one malloc'd
+ * request carries the copy and the optional callback. */
+struct udpsend {
+    uv_udp_send_t req;
+    lua_State *L;
+    int cbref;
+};
+
+static void udpsock_close(struct udpsock *u);
+
+static void on_udp_closed(uv_handle_t *h)
+{
+    struct udpsock *u = (struct udpsock *)h;
+    luaL_unref(u->L, LUA_REGISTRYINDEX, u->selfref);
+    u->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+static void udpsock_close(struct udpsock *u)
+{
+    if (u->closed) {
+        return;
+    }
+    u->closed = 1;
+    luaL_unref(u->L, LUA_REGISTRYINDEX, u->msgref);
+    u->msgref = LUA_NOREF;
+    uv_close((uv_handle_t *)&u->h, on_udp_closed);
+}
+
+/* deliver to the retained message callback: (err, data, rinfo) */
+static void udp_deliver_msg(struct udpsock *u, int errcode,
+                            const char *data, size_t len,
+                            const struct sockaddr *addr)
+{
+    lua_State *L = u->L;
+    if (u->closed || u->msgref == LUA_NOREF) {
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, u->msgref);
+    if (errcode != 0) {
+        lua_pushstring(L, uv_strerror(errcode));
+        lua_pushnil(L);
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        lua_pushlstring(L, data, len);
+        lua_createtable(L, 0, 2);
+        char ip[64];
+        if (addr->sa_family == AF_INET6) {
+            uv_ip6_name((const struct sockaddr_in6 *)addr, ip, sizeof ip);
+            lua_pushinteger(
+                L, ntohs(((const struct sockaddr_in6 *)addr)->sin6_port));
+        } else {
+            uv_ip4_name((const struct sockaddr_in *)addr, ip, sizeof ip);
+            lua_pushinteger(
+                L, ntohs(((const struct sockaddr_in *)addr)->sin_port));
+        }
+        lua_setfield(L, -2, "port");
+        lua_pushstring(L, ip);
+        lua_setfield(L, -2, "addr");
+    }
+    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: udp callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+static void on_udp_recv(uv_udp_t *h, ssize_t nread, const uv_buf_t *buf,
+                        const struct sockaddr *addr, unsigned flags)
+{
+    struct udpsock *u = (struct udpsock *)h;
+    (void)flags;
+    if (nread < 0) {                      /* recv error, socket stays */
+        free(buf->base);
+        udp_deliver_msg(u, (int)nread, NULL, 0, NULL);
+        return;
+    }
+    if (nread == 0) {
+        free(buf->base);
+        /* addr == NULL: nothing pending (EAGAIN); a zero-length
+         * datagram carries a peer address — deliver the empty string */
+        if (addr == NULL) {
+            return;
+        }
+        udp_deliver_msg(u, 0, "", 0, addr);
+        return;
+    }
+    udp_deliver_msg(u, 0, buf->base, (size_t)nread, addr);
+    free(buf->base);
+}
+
+static void on_udp_sent(uv_udp_send_t *req, int status)
+{
+    struct udpsend *w = (struct udpsend *)req;
+    struct udpsock *u = (struct udpsock *)req->handle;
+    lua_State *L = w->L;
+    int cbref = w->cbref;
+    free(w);
+    if (cbref == LUA_NOREF || cbref == LUA_REFNIL) {
+        return;
+    }
+    if (u->closed) {
+        luaL_unref(L, LUA_REGISTRYINDEX, cbref);
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, cbref);
+    if (status < 0) {
+        lua_pushstring(L, uv_strerror(status));
+    } else {
+        lua_pushnil(L);
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, cbref);
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: udp callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+/* both entries share this: allocate, pin, keep-alive */
+static struct udpsock *udp_new(lua_State *L)
+{
+    struct udpsock *u = lua_newuserdata(L, sizeof(*u));
+    memset(u, 0, sizeof(*u));
+    u->L = L;
+    u->msgref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.udpsock");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    u->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    uv_udp_init(&g_loop, &u->h);
+    keepalive_open();
+    return u;
+}
+
+/* loop.udp.bind(host, port, onMsg) -> udpsock; port 0 = ephemeral
+ * (read it back with sock:port()). Bind errors throw, like listen. */
+static int l_udp_bind(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, port >= 0 && port <= 65535, 2, "port out of range");
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct sockaddr_storage ss;
+    if (bind_addr_of(host, (int)port, &ss) != 0) {
+        return luaL_error(L, "loop.udp: cannot bind '%s' (numeric address "
+                             "required)", host);
+    }
+    struct udpsock *u = udp_new(L);
+    u->msgref = pin_cb(L, 3);
+    int rc = uv_udp_bind(&u->h, (struct sockaddr *)&ss, 0);
+    if (rc == 0) {
+        rc = uv_udp_recv_start(&u->h, on_alloc, on_udp_recv);
+    }
+    if (rc != 0) {
+        udpsock_close(u);
+        return luaL_error(L, "loop.udp: bind failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+/* loop.udp.socket() -> unbound udpsock for sending */
+static int l_udp_socket(lua_State *L)
+{
+    udp_new(L);
+    return 1;
+}
+
+/* sock:send(data, host, port, cb(err)?) — one shot per datagram */
+static int l_udp_send(lua_State *L)
+{
+    struct udpsock *u = luaL_checkudata(L, 1, "loop.udpsock");
+    size_t len;
+    const char *data = luaL_checklstring(L, 2, &len);
+    const char *host = luaL_checkstring(L, 3);
+    lua_Integer port = luaL_checkinteger(L, 4);
+    luaL_argcheck(L, port >= 1 && port <= 65535, 4, "port out of range");
+    int with_cb = !lua_isnoneornil(L, 5);
+    if (with_cb) {
+        luaL_checktype(L, 5, LUA_TFUNCTION);
+    }
+    luaL_argcheck(L, !u->closed, 1, "socket is closed");
+    struct sockaddr_storage ss;
+    if (bind_addr_of(host, (int)port, &ss) != 0) {
+        return luaL_error(L, "loop.udp: cannot send to '%s' (numeric "
+                             "address required)", host);
+    }
+    struct udpsend *w = malloc(sizeof(*w) + len);
+    if (!w) {
+        return luaL_error(L, "loop.udp: out of memory");
+    }
+    w->L = L;
+    w->cbref = with_cb ? pin_cb(L, 5) : LUA_NOREF;
+    char *copy = (char *)(w + 1);
+    memcpy(copy, data, len);
+    uv_buf_t buf = uv_buf_init(copy, (unsigned)len);
+    int rc = uv_udp_send(&w->req, &u->h, &buf, 1,
+                         (struct sockaddr *)&ss, on_udp_sent);
+    if (rc != 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, w->cbref);
+        free(w);
+        return luaL_error(L, "loop.udp: send failed: %s", uv_strerror(rc));
+    }
+    return 0;
+}
+
+/* sock:port() — the bound port (ephemeral binds report theirs) */
+static int l_udp_port(lua_State *L)
+{
+    struct udpsock *u = luaL_checkudata(L, 1, "loop.udpsock");
+    luaL_argcheck(L, !u->closed, 1, "socket is closed");
+    struct sockaddr_storage ss;
+    int len = sizeof ss;
+    int rc = uv_udp_getsockname(&u->h, (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.udp: getsockname: %s", uv_strerror(rc));
+    }
+    if (ss.ss_family == AF_INET6) {
+        lua_pushinteger(L,
+                        ntohs(((struct sockaddr_in6 *)&ss)->sin6_port));
+    } else {
+        lua_pushinteger(L, ntohs(((struct sockaddr_in *)&ss)->sin_port));
+    }
+    return 1;
+}
+
+/* sock:close() — idempotent; open sockets keep the loop alive */
+static int l_udp_close(lua_State *L)
+{
+    struct udpsock *u = luaL_checkudata(L, 1, "loop.udpsock");
+    udpsock_close(u);
+    return 0;
+}
+
+static int udpsock_tostring(lua_State *L)
+{
+    struct udpsock *u = luaL_checkudata(L, 1, "loop.udpsock");
+    lua_pushfstring(L, "loop.udpsock(%s): %p",
+                    u->closed ? "closed" : "open", (void *)u);
+    return 1;
+}
+
+static const luaL_Reg udpsock_funcs[] = {
+    { "send", l_udp_send },
+    { "port", l_udp_port },
+    { "close", l_udp_close },
+    { NULL, NULL },
+};
+
+static const luaL_Reg udp_funcs[] = {
+    { "bind", l_udp_bind },
+    { "socket", l_udp_socket },
+    { NULL, NULL },
+};
+
 /* -- async child processes (loop.process) ---------------------------------
  *
  * run(cmd, args, [opts], cb): no shell, no PATH games beyond execvp's
@@ -1893,6 +2170,13 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.udpsock")) {
+        luaL_newlib(L, udpsock_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, udpsock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     luaL_newlib(L, loop_funcs);
     luaL_newlib(L, fs_funcs);
     lua_setfield(L, -2, "fs");
@@ -1900,5 +2184,7 @@ int luaopen_luna_loop(lua_State *L)
     lua_setfield(L, -2, "net");
     luaL_newlib(L, process_funcs);
     lua_setfield(L, -2, "process");
+    luaL_newlib(L, udp_funcs);
+    lua_setfield(L, -2, "udp");
     return 1;
 }

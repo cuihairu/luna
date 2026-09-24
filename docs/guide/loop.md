@@ -133,9 +133,49 @@ loop.run()
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。
 
+## loop.udp:异步数据报
+
+`loop.udp` 是循环的第四块:数据报一面:无连接、保序不做、送达不保——bind 一端常驻收包,socket 一端按包发送,同一张"回调首参"契约:
+
+```lua
+local udp = require("loop").udp
+
+local r                       -- 拆开声明:回调里读 r(见 net 的作用域提醒)
+r = udp.bind("0.0.0.0", 0, function(err, data, rinfo)   -- 0 = 临时端口
+    if err then print(err) return end
+    print(data, rinfo.addr, rinfo.port)
+    r:close()
+end)
+print("listening on", r:port())
+
+local s = udp.socket()        -- 未绑定:首次 send 自动绑临时端口
+s:send("ping", "127.0.0.1", r:port(), function(err)
+    assert(err == nil, err)
+    s:close()
+end)
+
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `udp.bind(host, port, onMsg)` | 绑定数字地址(`"0.0.0.0"` = 全接口),`port 0` = 临时端口(`sock:port()` 读回);每个数据报交付一次 `onMsg(nil, data, rinfo)`,rinfo = `{addr=, port=}` |
+| `udp.socket()` | 未绑定的发送端;首次 `send` 时 libuv 自动绑临时端口 |
+| `sock:send(data, host, port, cb(err)?)` | 发一个数据报(host 须为数字地址);回调按包一次性交付,载荷由实现持有到回调落地 |
+| `sock:port()` | 实际绑定的端口(临时端口读回用) |
+| `sock:close()` | 幂等关闭;打开的 sock 撑着循环——完事必须关 |
+
+行为约定:
+
+- **bind 冲突同步抛错**:端口已被占时 `bind` 直接 raise——与 `listen` 同款;
+- **消息回调常驻**:引用由实现持有(收包版的 `onConn`);**收包错误也从它的 `err` 出来**,socket 不因此拆掉;
+- **UDP 不保证送达**:回环内发出即到,跨网丢包、乱序、重复都是常态——重试与去重是协议层的事,`loop.udp` 不代劳;
+- **send 后立刻 `close` 是安全的**:载荷由实现持有到回调落地;被关闭取消的 send 其回调以 `err` 收场(若给了回调);
+- **错误是字符串**:与 `loop.net` 相同,`uv_strerror` 直出。
+
 ## loop.process:异步子进程
 
-`loop.process` 是循环的第四块,两个入口:`run` 是 `child_process.exec` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付;`spawn` 则把三路 stdio 直接交成普通的 `loop.net` sock,流式收发:
+`loop.process` 是循环的第五块,两个入口:`run` 是 `child_process.exec` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付;`spawn` 则把三路 stdio 直接交成普通的 `loop.net` sock,流式收发:
 
 ```lua
 local loop = require("loop")

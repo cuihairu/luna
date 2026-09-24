@@ -2,6 +2,9 @@ import { defineConfig } from 'vitepress'
 
 export default defineConfig({
   lang: 'zh-CN',
+  // project Pages serves under /luna/ — without this, every asset and
+  // link 404s at https://cuihairu.github.io/luna/
+  base: '/luna/',
   title: 'luna',
   description:
     'IPython 式的 Lua 交互环境,按 Node.js 运行时的方式生长:模块、插件、标准库',

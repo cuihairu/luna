@@ -126,17 +126,23 @@ static void test_clear_of_a_fired_oneshot_is_harmless(void **state)
 static void test_stop_ends_the_run_handles_stay_scheduled(void **state)
 {
     (void)state;
-    /* stop() breaks out in the first iteration: the 5ms interval has
-     * not fired yet and stays scheduled; the test clears and drains */
+    /* stop() ends the run; the interval stays scheduled; clearing and
+     * draining then work. The interval is 100ms so the first pass
+     * cannot fire it before the poll — but libuv >= 1.53 runs timers
+     * after the check phase each pass, so an interval that expires
+     * during the poll still ticks once even though stop() landed in
+     * the check (older libuv ended with 0). Pin the range, not the
+     * phase order: libuv and Node promise no ordering here. */
     assert_string_equal(eval_string(
         "n = 0\n"
-        "h = loop.setInterval(function() n = n + 1 end, 5)\n"
+        "h = loop.setInterval(function() n = n + 1 end, 100)\n"
         "loop.setImmediate(function() loop.stop() end)\n"
         "assert(loop.run())\n"
         "local after = n\n"
         "loop.clearInterval(h)\n"
         "assert(loop.run())  -- drain the closing interval\n"
-        "return 'stopped at ' .. after"), "stopped at 0");
+        "return (after >= 0 and after <= 1) and 'stopped' or after"),
+        "stopped");
 }
 
 static void test_prepare_hook_steps_serve(void **state)

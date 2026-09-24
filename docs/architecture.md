@@ -112,7 +112,7 @@
 - **Lua 5.5**:官方源码,不用 LuaJIT(5.5 语义 + 维护优先);
 - **LPeg**:scintillua 的依赖,亦是将来 lexer 插件的运行时;
 - **luafilesystem**(keplerproject)、**luasocket**(Diego Nehab):各自领域的事实标准,不重新选;
-- **libuv**:deps/ 已入库并接线为 `loop` 模块(1.44.2,静态链接)——见下节。
+- **libuv**:deps/ 已入库并接线为 `loop` 模块(1.53.0,静态链接)——见下节。
 
 ## 内核/插件边界与加载顺序
 
@@ -128,7 +128,7 @@
 
 ## 事件循环:第一批(显式选择,脚本 opt-in)
 
-Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "loop"`**——deps/libuv(1.44.2)接线的 Node 命名 API(setTimeout/setInterval/setImmediate/clear*/run/stop),静态编进 luna 单一二进制。同步标准库不受影响,REPL 不变;谁 require 谁进异步世界。曾经推迟的理由仍在,也决定了这一批的边界:
+Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "loop"`**——deps/libuv(1.53.0)接线的 Node 命名 API(setTimeout/setInterval/setImmediate/clear*/run/stop),静态编进 luna 单一二进制。同步标准库不受影响,REPL 不变;谁 require 谁进异步世界。曾经推迟的理由仍在,也决定了这一批的边界:
 
 1. **语义冲突未决**:同步 stdlib 与回调式异步在同一会话里混用,yield 点(哪个调用让出)仍是语言设计问题——所以循环只驱动用户注册的回调,标准库一个字节不改;
 2. **REPL 不需要**:交互主循环天然同步;循环是脚本模式的显式选择,没有全局 setTimeout 去污染同步代码;

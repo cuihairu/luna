@@ -389,8 +389,9 @@ static const luaL_Reg loop_funcs[] = {
  * keep-alive while any IO is in flight. */
 
 #include <fcntl.h>
+#include <sys/stat.h>
 
-enum { FS_READ, FS_WRITE, FS_STAT, FS_READDIR, FS_ONCE };
+enum { FS_READ, FS_WRITE, FS_STAT, FS_READDIR, FS_ONCE, FS_PATH };
 
 struct fsop {
     uv_fs_t req;       /* first member: fsop == (struct fsop *)req */
@@ -468,13 +469,31 @@ static void fs_finish(struct fsop *op)
         if (op->kind == FS_READ) {
             lua_pushlstring(L, op->data ? op->data : "", op->have);
         } else if (op->kind == FS_STAT) {
-            lua_createtable(L, 0, 3);
+            lua_createtable(L, 0, 4);
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_size);
             lua_setfield(L, -2, "size");
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mtime);
             lua_setfield(L, -2, "mtime");
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mode);
             lua_setfield(L, -2, "mode");
+            /* "file"/"dir"/"link"/"other": link only surfaces from
+             * lstat — stat follows symlinks by definition */
+            const char *ty;
+            mode_t m = op->req.statbuf.st_mode;
+            if (S_ISREG(m)) {
+                ty = "file";
+            } else if (S_ISDIR(m)) {
+                ty = "dir";
+            } else if (S_ISLNK(m)) {
+                ty = "link";
+            } else {
+                ty = "other";
+            }
+            lua_pushstring(L, ty);
+            lua_setfield(L, -2, "type");
+        } else if (op->kind == FS_PATH) {
+            /* realpath: result lives in req.ptr until req_cleanup */
+            lua_pushstring(L, (const char *)op->req.ptr);
         } else if (op->kind == FS_READDIR) {
             /* drain the scandir list: uv_fs_scandir_next walks it and
              * UV_EOF ends it; the strings are copied into Lua here,
@@ -542,6 +561,34 @@ static void fs_scandir_done(uv_fs_t *req)
         op->errcode = (int)req->result;
     }
     fs_finish(op);
+}
+
+/* truncate chains open(O_WRONLY) -> ftruncate -> close: libuv only
+ * has the fd version (uv_fs_ftruncate); the wanted length rides in
+ * op->size */
+static void fs_trunc_trunc(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    int fd = op->fd;
+    op->fd = -1;
+    uv_fs_req_cleanup(req);
+    uv_fs_close(&g_loop, req, fd, fs_done);
+}
+
+static void fs_trunc_open(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    op->fd = (int)req->result;
+    uv_fs_req_cleanup(req);
+    uv_fs_ftruncate(&g_loop, req, op->fd, (off_t)op->size, fs_trunc_trunc);
 }
 
 static void fs_read_read(uv_fs_t *req)
@@ -744,13 +791,81 @@ static int l_fs_rename(lua_State *L)
     return 0;
 }
 
-/* loop.fs.stat(path, cb) -> cb(err, {size=, mtime=, mode=}) */
+/* loop.fs.stat(path, cb) -> cb(err, {size=, mtime=, mode=, type=}) */
 static int l_fs_stat(lua_State *L)
 {
     const char *path = luaL_checkstring(L, 1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     struct fsop *op = fsop_new(L, 2, FS_STAT);
     uv_fs_stat(&g_loop, &op->req, path, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.lstat(path, cb) — does not follow symlinks; a symlink's
+ * st.type is "link" */
+static int l_fs_lstat(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_STAT);
+    uv_fs_lstat(&g_loop, &op->req, path, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.copyFile(src, dst, cb) — dst already existing is silently
+ * overwritten (Node's default); no clobber-protection flag, either
+ * unlink first or detect before copying */
+static int l_fs_copy_file(lua_State *L)
+{
+    const char *src = luaL_checkstring(L, 1);
+    const char *dst = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 3, FS_ONCE);
+    uv_fs_copyfile(&g_loop, &op->req, src, dst, 0, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.access(path, cb) — existence probe: cb(nil) if it can be
+ * stat'ed, cb(err) otherwise; no mode argument — readability and
+ * writability surface through read/write's own err, as usual */
+static int l_fs_access(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_ONCE);
+    uv_fs_access(&g_loop, &op->req, path, 0 /* F_OK */, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.realpath(path, cb) -> cb(nil, resolved) */
+static int l_fs_realpath(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_PATH);
+    uv_fs_realpath(&g_loop, &op->req, path, fs_once_done);
+    return 0;
+}
+
+/* loop.fs.truncate(path, len?, cb) — default length 0; POSIX lets
+ * ftruncate grow a file too (zero-filled), same as Node's fs.truncate.
+ * The length is optional Node-style: dropping it puts the callback
+ * one slot earlier. */
+static int l_fs_truncate(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    lua_Integer len = 0;
+    int cb_idx;
+    if (lua_isfunction(L, 2)) {
+        cb_idx = 2;
+    } else {
+        len = luaL_optinteger(L, 2, 0);
+        cb_idx = 3;
+    }
+    luaL_checktype(L, cb_idx, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, cb_idx, FS_ONCE);
+    op->size = (size_t)len;
+    uv_fs_open(&g_loop, &op->req, path, O_WRONLY, 0, fs_trunc_open);
     return 0;
 }
 
@@ -767,6 +882,11 @@ static const luaL_Reg fs_funcs[] = {
     { "rmdir", l_fs_rmdir },
     { "unlink", l_fs_unlink },
     { "rename", l_fs_rename },
+    { "lstat", l_fs_lstat },
+    { "copyFile", l_fs_copy_file },
+    { "access", l_fs_access },
+    { "realpath", l_fs_realpath },
+    { "truncate", l_fs_truncate },
     { "watch", l_fs_watch },
     { NULL, NULL },
 };

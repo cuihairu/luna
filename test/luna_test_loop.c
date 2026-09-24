@@ -382,6 +382,128 @@ static void test_fs_rename_moves_file(void **state)
         "return out"), "moved-payload|true");
 }
 
+static void test_fs_copyfile_copies_and_overwrites(void **state)
+{
+    (void)state;
+    (void)system("rm -f /tmp/luna-loop-fs-cp-src.txt /tmp/luna-loop-fs-cp-dst.txt");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-cp-src.txt', 'copy-me', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.copyFile('/tmp/luna-loop-fs-cp-src.txt', '/tmp/luna-loop-fs-cp-dst.txt', function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.readFile('/tmp/luna-loop-fs-cp-dst.txt', function(e3, d)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      out = tostring(d)\n"
+        "      fs.writeFile('/tmp/luna-loop-fs-cp-src.txt', 'other', function(e4)\n"
+        "        assert(e4 == nil, e4)\n"
+        "        fs.copyFile('/tmp/luna-loop-fs-cp-src.txt', '/tmp/luna-loop-fs-cp-dst.txt', function(e5)\n"
+        "          assert(e5 == nil, e5)\n"
+        "          fs.readFile('/tmp/luna-loop-fs-cp-dst.txt', function(e6, d2)\n"
+        "            out = out .. '|' .. tostring(d2)\n"
+        "          end)\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "copy-me|other");
+}
+
+static void test_fs_access_probes_existence(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-test.txt', 'x', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.access('/tmp/luna-loop-fs-test.txt', function(e2)\n"
+        "    out = tostring(e2 == nil)\n"
+        "    fs.access('/tmp/luna-loop-fs-no-such-path', function(e3, v)\n"
+        "      out = out .. '|' .. tostring(e3 ~= nil) .. '|' .. tostring(v)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|true|nil");
+}
+
+static void test_fs_realpath_resolves(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-real.txt', 'x', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.realpath('/tmp/../tmp/luna-loop-fs-real.txt', function(e2, p)\n"
+        "    out = tostring(e2 == nil) .. ':' .. tostring(p == '/tmp/luna-loop-fs-real.txt')\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:true");
+}
+
+static void test_fs_truncate_shortens_and_defaults_to_zero(void **state)
+{
+    (void)state;
+    (void)system("rm -f /tmp/luna-loop-fs-trunc.txt");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-trunc.txt', 'hello world', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.truncate('/tmp/luna-loop-fs-trunc.txt', 5, function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    fs.readFile('/tmp/luna-loop-fs-trunc.txt', function(e3, d)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      out = tostring(d)\n"
+        "      fs.truncate('/tmp/luna-loop-fs-trunc.txt', function(e4)\n"
+        "        assert(e4 == nil, e4)\n"
+        "        fs.readFile('/tmp/luna-loop-fs-trunc.txt', function(e5, d2)\n"
+        "          out = out .. '|' .. tostring(d2 == '')\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "hello|true");
+}
+
+static void test_fs_stat_and_lstat_report_types(void **state)
+{
+    (void)state;
+    (void)system("rm -rf /tmp/luna-loop-fs-tydir /tmp/luna-loop-fs-ty.txt /tmp/luna-loop-fs-ty.link");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-ty.txt', 'x', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.mkdir('/tmp/luna-loop-fs-tydir', function(e2)\n"
+        "    assert(e2 == nil, e2)\n"
+        "    os.execute('ln -sf /tmp/luna-loop-fs-ty.txt /tmp/luna-loop-fs-ty.link')\n"
+        "    fs.stat('/tmp/luna-loop-fs-ty.txt', function(e3, st)\n"
+        "      assert(e3 == nil, e3)\n"
+        "      fs.stat('/tmp/luna-loop-fs-tydir', function(e4, sd)\n"
+        "        assert(e4 == nil, e4)\n"
+        "        fs.lstat('/tmp/luna-loop-fs-ty.link', function(e5, ls)\n"
+        "          assert(e5 == nil, e5)\n"
+        "          fs.stat('/tmp/luna-loop-fs-ty.link', function(e6, fs_st)\n"
+        "            out = st.type .. ',' .. sd.type .. ',' .. ls.type .. ',' .. fs_st.type\n"
+        "          end)\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "file,dir,link,file");
+}
+
 static void test_udp_send_recv_loopback(void **state)
 {
     (void)state;
@@ -1243,6 +1365,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_mkdir_rmdir_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_unlink_removes_file, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_rename_moves_file, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_copyfile_copies_and_overwrites, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_access_probes_existence, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_realpath_resolves, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_truncate_shortens_and_defaults_to_zero, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_stat_and_lstat_report_types, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_send_recv_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_bind_conflict_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_send_without_callback_drains, setup_loop, teardown_loop),

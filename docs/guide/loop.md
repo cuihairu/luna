@@ -88,17 +88,25 @@ loop.run()
 | `fs.readFile(path, cb)` | `cb(nil, data)`(整个文件为一个字符串) | `cb(err)` |
 | `fs.writeFile(path, data, cb)` | `cb(nil)`(覆盖写,不存在则创建) | `cb(err)` |
 | `fs.appendFile(path, data, cb)` | `cb(nil)`(追加写,不存在则创建) | `cb(err)` |
-| `fs.stat(path, cb)` | `cb(nil, st)`,`st` 含 `size` / `mtime` / `mode` | `cb(err)` |
+| `fs.stat(path, cb)` | `cb(nil, st)`,`st` 含 `size` / `mtime` / `mode` / `type` | `cb(err)` |
 | `fs.readdir(path, cb)` | `cb(nil, names)`——文件名数组,不含 `.`/`..`,顺序不作保证 | `cb(err)` |
 | `fs.mkdir(path, cb)` | `cb(nil)`(mode 0777,umask 照常生效;**非递归**,父目录须已存在) | `cb(err)` |
 | `fs.rmdir(path, cb)` | `cb(nil)`(只删空目录) | `cb(err)` |
 | `fs.unlink(path, cb)` | `cb(nil)` | `cb(err)` |
 | `fs.rename(old, new, cb)` | `cb(nil)`(原子改名/移动;new 已存在则覆盖) | `cb(err)` |
+| `fs.copyFile(src, dst, cb)` | `cb(nil)`(dst 已存在则静默覆盖) | `cb(err)` |
+| `fs.access(path, cb)` | `cb(nil)`——路径存在且可 stat | `cb(err)` |
+| `fs.realpath(path, cb)` | `cb(nil, resolved)`——解析 `..`/符号链接后的绝对路径 | `cb(err)` |
+| `fs.truncate(path, len?, cb)` | `cb(nil)`;缺省 `len` 时截为 0(Node 式重载:`cb` 可直接跟在 `path` 后) | `cb(err)` |
+| `fs.lstat(path, cb)` | `cb(nil, st)`,字段同 stat;**不跟随符号链接** | `cb(err)` |
 
 - **IO 在线程池,回调在循环线程**:大文件读写不阻塞定时器;回调照常经隔离执行,抛错不影响循环;
 - **错误是字符串**:libuv 的 `uv_strerror` 直出(如 `no such file or directory`),与 Node 的 Error 对象相比是刻意简化——Lua 里 `err ~= nil` 判定即可,stat 读不存在的路径同样走 `cb(err)`;
 - **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成;
-- **readdir 底层是 `uv_fs_scandir`**:一次线程池调用列出全部条目,名字在交付前拷入 Lua,列表由 libuv 自行回收。
+- **readdir 底层是 `uv_fs_scandir`**:一次线程池调用列出全部条目,名字在交付前拷入 Lua,列表由 libuv 自行回收;
+- **`st.type` 是类型字符串**:`"file"` / `"dir"` / `"link"` / `"other"`——判类型优先读它,别去解 `mode` 位;`stat` 按定义跟随符号链接,`"link"` 只从 `lstat` 出来;
+- **copyFile 覆盖、access 只探存在**:`copyFile` 没有"不覆盖"开关(dst 已在就换掉,Node 默认语义);`access` 只回答"在不在"——可读可写让 `read`/`write` 自己的 `err` 说话,不做预检;
+- **truncate 也能增长**:`len` 超过原长时文件补零扩展(POSIX `ftruncate` 语义,与 Node 相同);libuv 只有 fd 版截断,实现走 `open` → `ftruncate` → `close` 三段,中途失败照常 `cb(err)` 且 fd 必然收尾。
 
 ### fs.watch:监听目录变化
 

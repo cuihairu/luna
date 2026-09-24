@@ -59,3 +59,11 @@ target_compile_definitions(luna_test_modules PRIVATE
         FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/modules")
 add_test(NAME modules COMMAND luna_test_modules)
 
+# Plugin system: discovery order, manifests, injection, isolation
+add_executable(luna_test_plugins luna_test_plugins.c)
+target_link_libraries(luna_test_plugins PRIVATE cmocka-static lualib lpeg lfs luna_kernel)
+target_compile_definitions(luna_test_plugins PRIVATE
+        LUNA_TEST_PLUGIN_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        LUNA_TEST_MODULES_DIR="${CMAKE_BINARY_DIR}/luna_modules")
+add_test(NAME plugins COMMAND luna_test_plugins)
+

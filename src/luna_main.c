@@ -227,6 +227,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_MAGIC_SRC");
     lua_pushlstring(L, LUNA_LUA_MODULES, sizeof(LUNA_LUA_MODULES) - 1);
     lua_setglobal(L, "__LUNA_MODULES_SRC");
+    lua_pushlstring(L, LUNA_LUA_PLUGINS, sizeof(LUNA_LUA_PLUGINS) - 1);
+    lua_setglobal(L, "__LUNA_PLUGINS_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
 

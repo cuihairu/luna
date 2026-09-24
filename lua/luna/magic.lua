@@ -128,6 +128,36 @@ magic.register("exit", function()
     os.exit(0)
 end, "%exit — leave the console (same as ^D)")
 
+magic.register("plugins", function()
+    local okp, plugs = pcall(require, "luna.plugins")
+    if not okp then
+        kernel.write("plugins: loader unavailable\n")
+        return
+    end
+    local names = {}
+    for name in pairs(plugs.loaded) do
+        names[#names + 1] = name
+    end
+    table.sort(names)
+    if #names == 0 then
+        kernel.write("no plugins loaded\n")
+    else
+        kernel.write("loaded plugins:\n")
+        for _, name in ipairs(names) do
+            local m = plugs.loaded[name]
+            kernel.write(string.format("  %s %s  %s\n", name,
+                m.version or "-", m.description or ""))
+        end
+    end
+    local bad = 0
+    for _ in pairs(plugs.failed) do
+        bad = bad + 1
+    end
+    if bad > 0 then
+        kernel.write(string.format("%d plugin(s) failed to load (see stderr)\n", bad))
+    end
+end, "%plugins — list loaded plugins and load failures")
+
 magic.register("help", function()
     local names = {}
     for name in pairs(magic.commands) do

@@ -17,6 +17,7 @@ package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/comp
 package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/highlight)"))
 package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, "=(luna/magic)"))
 package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, "=(luna/modules)"))
+package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, "=(luna/plugins)"))
 
 -- Node-style resolution for project packages: relative requires and
 -- bare names walking up luna_modules/ directories, manifests honored.
@@ -38,10 +39,17 @@ parser:flag("-i --interactive",
 parser:option("-e --eval",
     "evaluate code and exit; expression results echo Out[n]-style")
 parser:flag("--no-color", "disable ANSI colors in output")
+parser:flag("--no-plugins", "skip plugin discovery and loading")
 parser:argument("script", "a .lua script to run first"):args("?")
 parser:argument("largs", "arguments passed to the script"):args("*")
 
 local opts = parser:parse(arg)
+
+-- Directory plugins load for every launch mode (they may inject
+-- modules a script needs); --no-plugins skips them.
+if not opts.no_plugins then
+    require("luna.plugins").load_all()
+end
 
 -- Run a script file: args become the chunk's `...` (standalone lua
 -- convention), arg[] is rebuilt for the duration of the run.

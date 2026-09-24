@@ -1,0 +1,1 @@
+{ "name": "good", "version": "1.0.0", "main": "init.lua", "description": "registers a magic command and injects a module" }

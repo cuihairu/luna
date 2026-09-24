@@ -1,0 +1,1 @@
+{ "name": "goodpack", "version": "0.2.0", "main": "lib/main.lua", "description": "manifest main in a subdirectory" }

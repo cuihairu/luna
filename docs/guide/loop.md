@@ -125,3 +125,38 @@ loop.run()
 - **连接回调常驻**:`onConn(err, sock)` 对每个连接交付一次,引用由实现持有;accept 出错(如 fd 耗尽)也从它的 `err` 出来,不掀翻循环;
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。
+
+## loop.process:异步子进程
+
+`loop.process` 是循环的第四块:`child_process.spawn` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付:
+
+```lua
+local loop = require("loop")
+local process = loop.process
+
+process.run("sh", {"-c", "echo hi; exit 0"}, function(err, res)
+    assert(err == nil, err)
+    print(res.status, res.stdout)   -- 0	hi
+end)
+
+loop.run()
+```
+
+`run` **立刻返回** proc 句柄(不必等子进程结束):`p:pid()` 随时可读;`p:kill(sig?)` 默认 SIGTERM——被杀的子进程照常走退出回调,`res.signal` 是信号编号,此时 `status` 无意义(libuv 约定)。
+
+| 调用 | 语义 |
+| --- | --- |
+| `process.run(cmd, args?, opts?, cb)` | 无 shell 执行 cmd;`args` 是 argv 尾部字符串表;`opts` 首片只收 `{cwd = 路径}`;stdin 被忽略;立刻返回 proc 句柄 |
+| `proc:pid()` | 子进程 pid |
+| `proc:kill(sig?)` | 发信号(默认 15/SIGTERM);退出回调照常落地,幂等性没有——进程已退出后再杀会抛错 |
+| `res.status` | 退出码(`signal` 非空时无意义) |
+| `res.signal` | 终止信号编号;正常退出为 nil |
+| `res.stdout` / `res.stderr` | 捕获到的两路输出(字符串,可为空串) |
+
+行为约定:
+
+- **spawn 失败同步抛错**:命令不存在等 exec 失败由 libuv 在 `uv_spawn` 里同步带回,`run` 直接 raise——与 `listen` 的绑定错误同款;`pcall` 接住后循环照常排空,不留悬空句柄;
+- **交付条件是"退出 + 双管道 EOF"**:子进程死了内核必然关掉它的 fd,所以聚合回调确定性地到达,输出不会因缓冲未排空而截断;
+- **没有 shell**:`cmd` 不经 `/bin/sh`,管道、通配、`~` 一概不展开——要 shell 语义就 `run("sh", {"-c", "..."})`,和 Node `spawn`/`exec` 的分野一致;
+- **stdin 被忽略**(首片):需要向子进程写数据、流式收发输出的接口留给后续批次;
+- **错误是字符串**:与 `loop.fs`/`loop.net` 相同,`uv_strerror` 直出。

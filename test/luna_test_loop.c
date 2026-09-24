@@ -1,7 +1,9 @@
 /* luna_test_loop.c — the opt-in event loop: timers, immediates, keep-
  * alive semantics, the prepare hook's serve poll, ^C interruption, the
- * loop.fs async file operations, and loop.net client sockets against
- * real pthread echo servers (TCP on an ephemeral port + a unix path).
+ * loop.fs async file operations, loop.net client sockets against
+ * real pthread echo servers (TCP on an ephemeral port + a unix path),
+ * and loop.process aggregate child processes (capture, exit codes,
+ * kill-by-signal, synchronous spawn failure).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -559,6 +561,80 @@ static void test_net_listen_on_taken_port_fails(void **state)
     close(fd);
 }
 
+/* -- process: aggregate child processes -------------------------------- */
+
+static void test_proc_run_echo_captures_stdout(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local res\n"
+        "local process = loop.process\n"
+        "process.run('echo', {'hello'}, function(e, r)\n"
+        "  assert(e == nil)\n"
+        "  res = r\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return res.status .. '|' .. tostring(res.signal) .. '|"
+        "' .. res.stdout .. '|' .. res.stderr"), "0|nil|hello\n|");
+}
+
+static void test_proc_run_exit_code_and_stderr(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local res\n"
+        "local process = loop.process\n"
+        "process.run('sh', {'-c', 'echo to-err >&2; exit 3'},\n"
+        "  function(e, r) res = r end)\n"
+        "assert(loop.run())\n"
+        "return res.status .. '|' .. tostring(res.signal) .. '|"
+        "' .. res.stderr .. '|' .. res.stdout"), "3|nil|to-err\n|");
+}
+
+static void test_proc_run_cwd_option(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local out\n"
+        "local process = loop.process\n"
+        "process.run('pwd', {}, {cwd = '/tmp'},\n"
+        "  function(e, r) out = r.stdout end)\n"
+        "assert(loop.run())\n"
+        "return out"), "/tmp\n");
+}
+
+static void test_proc_kill_reports_signal(void **state)
+{
+    (void)state;
+    /* run() returns the handle at once: pid is readable and kill()
+     * lands from a setImmediate inside the same run */
+    assert_string_equal(eval_string(
+        "local res\n"
+        "local process = loop.process\n"
+        "local p = process.run('sleep', {'30'},\n"
+        "  function(e, r) res = r end)\n"
+        "assert(p:pid() > 0)\n"
+        "loop.setImmediate(function() assert(p:kill(15)) end)\n"
+        "assert(loop.run())\n"
+        "return tostring(res.signal)"), "15");
+}
+
+static void test_proc_spawn_failure_throws_and_drains(void **state)
+{
+    (void)state;
+    /* spawn errors throw synchronously (like listen) AND must leave no
+     * handle behind — the run below still drains and returns */
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local ok, err = pcall(process.run, "
+        "'luna-definitely-not-a-command-xyz', {}, function() end)\n"
+        "assert(not ok)\n"
+        "assert(loop.run())\n"
+        "return (tostring(err):find('spawn failed') ~= nil) "
+        "and 'threw-and-drained' or tostring(err)"),
+        "threw-and-drained");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -580,6 +656,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_tcp_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_run_echo_captures_stdout, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_run_exit_code_and_stderr, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_run_cwd_option, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_kill_reports_signal, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_spawn_failure_throws_and_drains, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

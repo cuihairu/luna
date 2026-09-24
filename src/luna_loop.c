@@ -23,12 +23,22 @@
  * callback as onConn(err, sock). A sock offers write/read/end/close;
  * read delivers cb(nil, chunk) per chunk and cb(nil, nil) at EOF; a
  * server offers port()/close(). Each open socket or listener holds the
- * loop alive until its uv_close lands, like Node. */
+ * loop alive until its uv_close lands, like Node.
+ *
+ * loop.process: the aggregate sibling of Node's child_process.spawn.
+ * run(cmd, args, [opts], cb) execs without a shell, captures the
+ * child's stdout/stderr into memory, and delivers cb(nil, res) once
+ * the child exited AND both capture pipes reached EOF:
+ * res = {status, signal?, stdout, stderr}. opts takes {cwd=path}.
+ * run() returns the proc handle at once (pid/kill); spawn failures
+ * throw synchronously, like listen(). A killed child reports
+ * signal = <number> with a meaningless status, mirroring libuv. */
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <signal.h>
 
 #include <uv.h>
 
@@ -1195,6 +1205,327 @@ static const luaL_Reg net_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- async child processes (loop.process) ---------------------------------
+ *
+ * run(cmd, args, [opts], cb): no shell, no PATH games beyond execvp's
+ * own — args is a plain argv tail. stdout/stderr come back as two
+ * capture pipes drained into growing buffers; stdin is ignored. The
+ * completion fires only when BOTH the exit callback and both pipe EOFs
+ * have landed (a dying child always closes its fds, so this drains
+ * deterministically). Like the sockets, the handle is registry-pinned
+ * until delivery and keeps the loop alive. */
+
+struct proc;
+
+struct piper {
+    uv_pipe_t p;         /* first member: piper == (struct piper *)handle */
+    struct proc *owner;
+    int is_err;
+    char *buf;
+    size_t len, cap;
+};
+
+struct proc {
+    uv_process_t h;      /* first member: proc == (struct proc *)handle */
+    lua_State *L;
+    int selfref;         /* registry -> userdata, dropped at delivery */
+    int cbref;           /* completion callback */
+    int exit_seen, proc_closed, pipes_closed, delivered;
+    int64_t status;      /* exit code (meaningful only when signum == 0) */
+    int signum;
+    struct piper *out, *err;
+    char *out_data, *err_data; /* capture buffers, moved here at pipe EOF */
+    size_t out_len, err_len;
+};
+
+static void proc_try_close(struct proc *pr);
+
+/* spawn-failure path: nobody is left to own the pipers */
+static void on_piper_gone_dead(uv_handle_t *handle)
+{
+    struct piper *pp = (struct piper *)handle;
+    free(pp->buf);
+    free(pp);
+}
+
+/* normal path: hand the capture buffer to the owner, free the piper */
+static void on_piper_gone(uv_handle_t *handle)
+{
+    struct piper *pp = (struct piper *)handle;
+    struct proc *pr = pp->owner;
+    if (pp->is_err) {
+        pr->err_data = pp->buf;
+        pr->err_len = pp->len;
+    } else {
+        pr->out_data = pp->buf;
+        pr->out_len = pp->len;
+    }
+    free(pp);
+    pr->pipes_closed++;
+    proc_try_close(pr);
+}
+
+static void on_proc_alloc(uv_handle_t *handle, size_t suggested,
+                          uv_buf_t *buf)
+{
+    (void)handle;
+    (void)suggested;
+    buf->base = malloc(65536);
+    buf->len = buf->base ? 65536 : 0;
+}
+
+static void on_proc_read(uv_stream_t *stream, ssize_t nread,
+                         const uv_buf_t *buf)
+{
+    struct piper *pp = (struct piper *)stream;
+    if (nread > 0) {
+        if (pp->len + (size_t)nread > pp->cap) {
+            size_t cap = pp->cap ? pp->cap * 2 : 8192;
+            while (cap < pp->len + (size_t)nread) {
+                cap *= 2;
+            }
+            char *nb = realloc(pp->buf, cap);
+            if (nb) {
+                pp->buf = nb;
+                pp->cap = cap;
+            }
+        }
+        if (pp->buf && pp->len + (size_t)nread <= pp->cap) {
+            memcpy(pp->buf + pp->len, buf->base, (size_t)nread);
+            pp->len += (size_t)nread;
+        }
+        /* on OOM the chunk is dropped: capture stays best-effort */
+    }
+    free(buf->base);
+    if (nread < 0) {     /* EOF or a hard read error: stream is done */
+        uv_read_stop(stream);
+        uv_close((uv_handle_t *)pp, on_piper_gone);
+    }
+}
+
+static void on_proc_handle_closed(uv_handle_t *handle)
+{
+    struct proc *pr = (struct proc *)handle;
+    pr->proc_closed = 1;
+    proc_try_close(pr);
+}
+
+static void on_proc_exit(uv_process_t *h, int64_t status, int signum)
+{
+    struct proc *pr = (struct proc *)h;
+    pr->exit_seen = 1;
+    pr->status = status;
+    pr->signum = signum;
+    uv_close((uv_handle_t *)h, on_proc_handle_closed);
+}
+
+/* deliver cb(nil, res) once the child exited, the process handle is
+ * closed, and both capture pipes drained; then drop the pin. The
+ * callback still runs with the pin held — it can raise, like any. */
+static void proc_try_close(struct proc *pr)
+{
+    if (pr->delivered || !pr->exit_seen || !pr->proc_closed ||
+        pr->pipes_closed < 2) {
+        return;
+    }
+    pr->delivered = 1;
+    lua_State *L = pr->L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, pr->cbref);
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
+    pr->cbref = LUA_NOREF;
+    lua_pushnil(L);
+    lua_createtable(L, 0, 4);
+    lua_pushinteger(L, (lua_Integer)pr->status);
+    lua_setfield(L, -2, "status");
+    if (pr->signum != 0) {
+        lua_pushinteger(L, pr->signum);
+        lua_setfield(L, -2, "signal");
+    }
+    lua_pushlstring(L, pr->out_data ? pr->out_data : "", pr->out_len);
+    lua_setfield(L, -2, "stdout");
+    lua_pushlstring(L, pr->err_data ? pr->err_data : "", pr->err_len);
+    lua_setfield(L, -2, "stderr");
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: process callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+    free(pr->out_data);
+    free(pr->err_data);
+    pr->out_data = pr->err_data = NULL;
+    keepalive_close();
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
+    pr->selfref = LUA_NOREF;
+}
+
+static int proc_tostring(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    lua_pushfstring(L, "loop.process(pid %d, %s): %p",
+                    (int)pr->h.pid,
+                    pr->delivered ? "done"
+                        : pr->exit_seen ? "exited" : "running",
+                    (void *)pr);
+    return 1;
+}
+
+static int l_proc_pid(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    lua_pushinteger(L, (lua_Integer)pr->h.pid);
+    return 1;
+}
+
+/* proc:kill(sig?) — default SIGTERM; the exit callback still fires */
+static int l_proc_kill(lua_State *L)
+{
+    struct proc *pr = luaL_checkudata(L, 1, "loop.process");
+    luaL_argcheck(L, !pr->delivered && !pr->exit_seen, 1,
+                  "process already exited");
+    lua_Integer sig = luaL_optinteger(L, 2, SIGTERM);
+    int rc = uv_process_kill(&pr->h, (int)sig);
+    if (rc != 0) {
+        return luaL_error(L, "loop.process: kill: %s", uv_strerror(rc));
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* loop.process.run(cmd, args?, [opts], cb(nil, res)) -> proc.
+ * opts: { cwd = path }. Spawn failures throw, like listen(). */
+static int l_process_run(lua_State *L)
+{
+    const char *cmd = luaL_checkstring(L, 1);
+    int nargs = 0;
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+        nargs = (int)lua_rawlen(L, 2);
+        for (int i = 1; i <= nargs; i++) {
+            lua_rawgeti(L, 2, i);
+            luaL_argcheck(L, !lua_isnil(L, -1) && lua_tostring(L, -1), 2,
+                          "args must be strings");
+            lua_pop(L, 1);
+        }
+    }
+    /* run(cmd, args, cb) or run(cmd, args, {cwd=...}, cb) — keeping the
+     * cwd string anchored on the stack beats strdup'ing it */
+    int cbidx = 3;
+    const char *cwd = NULL;
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "cwd");
+        if (!lua_isnil(L, -1)) {
+            cwd = lua_tostring(L, -1);
+        }
+        lua_replace(L, 3);
+        cbidx = 4;
+    }
+    luaL_checktype(L, cbidx, LUA_TFUNCTION);
+
+    struct proc *pr = lua_newuserdata(L, sizeof(*pr));
+    memset(pr, 0, sizeof(*pr));
+    pr->L = L;
+    luaL_getmetatable(L, "loop.process");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    pr->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    pr->cbref = pin_cb(L, cbidx);
+
+    /* copy argv out of Lua FIRST: no uv handle exists yet, so an
+     * allocation failure here can just drop the refs and raise */
+    char **args = malloc(((size_t)nargs + 2) * sizeof(char *));
+    if (!args) {
+        goto oom;
+    }
+    args[0] = malloc(strlen(cmd) + 1);
+    if (!args[0]) {
+        goto oom_after_args;
+    }
+    strcpy(args[0], cmd);
+    for (int i = 0; i < nargs; i++) {
+        lua_rawgeti(L, 2, i + 1);
+        const char *a = lua_tostring(L, -1);
+        args[i + 1] = malloc(strlen(a) + 1);
+        if (!args[i + 1]) {
+            lua_pop(L, 1);
+            goto oom_after_args;
+        }
+        strcpy(args[i + 1], a);
+        lua_pop(L, 1);
+    }
+    args[nargs + 1] = NULL;
+
+    pr->out = calloc(1, sizeof(*pr->out));
+    pr->err = calloc(1, sizeof(*pr->err));
+    if (!pr->out || !pr->err) {
+        goto oom_after_args;
+    }
+    pr->out->owner = pr;
+    pr->err->owner = pr;
+    pr->err->is_err = 1;
+    uv_pipe_init(&g_loop, &pr->out->p, 0);
+    uv_pipe_init(&g_loop, &pr->err->p, 0);
+
+    uv_stdio_container_t io[3];
+    io[0].flags = UV_IGNORE;
+    io[1].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
+    io[1].data.stream = (uv_stream_t *)pr->out;
+    io[2].flags = UV_CREATE_PIPE | UV_WRITABLE_PIPE;
+    io[2].data.stream = (uv_stream_t *)pr->err;
+    uv_process_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.exit_cb = on_proc_exit;
+    opts.file = args[0];
+    opts.args = args;
+    opts.cwd = cwd;
+    opts.stdio_count = 3;
+    opts.stdio = io;
+
+    int rc = uv_spawn(&g_loop, &pr->h, &opts);
+    for (int i = 0; i < nargs + 1; i++) {
+        free(args[i]);
+    }
+    free(args);
+    if (rc != 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
+        luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
+        pr->cbref = LUA_NOREF;
+        pr->selfref = LUA_NOREF;
+        uv_close((uv_handle_t *)&pr->out->p, on_piper_gone_dead);
+        uv_close((uv_handle_t *)&pr->err->p, on_piper_gone_dead);
+        return luaL_error(L, "loop.process: spawn failed: %s",
+                          uv_strerror(rc));
+    }
+    keepalive_open();
+    uv_read_start((uv_stream_t *)pr->out, on_proc_alloc, on_proc_read);
+    uv_read_start((uv_stream_t *)pr->err, on_proc_alloc, on_proc_read);
+    return 1;
+
+oom:
+    free(args);
+oom_after_args:
+    if (args) {
+        for (int i = 0; args[i]; i++) {
+            free(args[i]);
+        }
+        free(args);
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
+    luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
+    return luaL_error(L, "loop.process: out of memory");
+}
+
+static const luaL_Reg proc_funcs[] = {
+    { "pid", l_proc_pid },
+    { "kill", l_proc_kill },
+    { NULL, NULL },
+};
+
+static const luaL_Reg process_funcs[] = {
+    { "run", l_process_run },
+    { NULL, NULL },
+};
+
 int luaopen_luna_loop(lua_State *L)
 {
     if (!g_loop_ready) {
@@ -1222,10 +1553,19 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.process")) {
+        luaL_newlib(L, proc_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, proc_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     luaL_newlib(L, loop_funcs);
     luaL_newlib(L, fs_funcs);
     lua_setfield(L, -2, "fs");
     luaL_newlib(L, net_funcs);
     lua_setfield(L, -2, "net");
+    luaL_newlib(L, process_funcs);
+    lua_setfield(L, -2, "process");
     return 1;
 }

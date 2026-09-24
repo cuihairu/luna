@@ -134,7 +134,7 @@ Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "lo
 2. **REPL 不需要**:交互主循环天然同步;循环是脚本模式的显式选择,没有全局 setTimeout 去污染同步代码;
 3. **两份契约搭一趟车**:循环唯一的自有句柄是一个 prepare 钩子(有活句柄时启动,最后一个关闭时停),它每轮做两件事——把 uv_run 阻塞期间落下的 `^C` 转成 `interrupted` 错误(退出码 130 约定不变),和轮询 attach 套接字。事件循环里的进程因此照常可被 `--attach` 观测:轮询点模型原样成立,不因 libuv 的存在而多出第二个并发来源。
 
-keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node;再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约。
+keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node;再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约;最新一批又补上 `loop.process`:子进程的聚合执行(无 shell spawn、stdout/stderr 捕获、`proc:kill`),交付条件是"退出 + 双管道 EOF",spawn 失败像 listen 一样同步抛错。
 
 **底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/loop-backend-design)。
 

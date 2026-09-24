@@ -442,6 +442,103 @@ static void test_udp_send_without_callback_drains(void **state)
         "return out"), "no-cb");
 }
 
+static void test_fs_watch_reports_events(void **state)
+{
+    (void)state;
+    /* a file written from an immediate lands in the watched directory:
+     * the callback sees its name plus a rename/change event, and the
+     * watch keeps the loop alive until close */
+    (void)system("rm -rf /tmp/luna-loop-fs-watch && mkdir -p /tmp/luna-loop-fs-watch");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "local got = {}\n"
+        "local w\n"
+        "w = fs.watch('/tmp/luna-loop-fs-watch', function(e, name, ev)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  got[#got + 1] = tostring(name) .. '|' .. ev\n"
+        "end)\n"
+        "loop.setImmediate(function()\n"
+        "  fs.writeFile('/tmp/luna-loop-fs-watch/note.txt', 'x', function() end)\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  local ok = #got >= 1\n"
+        "  for _, s in ipairs(got) do\n"
+        "    local n, ev = s:match('^(.*)|(.*)$')\n"
+        "    if n ~= 'note.txt' or (ev ~= 'rename' and ev ~= 'change') then\n"
+        "      ok = false\n"
+        "    end\n"
+        "  end\n"
+        "  out = tostring(ok)\n"
+        "  w:close()\n"
+        "end, 300)\n"
+        "assert(loop.run())\n"
+        "return out"), "true");
+}
+
+static void test_fs_watch_missing_path_throws(void **state)
+{
+    (void)state;
+    /* a watch on a path that does not exist throws synchronously, like
+     * listen on a taken port — nothing dangles afterwards */
+    (void)system("rm -rf /tmp/luna-loop-fs-watch-no-such");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "local ok, err = pcall(fs.watch, '/tmp/luna-loop-fs-watch-no-such',\n"
+        "  function() end)\n"
+        "local drained = loop.run()   -- nothing dangles after the throw\n"
+        "return tostring(ok) .. '|' ..\n"
+        "       tostring((tostring(err):find('no such')) ~= nil) .. '|' ..\n"
+        "       tostring(drained)"), "false|true|true");
+}
+
+static void test_fs_watch_close_is_idempotent(void **state)
+{
+    (void)state;
+    /* double close is a no-op, and a closed watch never delivers: the
+     * late write lands, the callback stays silent, the loop drains */
+    (void)system("rm -rf /tmp/luna-loop-fs-watch && mkdir -p /tmp/luna-loop-fs-watch");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "local hit = false\n"
+        "local w = fs.watch('/tmp/luna-loop-fs-watch', function() hit = true end)\n"
+        "w:close()\n"
+        "w:close()\n"
+        "loop.setImmediate(function()\n"
+        "  fs.writeFile('/tmp/luna-loop-fs-watch/late.txt', 'x', function() end)\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(hit == false)\n"
+        "end, 100)\n"
+        "assert(loop.run())\n"
+        "return out"), "true");
+}
+
+static void test_immediate_beats_timer_with_io_watchers(void **state)
+{
+    (void)state;
+    /* regression: with an I/O watcher around, the poll phase used to
+     * sleep until the next timer and starve the immediate (a bare check
+     * handle cannot wake it) — the kick sentinel must run the immediate
+     * first, so the order is imm,timer */
+    (void)system("rm -rf /tmp/luna-loop-fs-watch && mkdir -p /tmp/luna-loop-fs-watch");
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "local order = {}\n"
+        "local w\n"
+        "w = fs.watch('/tmp/luna-loop-fs-watch', function() end)\n"
+        "loop.setImmediate(function() order[#order + 1] = 'imm' end)\n"
+        "loop.setTimeout(function()\n"
+        "  order[#order + 1] = 'timer'\n"
+        "  out = table.concat(order, ',')\n"
+        "  w:close()\n"
+        "end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"), "imm,timer");
+}
+
 /* -- net: a one-shot echo server on a real socket --------------------- */
 /* accept one connection, echo one read back, then close both ends —
  * so the client sees its chunk, then EOF */
@@ -989,6 +1086,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_udp_send_recv_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_bind_conflict_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_send_without_callback_drains, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_watch_reports_events, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_watch_missing_path_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_watch_close_is_idempotent, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_immediate_beats_timer_with_io_watchers, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

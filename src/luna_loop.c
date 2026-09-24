@@ -77,6 +77,32 @@ static int g_prep_inited;
 static int g_interrupted;   /* ^C landed mid-run: stop, then raise */
 static lua_State *g_L;      /* the state the serve poll runs in */
 
+/* Wake sentinel for immediates. A check handle lives in the check-phase
+ * queue and is not in the poll set: once any I/O watcher exists, the poll
+ * phase blocks in epoll until an event or the next timer, and a bare
+ * check cannot interrupt it — the immediate would only run when that
+ * wait ends. One unref'd async (created on first use) exists solely to
+ * kick the blocked poll: its eventfd sits in the poll set, uv_async_send
+ * is coalescing, and an unref'd handle neither keeps run() alive nor
+ * joins the keep-alive count. */
+static uv_async_t g_immediate_kick;
+static int g_kick_ready;
+
+static void on_kick(uv_async_t *a)
+{
+    (void)a; /* the check phase reads the queue; the kick only wakes it */
+}
+
+static void immediate_kick(void)
+{
+    if (!g_kick_ready) {
+        uv_async_init(&g_loop, &g_immediate_kick, on_kick);
+        uv_unref((uv_handle_t *)&g_immediate_kick);
+        g_kick_ready = 1;
+    }
+    uv_async_send(&g_immediate_kick);
+}
+
 /* box from its handle (the union is the first member) */
 static struct loopbox *box_of(void *handle)
 {
@@ -212,6 +238,11 @@ static int l_set_timeout(lua_State *L)
     struct loopbox *box = box_new(L, LBOX_TIMER);
     box_ref_args(L, box, 1, 3);
     uv_timer_init(&g_loop, &box->h.timer);
+    /* anchor the deadline at "now": loop time only refreshes inside
+     * uv_run, so a timer scheduled before the first run — or between
+     * runs — would otherwise count its ms from a stale moment and can
+     * even fire immediately */
+    uv_update_time(&g_loop);
     uv_timer_start(&box->h.timer, on_timer, (uint64_t)ms, 0);
     return 1;
 }
@@ -226,6 +257,7 @@ static int l_set_interval(lua_State *L)
     box->repeating = 1;
     box_ref_args(L, box, 1, 3);
     uv_timer_init(&g_loop, &box->h.timer);
+    uv_update_time(&g_loop); /* same staleness as setTimeout */
     uv_timer_start(&box->h.timer, on_timer, (uint64_t)ms, (uint64_t)ms);
     return 1;
 }
@@ -239,6 +271,7 @@ static int l_set_immediate(lua_State *L)
     box_ref_args(L, box, 1, 2);
     uv_check_init(&g_loop, &box->h.check);
     uv_check_start(&box->h.check, on_check);
+    immediate_kick(); /* a blocked poll must not outwait the immediate */
     return 1;
 }
 
@@ -695,6 +728,9 @@ static int l_fs_stat(lua_State *L)
     return 0;
 }
 
+static int pin_cb(lua_State *L, int idx);   /* defined in the net section */
+static int l_fs_watch(lua_State *L);   /* defined with the fswatch block */
+
 static const luaL_Reg fs_funcs[] = {
     { "readFile", l_fs_read_file },
     { "writeFile", l_fs_write_file },
@@ -705,6 +741,152 @@ static const luaL_Reg fs_funcs[] = {
     { "rmdir", l_fs_rmdir },
     { "unlink", l_fs_unlink },
     { "rename", l_fs_rename },
+    { "watch", l_fs_watch },
+    { NULL, NULL },
+};
+
+/* -- fs.watch: file watching (uv_fs_event) -------------------------------
+ *
+ * fs.watch(path, onEvent) -> watcher; onEvent(err, filename, event)
+ * fires per filesystem event (event is "rename" or "change", Node's
+ * names) and is retained — errors surface through err and the
+ * watcher keeps watching until watcher:close(). The filename can be
+ * nil (platform-dependent); the start error (e.g. ENOENT) throws
+ * synchronously, like bind/listen. An open watcher keeps the loop
+ * alive — same contract as everywhere else here. */
+
+struct fswatch {
+    uv_fs_event_t h;
+    int closed;
+    lua_State *L;
+    int selfref, evref;
+};
+
+static void fswatch_close(struct fswatch *w);
+
+static void on_fswatch_closed(uv_handle_t *h)
+{
+    struct fswatch *w = (struct fswatch *)h;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->selfref);
+    w->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+static void fswatch_close(struct fswatch *w)
+{
+    if (w->closed) {
+        return;
+    }
+    w->closed = 1;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->evref);
+    w->evref = LUA_NOREF;
+    uv_close((uv_handle_t *)&w->h, on_fswatch_closed);
+}
+
+/* Synchronous close for the start-failure path: the close-finished
+ * callback only runs when the loop turns, and a caller who just caught
+ * this throw may never run it again — the userdata would dangle in the
+ * closing queue past its own death. Close without a callback and finish
+ * the unwinding here, exactly what on_fswatch_closed would have done. */
+static void fswatch_close_now(struct fswatch *w)
+{
+    w->closed = 1;
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->evref);
+    w->evref = LUA_NOREF;
+    uv_close((uv_handle_t *)&w->h, NULL);
+    luaL_unref(w->L, LUA_REGISTRYINDEX, w->selfref);
+    w->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+/* deliver to the retained event callback: (err, filename, event) —
+ * resident, like udp.bind's onMsg */
+static void fswatch_deliver(struct fswatch *w, int errcode,
+                            const char *filename, int events)
+{
+    lua_State *L = w->L;
+    if (w->closed || w->evref == LUA_NOREF) {
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, w->evref);
+    if (errcode != 0) {
+        lua_pushstring(L, uv_strerror(errcode));
+        lua_pushnil(L);
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        if (filename) {
+            lua_pushstring(L, filename);
+        } else {
+            lua_pushnil(L);        /* filename is best-effort */
+        }
+        if (events & UV_RENAME) {
+            lua_pushliteral(L, "rename");
+        } else {
+            lua_pushliteral(L, "change");
+        }
+    }
+    if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: fs callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+static void on_fs_event(uv_fs_event_t *h, const char *filename, int events,
+                        int status)
+{
+    struct fswatch *w = (struct fswatch *)h;
+    if (status < 0) {
+        fswatch_deliver(w, status, NULL, 0);
+        return;
+    }
+    fswatch_deliver(w, 0, filename, events);
+}
+
+/* fs.watch(path, onEvent) -> watcher */
+static int l_fs_watch(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fswatch *w = lua_newuserdata(L, sizeof(*w));
+    memset(w, 0, sizeof(*w));
+    w->L = L;
+    w->evref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.fswatch");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    w->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    uv_fs_event_init(&g_loop, &w->h);
+    w->evref = pin_cb(L, 2);
+    keepalive_open();
+    int rc = uv_fs_event_start(&w->h, on_fs_event, path, 0);
+    if (rc != 0) {
+        fswatch_close_now(w);
+        return luaL_error(L, "loop.fs: watch failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+/* watcher:close() — idempotent */
+static int l_fswatch_close(lua_State *L)
+{
+    struct fswatch *w = luaL_checkudata(L, 1, "loop.fswatch");
+    fswatch_close(w);
+    return 0;
+}
+
+static int fswatch_tostring(lua_State *L)
+{
+    struct fswatch *w = luaL_checkudata(L, 1, "loop.fswatch");
+    lua_pushfstring(L, "loop.fswatch(%s): %p",
+                    w->closed ? "closed" : "open", (void *)w);
+    return 1;
+}
+
+static const luaL_Reg fswatch_funcs[] = {
+    { "close", l_fswatch_close },
     { NULL, NULL },
 };
 
@@ -2174,6 +2356,13 @@ int luaopen_luna_loop(lua_State *L)
         luaL_newlib(L, udpsock_funcs);
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, udpsock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.fswatch")) {
+        luaL_newlib(L, fswatch_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, fswatch_tostring);
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);

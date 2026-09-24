@@ -71,6 +71,36 @@ loop.run()
 - **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成;
 - **readdir 底层是 `uv_fs_scandir`**:一次线程池调用列出全部条目,名字在交付前拷入 Lua,列表由 libuv 自行回收。
 
+### fs.watch:监听目录变化
+
+`fs.watch` 是 `loop.fs` 的观察面:盯着一个目录,文件建立、改动、改名、删除都以事件交付——Linux 上是 inotify 的直接接线:
+
+```lua
+local fs = require("loop").fs
+
+local w                       -- 拆开声明:回调里读 w(见 net 的作用域提醒)
+w = fs.watch("/tmp/log", function(err, filename, event)
+    if err then print(err) return end
+    print(event, filename)    -- rename	note.txt
+end)
+
+loop.setTimeout(function() w:close() end, 5000)
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `fs.watch(path, onEvent)` | 监听目录 `path`(监听单文件不保证平台一致,目录是共同语义);路径不存在**同步抛错**;返回 watcher |
+| `watcher:close()` | 幂等关闭;关闭后不再交付,打开的 watcher 撑着循环 |
+
+行为约定:
+
+- **事件回调常驻**:`onEvent(err, filename, event)` 引用由实现持有,像 `udp.bind` 的收包回调;`event` 是 `"rename"`(建立/改名/删除)或 `"change"`(内容/属性);
+- **事件是合并的**:内核侧相邻变化会合成一次交付,`filename` 尽力而为(某些事件为 nil)——把它当提示,不当事实;要真相就 `fs.stat`;
+- **不是递归的**:只监听目录本身,子目录内部的变化不上报——要递归就逐层 `fs.watch`;
+- **watch 不保证送达**:进程崩溃前的最后一批变化、watch 建立之前的变化,一概不知——它与 tail/同步扫描是互补而非替代;
+- **监视的删除以错误出场**:被监听的目录本身被删,`onEvent(err, ...)` 收到错误,watcher 随之失效。
+
 ## loop.net:异步套接字
 
 `loop.net` 是循环的第三块:流式套接字,客户端与服务端一对入口 × 两种传输(TCP / unix domain),同一套"回调首参"约定。

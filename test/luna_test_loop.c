@@ -775,16 +775,19 @@ static void test_signal_close_stops_delivery(void **state)
 static void test_dns_lookup_resolves_localhost(void **state)
 {
     (void)state;
-    /* /etc/hosts names resolve on the threadpool and the first v4
-     * address comes back as a printable string */
+    /* /etc/hosts names resolve on the threadpool; lookup promises the
+     * system's first address, which for localhost is 127.0.0.1 here
+     * but ::1 on runners where glibc orders v6 first (RFC 6724) —
+     * pin "resolves to a loopback address", not the family */
     assert_string_equal(eval_string(
         "local loop = loop or require('loop')\n"
         "out = 'none'\n"
         "loop.dns.lookup('localhost', function(e, addr)\n"
-        "  out = tostring(e == nil) .. ':' .. tostring(addr)\n"
+        "  local ok = addr == '127.0.0.1' or addr == '::1'\n"
+        "  out = tostring(e == nil) .. ':' .. tostring(ok)\n"
         "end)\n"
         "assert(loop.run())\n"
-        "return out"), "true:127.0.0.1");
+        "return out"), "true:true");
 }
 
 static void test_dns_lookup_of_a_missing_host_yields_error(void **state)

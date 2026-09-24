@@ -49,7 +49,12 @@ function serve.start()
     local path = serve.path_for(kernel.pid())
     local srv = socket_unix()
     os.remove(path) -- stale socket from a dead predecessor
+    -- create-owner-only: tighten the umask around bind so the socket
+    -- file never exists wider than 0600 (0777 &~ 077); the chmod below
+    -- stays as belt-and-suspenders for systems that ignore umask here
+    local oldmask = kernel.umask(tonumber("077", 8))
     local okb, err = srv:bind(path)
+    kernel.umask(oldmask)
     if not okb then
         return nil, err
     end

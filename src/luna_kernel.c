@@ -374,6 +374,24 @@ static int k_colors(lua_State *L)
     return 1;
 }
 
+/* kernel.umask([mask]) -> previous mask: sets the process file-mode
+ * creation mask (integer, e.g. tonumber("077", 8) = 0600-created files).
+ * POSIX umask has no query-only mode; serve.start() tightens it around
+ * socket bind so the attach socket file is owner-only from the first
+ * instant, then restores the previous mask. */
+static int k_umask(lua_State *L)
+{
+#ifndef _WIN32
+    mode_t old = umask((mode_t)luaL_optinteger(L, 1, 0077));
+    lua_pushinteger(L, (lua_Integer)old);
+    return 1;
+#else
+    (void)L;
+    lua_pushinteger(L, 0);
+    return 1;
+#endif
+}
+
 /* kernel.version() -> string */
 static int k_version(lua_State *L)
 {
@@ -393,6 +411,7 @@ static const luaL_Reg kernel_funcs[] = {
     { "pid", k_pid },
     { "wake", k_wake },
     { "chmod", k_chmod },
+    { "umask", k_umask },
     { "millis", k_millis },
     { "tty", k_tty },
     { "colors", k_colors },

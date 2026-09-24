@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -118,6 +119,10 @@ static void test_socket_file_created(void **state)
                             "return tostring(os.rename(S.path_for(kernel.pid()),"
                             " S.path_for(kernel.pid())))"),
                         "true");
+    /* and it is owner-only from creation: the umask wraps the bind */
+    struct stat st;
+    assert_int_equal(stat(expected, &st), 0);
+    assert_int_equal(st.st_mode & 0777, 0600);
 }
 
 static void test_statement_gets_nil_reply(void **state)

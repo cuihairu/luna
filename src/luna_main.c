@@ -37,7 +37,8 @@ int luaopen__openssl_x509_csr(lua_State *L);
 int luaopen__openssl_x509_crl(lua_State *L);
 int luaopen__openssl_x509_chain(lua_State *L);
 int luaopen__openssl_x509_store(lua_State *L);
-int luaopen__openssl_x509_store_context(lua_State *L);
+/* no luaopen__openssl_x509_store_context: upstream luaossl wraps that
+ * whole module in #if 0, so the symbol does not exist in the archive */
 int luaopen__openssl_pkcs12(lua_State *L);
 int luaopen__openssl_ssl_context(lua_State *L);
 int luaopen__openssl_ssl(lua_State *L);
@@ -187,7 +188,7 @@ static void register_c_modules(lua_State *L)
         { "_openssl.x509.crl", luaopen__openssl_x509_crl },
         { "_openssl.x509.chain", luaopen__openssl_x509_chain },
         { "_openssl.x509.store", luaopen__openssl_x509_store },
-        { "_openssl.x509.store_context", luaopen__openssl_x509_store_context },
+        /* x509.store_context: disabled upstream (luaossl #if 0) */
         { "_openssl.pkcs12", luaopen__openssl_pkcs12 },
         { "_openssl.ssl.context", luaopen__openssl_ssl_context },
         { "_openssl.ssl", luaopen__openssl_ssl },

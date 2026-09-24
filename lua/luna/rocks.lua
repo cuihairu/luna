@@ -135,6 +135,21 @@ local function vendor_dir()
     return env and (env ~= "" and env or nil) or nil
 end
 
+-- LuaRocks refuses to run without a Lua interpreter (its
+-- cfg.variables.LUA — "Could not find Lua 5.5 in PATH"). luna can't
+-- impersonate one (-e echoes session-style), so CMake also builds the
+-- standalone interpreter from the same vendored sources and we pass it
+-- as a luarocks cmdline variable — which also beats whatever a random
+-- machine happens to have in PATH.
+local function lua_host()
+    local ok_kernel, kernel = pcall(require, "kernel")
+    if ok_kernel and type(kernel.lua_host) == "string"
+        and is_file(kernel.lua_host) then
+        return kernel.lua_host
+    end
+    return nil
+end
+
 local warned_vendor = false
 
 -- Run one luarocks command in-process; returns its (intercepted) exit
@@ -186,10 +201,19 @@ local function run_luarocks(argv)
 end
 
 -- luarocks global flags every call needs: pin the Lua version so cfg
--- never has to guess, and pin the project tree.
+-- never has to guess, pin the project tree, and pin the interpreter
+-- (an luarocks `NAME=VALUE` cmdline variable, applied after cfg.init —
+-- before its own "no interpreter" gate).
 local function run(tree, argv)
-    return run_luarocks({ "--lua-version", LUA_VERSION, "--tree", tree,
-                          table.unpack(argv, 1, #argv) })
+    local args = { "--lua-version", LUA_VERSION, "--tree", tree }
+    local host = lua_host()
+    if host then
+        args[#args + 1] = "LUA=" .. host
+    end
+    for i = 1, #argv do
+        args[#args + 1] = argv[i]
+    end
+    return run_luarocks(args)
 end
 
 -- run + abort the command on a nonzero luarocks status, so a failed

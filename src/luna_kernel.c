@@ -436,6 +436,13 @@ int luaopen_luna_kernel(lua_State *L)
     lua_pushstring(L, LUNA_VENDOR_DIR);
     lua_setfield(L, -2, "vendor_dir");
 #endif
+#ifdef LUNA_LUA_HOST
+    /* standalone `lua` interpreter built from the same vendored
+     * sources: LuaRocks insists on a real interpreter in PATH (its
+     * cfg.variables.LUA); luna itself can't impersonate one */
+    lua_pushstring(L, LUNA_LUA_HOST);
+    lua_setfield(L, -2, "lua_host");
+#endif
 
     /* print() routes through the funnel from now on */
     lua_pushcfunction(L, luna_print);

@@ -179,10 +179,21 @@ file(COPY "${PROJECT_SOURCE_DIR}/deps/luarocks/src"
 # one src/?.lua path element resolves both the core (luarocks/...) and
 # everything vendored inside it (luarocks/vendor/argparse, dkjson,
 # compat53) — the release tree keeps them under src/
-# on the kernel target: that is the translation unit that publishes it
-# to Lua as kernel.vendor_dir
+#
+# luarocks also insists on a real `lua` interpreter (its
+# cfg.variables.LUA): build the standalone one from the same vendored
+# sources, so `luna install` works on machines with no system lua.
+add_executable(lua_host ${LUA_CORE_SOURCES} "${PROJECT_SOURCE_DIR}/deps/lua/lua.c")
+set_target_properties(lua_host PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/luna_vendor/bin"
+        OUTPUT_NAME lua
+        LINKER_LANGUAGE CXX)
+target_link_libraries(lua_host PRIVATE lualib)
+# on the kernel target: that is the translation unit that publishes
+# both paths to Lua as kernel.vendor_dir / kernel.lua_host
 target_compile_definitions(luna_kernel PUBLIC
-    LUNA_VENDOR_DIR="${LUNA_VENDOR_DIR}")
+    LUNA_VENDOR_DIR="${LUNA_VENDOR_DIR}"
+    LUNA_LUA_HOST="${CMAKE_BINARY_DIR}/luna_vendor/bin/lua")
 
 # bundled modules: argparse is vendored as a submodule and staged into
 # the build tree under luna_modules/ so require "argparse" resolves the

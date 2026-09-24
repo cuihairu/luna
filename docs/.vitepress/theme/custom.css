@@ -1,0 +1,40 @@
+/* luna palette, warm forest:
+ *   bark   #7a4e20  headings accents, hero name
+ *   forest #284331  primary brand (links, buttons)
+ *   moss   #6f7f49  hover / secondary
+ *   cream  #fff9eb  page background
+ */
+:root {
+  --vp-c-brand-1: #284331;
+  --vp-c-brand-2: #6f7f49;
+  --vp-c-brand-3: #7a4e20;
+  --vp-c-brand-soft: rgba(111, 127, 73, 0.14);
+
+  --vp-c-bg: #fff9eb;
+  --vp-c-bg-alt: #f7f0dd;
+  --vp-c-bg-soft: #f4ecd6;
+
+  --vp-button-brand-bg: #284331;
+  --vp-button-brand-hover-bg: #6f7f49;
+  --vp-button-brand-active-bg: #7a4e20;
+
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    #7a4e20 20%,
+    #284331 60%,
+    #6f7f49 95%
+  );
+
+  --vp-custom-outline: #6f7f49;
+}
+
+/* keep the cream from washing out in dark mode: dark keeps its own
+ * background, only brand accents persist */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --vp-c-brand-1: #a9c48f;
+    --vp-c-brand-2: #6f7f49;
+    --vp-c-brand-3: #c89b62;
+  }
+}

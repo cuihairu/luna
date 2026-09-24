@@ -17,6 +17,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <uv.h>
 
@@ -80,13 +81,13 @@ static void box_call(struct loopbox *box)
  * registry reference is what keeps the userdata alive until then. When
  * the last handle goes, the prepare hook stops with it and an idle
  * uv_run('default') returns. */
+static void keepalive_open(void);
+static void keepalive_close(void);
+
 static void on_closed(uv_handle_t *handle)
 {
     struct loopbox *box = box_of(handle);
-    g_user_handles--;
-    if (g_user_handles == 0 && g_prep_inited) {
-        uv_prepare_stop(&g_prep);
-    }
+    keepalive_close();
     luaL_unref(box->L, LUA_REGISTRYINDEX, box->selfref);
 }
 
@@ -153,13 +154,7 @@ static struct loopbox *box_new(lua_State *L, int kind)
     lua_setmetatable(L, -2);
     lua_pushvalue(L, -1);
     box->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
-    if (!g_prep_inited) {
-        uv_prepare_init(&g_loop, &g_prep);
-        g_prep_inited = 1;
-    }
-    if (++g_user_handles > 0) {
-        uv_prepare_start(&g_prep, on_prepare);
-    }
+    keepalive_open();
     return box;
 }
 
@@ -297,6 +292,281 @@ static const luaL_Reg loop_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- async file IO (loop.fs) ----------------------------------------------
+ *
+ * Node-shaped: readFile(path, cb(err, data)), writeFile(path, data,
+ * cb(err)), stat(path, cb(err, st)). The actual IO runs on libuv's
+ * threadpool; completion callbacks are delivered on the loop thread,
+ * so Lua is only ever touched here. Each operation pins its callback
+ * in the registry until it finishes — and counts as a live user handle,
+ * so the loop stays keep-alive while any IO is in flight. */
+
+#include <fcntl.h>
+
+enum { FS_READ, FS_WRITE, FS_STAT };
+
+struct fsop {
+    uv_fs_t req;       /* first member: fsop == (struct fsop *)req */
+    lua_State *L;
+    int cbref;         /* registry -> the user callback */
+    int kind;
+    int errcode;       /* failure seen mid-chain, surfaced at the end */
+    int fd;            /* -1 while closed */
+    char *data;        /* writeFile payload / readFile buffer */
+    size_t size;
+    size_t have;       /* readFile: bytes actually read */
+};
+
+/* keep-alive bookkeeping shared with timers/immediates */
+static void keepalive_open(void)
+{
+    if (!g_prep_inited) {
+        uv_prepare_init(&g_loop, &g_prep);
+        g_prep_inited = 1;
+    }
+    if (++g_user_handles > 0) {
+        uv_prepare_start(&g_prep, on_prepare);
+    }
+}
+
+static void keepalive_close(void)
+{
+    g_user_handles--;
+    if (g_user_handles == 0 && g_prep_inited) {
+        uv_prepare_stop(&g_prep);
+    }
+}
+
+/* queue an operation: pin the callback so it outlives this call */
+static struct fsop *fsop_new(lua_State *L, int cb_idx, int kind)
+{
+    struct fsop *op = malloc(sizeof(*op));
+    memset(op, 0, sizeof(*op));
+    op->L = L;
+    op->kind = kind;
+    op->fd = -1;
+    lua_pushvalue(L, cb_idx);
+    op->cbref = luaL_ref(L, LUA_REGISTRYINDEX);
+    lua_pushlightuserdata(L, op);
+    lua_pushvalue(L, cb_idx);
+    lua_rawset(L, LUA_REGISTRYINDEX); /* registry[op] = cb (the pin) */
+    keepalive_open();
+    return op;
+}
+
+static void fsop_free(struct fsop *op)
+{
+    if (op->data) {
+        free(op->data);
+    }
+    uv_fs_req_cleanup(&op->req);
+    lua_pushlightuserdata(op->L, op);
+    lua_pushnil(op->L);
+    lua_rawset(op->L, LUA_REGISTRYINDEX); /* drop the pin */
+    free(op);
+}
+
+/* Deliver cb(err, value) on the loop thread; a raising callback is
+ * reported and dropped, like any other loop callback. */
+static void fs_finish(struct fsop *op)
+{
+    lua_State *L = op->L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, op->cbref);
+    if (op->errcode != 0) {
+        lua_pushstring(L, uv_strerror(op->errcode));
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        if (op->kind == FS_READ) {
+            lua_pushlstring(L, op->data ? op->data : "", op->have);
+        } else if (op->kind == FS_STAT) {
+            lua_createtable(L, 0, 3);
+            lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_size);
+            lua_setfield(L, -2, "size");
+            lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mtime);
+            lua_setfield(L, -2, "mtime");
+            lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mode);
+            lua_setfield(L, -2, "mode");
+        } else {
+            lua_pushnil(L); /* writeFile: pad to two args */
+        }
+    }
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: fs callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+    keepalive_close();
+    fsop_free(op);
+}
+
+static void fs_done(uv_fs_t *req);
+
+/* A mid-chain failure closes the fd first (reusing the req), then the
+ * close callback lands in fs_done which reports the saved errcode. */
+static void fs_fail(struct fsop *op)
+{
+    op->errcode = (int)op->req.result;
+    if (op->fd >= 0) {
+        int fd = op->fd;
+        op->fd = -1;
+        uv_fs_req_cleanup(&op->req);
+        uv_fs_close(&g_loop, &op->req, fd, fs_done);
+        return;
+    }
+    fs_finish(op);
+}
+
+/* the chain's last stage: fd already closed (or never opened) */
+static void fs_done(uv_fs_t *req)
+{
+    fs_finish((struct fsop *)req);
+}
+
+static void fs_read_read(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    op->have = (size_t)req->result;
+    int fd = op->fd;
+    op->fd = -1;
+    uv_fs_req_cleanup(req);
+    uv_fs_close(&g_loop, req, fd, fs_done);
+}
+
+static void fs_read_stat(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    off_t size = req->statbuf.st_size;
+    op->size = (size_t)size;
+    op->data = malloc(op->size ? op->size : 1);
+    if (!op->data) {
+        op->errcode = UV_ENOMEM;
+        int fd = op->fd;
+        op->fd = -1;
+        uv_fs_req_cleanup(req);
+        uv_fs_close(&g_loop, req, fd, fs_done);
+        return;
+    }
+    uv_buf_t buf = uv_buf_init(op->data, (unsigned)op->size);
+    uv_fs_req_cleanup(req);
+    uv_fs_read(&g_loop, req, op->fd, &buf, 1, 0, fs_read_read);
+}
+
+static void fs_read_open(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    op->fd = (int)req->result;
+    uv_fs_req_cleanup(req);
+    uv_fs_fstat(&g_loop, req, op->fd, fs_read_stat);
+}
+
+static void fs_write_write(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    op->have += (size_t)req->result;
+    if (op->have < op->size) { /* partial write: continue */
+        uv_buf_t buf = uv_buf_init(op->data + op->have,
+                                   (unsigned)(op->size - op->have));
+        uv_fs_req_cleanup(req);
+        uv_fs_write(&g_loop, req, op->fd, &buf, 1, -1, fs_write_write);
+        return;
+    }
+    int fd = op->fd;
+    op->fd = -1;
+    uv_fs_req_cleanup(req);
+    uv_fs_close(&g_loop, req, fd, fs_done);
+}
+
+static void fs_write_open(uv_fs_t *req)
+{
+    struct fsop *op = (struct fsop *)req;
+    if (req->result < 0) {
+        fs_fail(op);
+        return;
+    }
+    op->fd = (int)req->result;
+    uv_buf_t buf = uv_buf_init(op->data, (unsigned)op->size);
+    uv_fs_req_cleanup(req);
+    uv_fs_write(&g_loop, req, op->fd, &buf, 1, -1, fs_write_write);
+}
+
+static void fs_stat_stat(uv_fs_t *req)
+{
+    /* statbuf survives uv_fs_req_cleanup? it does not: copy what we
+     * report before finishing — but fs_finish reads op->req.statbuf, so
+     * just finish without cleanup order worries (fsop_free cleans up) */
+    fs_finish((struct fsop *)req);
+}
+
+/* loop.fs.readFile(path, cb) */
+static int l_fs_read_file(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_READ);
+    uv_fs_open(&g_loop, &op->req, path, O_RDONLY, 0, fs_read_open);
+    return 0;
+}
+
+/* loop.fs.writeFile(path, data, cb) */
+static int l_fs_write_file(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    size_t len;
+    const char *data = luaL_checklstring(L, 2, &len);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 3, FS_WRITE);
+    op->size = len;
+    op->data = malloc(len ? len : 1);
+    if (!op->data) {
+        lua_pushlightuserdata(L, op);
+        lua_pushnil(L);
+        lua_rawset(L, LUA_REGISTRYINDEX);
+        luaL_unref(L, LUA_REGISTRYINDEX, op->cbref);
+        keepalive_close();
+        free(op);
+        return luaL_error(L, "loop.fs: out of memory");
+    }
+    memcpy(op->data, data, len);
+    uv_fs_open(&g_loop, &op->req, path,
+               O_WRONLY | O_CREAT | O_TRUNC, 0644, fs_write_open);
+    return 0;
+}
+
+/* loop.fs.stat(path, cb) -> cb(err, {size=, mtime=, mode=}) */
+static int l_fs_stat(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct fsop *op = fsop_new(L, 2, FS_STAT);
+    uv_fs_stat(&g_loop, &op->req, path, fs_stat_stat);
+    return 0;
+}
+
+static const luaL_Reg fs_funcs[] = {
+    { "readFile", l_fs_read_file },
+    { "writeFile", l_fs_write_file },
+    { "stat", l_fs_stat },
+    { NULL, NULL },
+};
+
 int luaopen_luna_loop(lua_State *L)
 {
     if (!g_loop_ready) {
@@ -311,5 +581,7 @@ int luaopen_luna_loop(lua_State *L)
     }
     lua_pop(L, 1);
     luaL_newlib(L, loop_funcs);
+    luaL_newlib(L, fs_funcs);
+    lua_setfield(L, -2, "fs");
     return 1;
 }

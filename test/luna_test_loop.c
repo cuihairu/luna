@@ -1,5 +1,6 @@
 /* luna_test_loop.c — the opt-in event loop: timers, immediates, keep-
- * alive semantics, the prepare hook's serve poll, and ^C interruption.
+ * alive semantics, the prepare hook's serve poll, ^C interruption, and
+ * the loop.fs async file operations.
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -157,6 +158,72 @@ static void test_interrupt_stops_the_run(void **state)
         "false,true");
 }
 
+static void test_fs_write_then_read_roundtrip(void **state)
+{
+    (void)state;
+    /* the nested readFile starts inside the write callback: the
+     * keep-alive count must survive dipping back to zero between ops */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-test.txt', 'payload', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.readFile('/tmp/luna-loop-fs-test.txt', function(e2, data)\n"
+        "    out = tostring(e2 == nil) .. ':' .. tostring(data)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:payload");
+}
+
+static void test_fs_read_of_a_missing_file_yields_error(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.readFile('/tmp/luna-loop-fs-no-such-file', function(e, data)\n"
+        "  out = tostring(e ~= nil) .. ',' .. tostring(data)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true,nil");
+}
+
+static void test_fs_stat_reports_size(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-test.txt', '12345', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.stat('/tmp/luna-loop-fs-test.txt', function(e2, st)\n"
+        "    out = tostring(e2 == nil) .. ':' .. tostring(st.size)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:5");
+}
+
+static void test_fs_write_of_empty_data_roundtrips(void **state)
+{
+    (void)state;
+    /* regression: writeFile's success path once left the pcall one
+     * argument short, so the call frame landed on stack garbage —
+     * the empty write is the smallest such call */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-fs-test.txt', '', function(e)\n"
+        "  assert(e == nil, e)\n"
+        "  fs.readFile('/tmp/luna-loop-fs-test.txt', function(e2, data)\n"
+        "    out = tostring(e2 == nil) .. ':' .. tostring(data == '')\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:true");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -168,6 +235,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_stop_ends_the_run_handles_stay_scheduled, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_prepare_hook_steps_serve, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_interrupt_stops_the_run, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_write_then_read_roundtrip, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_read_of_a_missing_file_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_stat_reports_size, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_write_of_empty_data_roundtrips, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

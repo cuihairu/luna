@@ -2251,6 +2251,205 @@ static const luaL_Reg dns_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- system info (loop.os) -------------------------------------------------
+ *
+ * Synchronous: these read the system and return — nothing enters the
+ * loop. They live under loop because libuv is where they come from
+ * (uv_os_homedir and friends), the same face Node calls "os". */
+
+#include <sys/utsname.h>
+
+/* loop.os.home() — $HOME or the passwd entry, via uv_os_homedir */
+static int l_os_home(lua_State *L)
+{
+    char buf[4096];
+    size_t size = sizeof(buf);
+    if (uv_os_homedir(buf, &size) != 0) {
+        return luaL_error(L, "loop.os: cannot determine home directory");
+    }
+    lua_pushlstring(L, buf, size);
+    return 1;
+}
+
+/* loop.os.tmpdir() — $TMPDIR or /tmp, via uv_os_tmpdir */
+static int l_os_tmpdir(lua_State *L)
+{
+    char buf[4096];
+    size_t size = sizeof(buf);
+    if (uv_os_tmpdir(buf, &size) != 0) {
+        return luaL_error(L, "loop.os: cannot determine temp directory");
+    }
+    lua_pushlstring(L, buf, size);
+    return 1;
+}
+
+/* loop.os.hostname() */
+static int l_os_hostname(lua_State *L)
+{
+    char buf[264]; /* libuv's UV_MAXHOSTNAMESIZE without the ifdef */
+    size_t size = sizeof(buf);
+    if (uv_os_gethostname(buf, &size) != 0) {
+        return luaL_error(L, "loop.os: cannot determine hostname");
+    }
+    lua_pushlstring(L, buf, size);
+    return 1;
+}
+
+/* loop.os.type() — the kernel name ("Linux"), like Node's os.type */
+static int l_os_type(lua_State *L)
+{
+    struct utsname un;
+    if (uname(&un) != 0) {
+        return luaL_error(L, "loop.os: uname failed");
+    }
+    lua_pushstring(L, un.sysname);
+    return 1;
+}
+
+/* loop.os.uptime() — seconds the system has been up */
+static int l_os_uptime(lua_State *L)
+{
+    double up = 0;
+    if (uv_uptime(&up) != 0) {
+        return luaL_error(L, "loop.os: cannot read uptime");
+    }
+    lua_pushnumber(L, up);
+    return 1;
+}
+
+/* loop.os.loadavg() — the three load numbers; on kernels without
+ * load average they come back as zeros (same as Node) */
+static int l_os_loadavg(lua_State *L)
+{
+    double avg[3];
+    uv_loadavg(avg);
+    lua_createtable(L, 3, 0);
+    for (int i = 0; i < 3; i++) {
+        lua_pushnumber(L, avg[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+/* loop.os.freemem() / loop.os.totalmem() — bytes */
+static int l_os_freemem(lua_State *L)
+{
+    lua_pushinteger(L, (lua_Integer)uv_get_free_memory());
+    return 1;
+}
+
+static int l_os_totalmem(lua_State *L)
+{
+    lua_pushinteger(L, (lua_Integer)uv_get_total_memory());
+    return 1;
+}
+
+/* loop.os.cpus() — one table per logical CPU: model, speed (MHz),
+ * times {user, nice, sys, idle, irq} in milliseconds */
+static int l_os_cpus(lua_State *L)
+{
+    uv_cpu_info_t *infos;
+    int count;
+    if (uv_cpu_info(&infos, &count) != 0) {
+        return luaL_error(L, "loop.os: cannot read cpu info");
+    }
+    lua_createtable(L, count, 0);
+    for (int i = 0; i < count; i++) {
+        lua_createtable(L, 0, 4);
+        lua_pushstring(L, infos[i].model);
+        lua_setfield(L, -2, "model");
+        lua_pushinteger(L, infos[i].speed);
+        lua_setfield(L, -2, "speed");
+        lua_createtable(L, 0, 5);
+        lua_pushinteger(L, (lua_Integer)infos[i].cpu_times.user);
+        lua_setfield(L, -2, "user");
+        lua_pushinteger(L, (lua_Integer)infos[i].cpu_times.nice);
+        lua_setfield(L, -2, "nice");
+        lua_pushinteger(L, (lua_Integer)infos[i].cpu_times.sys);
+        lua_setfield(L, -2, "sys");
+        lua_pushinteger(L, (lua_Integer)infos[i].cpu_times.idle);
+        lua_setfield(L, -2, "idle");
+        lua_pushinteger(L, (lua_Integer)infos[i].cpu_times.irq);
+        lua_setfield(L, -2, "irq");
+        lua_setfield(L, -2, "times");
+        lua_rawseti(L, -2, i + 1);
+    }
+    uv_free_cpu_info(infos, count);
+    return 1;
+}
+
+/* loop.os.networkInterfaces() — {name = {{address=, family=,
+ * mac=, internal=}, ...}}: per-name arrays, one entry per address,
+ * Node's shape. The family rides in the union's first member: both
+ * sockaddr flavors keep their family tag at offset 0. */
+static int l_os_network_interfaces(lua_State *L)
+{
+    uv_interface_address_t *ifs;
+    int count;
+    if (uv_interface_addresses(&ifs, &count) != 0) {
+        return luaL_error(L, "loop.os: cannot read interface addresses");
+    }
+    lua_createtable(L, 0, 8); /* result, keyed by interface name */
+    for (int i = 0; i < count; i++) {
+        /* find this interface's array, creating it on first sight */
+        lua_pushstring(L, ifs[i].name);
+        lua_rawget(L, -2);
+        if (lua_isnil(L, -1)) {
+            lua_pop(L, 1);
+            lua_createtable(L, 2, 0); /* the per-name array */
+            /* key and value in one move: result[name] = array,
+             * leaving the array on top for the entry below */
+            lua_pushstring(L, ifs[i].name);
+            lua_pushvalue(L, -2);
+            lua_rawset(L, -4);
+        }
+        int arr = lua_gettop(L); /* the per-name array */
+        lua_createtable(L, 0, 4); /* one address entry */
+        char ip[64];
+        if (ifs[i].address.address4.sin_family == AF_INET6) {
+            uv_ip6_name(&ifs[i].address.address6, ip, sizeof(ip));
+            lua_pushstring(L, ip);
+            lua_setfield(L, -2, "address");
+            lua_pushliteral(L, "IPv6");
+            lua_setfield(L, -2, "family");
+        } else {
+            uv_ip4_name(&ifs[i].address.address4, ip, sizeof(ip));
+            lua_pushstring(L, ip);
+            lua_setfield(L, -2, "address");
+            lua_pushliteral(L, "IPv4");
+            lua_setfield(L, -2, "family");
+        }
+        char mac[18];
+        snprintf(mac, sizeof(mac), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 ifs[i].phys_addr[0], ifs[i].phys_addr[1],
+                 ifs[i].phys_addr[2], ifs[i].phys_addr[3],
+                 ifs[i].phys_addr[4], ifs[i].phys_addr[5]);
+        lua_pushstring(L, mac);
+        lua_setfield(L, -2, "mac");
+        lua_pushboolean(L, ifs[i].is_internal);
+        lua_setfield(L, -2, "internal");
+        size_t n = lua_rawlen(L, arr);
+        lua_rawseti(L, arr, (lua_Integer)n + 1);
+        lua_pop(L, 1); /* the array; result stays for the next name */
+    }
+    uv_free_interface_addresses(ifs, count);
+    return 1;
+}
+
+static const luaL_Reg os_funcs[] = {
+    { "home", l_os_home },
+    { "tmpdir", l_os_tmpdir },
+    { "hostname", l_os_hostname },
+    { "type", l_os_type },
+    { "uptime", l_os_uptime },
+    { "loadavg", l_os_loadavg },
+    { "freemem", l_os_freemem },
+    { "totalmem", l_os_totalmem },
+    { "cpus", l_os_cpus },
+    { "networkInterfaces", l_os_network_interfaces },
+    { NULL, NULL },
+};
+
 /* -- async child processes (loop.process) ---------------------------------
  *
  * run(cmd, args, [opts], cb): no shell, no PATH games beyond execvp's
@@ -2821,6 +3020,8 @@ int luaopen_luna_loop(lua_State *L)
     lua_setfield(L, -2, "udp");
     luaL_newlib(L, dns_funcs);
     lua_setfield(L, -2, "dns");
+    luaL_newlib(L, os_funcs);
+    lua_setfield(L, -2, "os");
     /* named signal numbers for loop.signal, Linux-standard; SIGKILL and
      * SIGSTOP are listed but the kernel never delivers them */
     static const struct { const char *name; int num; } sig_names[] = {

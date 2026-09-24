@@ -202,6 +202,41 @@ require("loop").run()
 - **错误是字符串**:`uv_strerror` 直出(`name or service not known` 等),与 `loop.fs`/`loop.net` 相同;
 - **reverse 只收数字地址**:传域名进来直接同步抛错——它不是 lookup 的反义糖,是 `getnameinfo` 的直通车。
 
+## loop.os:系统信息(同步面)
+
+`loop.os` 是循环的第八块,也是唯一**同步**的一面:调用即返回,不需要 `loop.run()`——它归在 loop 名下是因为同样出自 libuv(Node 把这面叫 `os`),而不是因为它进循环:
+
+```lua
+local os = require("loop").os
+
+print(os.hostname(), os.type())         -- coding	Linux
+print(os.home())                        -- /home/cui
+print(#os.cpus() .. " cpus")            -- 16 cpus
+for name, addrs in pairs(os.networkInterfaces()) do
+    for _, a in ipairs(addrs) do
+        print(name, a.family, a.address, a.internal)
+    end
+end
+```
+
+| 调用 | 返回 |
+| --- | --- |
+| `os.home()` | 用户主目录(`$HOME` 或 passwd 条目) |
+| `os.tmpdir()` | 临时目录(`$TMPDIR` 或 `/tmp`) |
+| `os.hostname()` | 主机名 |
+| `os.type()` | 内核名(`"Linux"`) |
+| `os.uptime()` | 系统运行秒数(number) |
+| `os.loadavg()` | 三个负载值 `{1min, 5min, 15min}` |
+| `os.freemem()` / `os.totalmem()` | 空闲/总物理内存(字节) |
+| `os.cpus()` | 每逻辑 CPU 一项:`{model, speed, times={user, nice, sys, idle, irq}}`,times 单位毫秒 |
+| `os.networkInterfaces()` | 以接口名为键:每个名字下是地址数组,每项 `{address=, family="IPv4"/"IPv6", mac=, internal=}`——Node 的形状 |
+
+行为约定:
+
+- **同步、无回调、无循环**:这些都是读系统状态,瞬间返回;错误(拿不到等)直接抛错而不是走回调——异步契约只属于会等待的操作;
+- **cpus 的 times 是累计值**:从开机起累加,要算利用率取两次采样差值;
+- **networkInterfaces 的 `internal`** 标记回环类接口;`mac` 恒为 `xx:xx:xx:xx:xx:xx` 形状(没有 mac 的虚拟接口为全零)。
+
 ## loop.net:异步套接字
 
 `loop.net` 是循环的第三块:流式套接字,客户端与服务端一对入口 × 两种传输(TCP / unix domain),同一套"回调首参"约定。

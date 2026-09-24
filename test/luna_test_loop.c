@@ -818,6 +818,54 @@ static void test_dns_reverse_maps_loopback(void **state)
         "return out"), "true:localhost");
 }
 
+static void test_os_basics_report_sane_values(void **state)
+{
+    (void)state;
+    /* loop.os is synchronous — no run() needed, values come straight
+     * from libuv's info calls */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local os = loop.os\n"
+        "local la = os.loadavg()\n"
+        "return tostring(os.home():sub(1, 1) == '/') .. ',' ..\n"
+        "  tostring(os.tmpdir():sub(1, 1) == '/') .. ',' ..\n"
+        "  tostring(#os.hostname() > 0) .. ',' ..\n"
+        "  tostring(os.type() == 'Linux') .. ',' ..\n"
+        "  tostring(os.uptime() > 0) .. ',' ..\n"
+        "  tostring(#la == 3) .. ',' ..\n"
+        "  tostring(os.freemem() > 0 and os.totalmem() > 0)"), "true,true,true,true,true,true,true");
+}
+
+static void test_os_cpus_lists_each_with_times(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local cpus = loop.os.cpus()\n"
+        "local c = cpus[1]\n"
+        "return tostring(#cpus > 0) .. ',' ..\n"
+        "  tostring(type(c.model) == 'string') .. ',' ..\n"
+        "  tostring(type(c.speed) == 'number') .. ',' ..\n"
+        "  tostring(type(c.times) == 'table' and c.times.idle >= 0)"), "true,true,true,true");
+}
+
+static void test_os_network_interfaces_lists_loopback(void **state)
+{
+    (void)state;
+    /* the loopback interface is always there; its first address is a
+     * loopback address, and internal is true — family may be either
+     * v4 or v6 depending on ordering */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local ni = loop.os.networkInterfaces()\n"
+        "local lo = ni.lo and ni.lo[1]\n"
+        "if not lo then return 'no-lo' end\n"
+        "local ok = lo.address == '127.0.0.1' or lo.address == '::1'\n"
+        "return tostring(ok) .. ',' .. tostring(lo.internal) .. ',' ..\n"
+        "  tostring(lo.family == 'IPv4' or lo.family == 'IPv6') .. ',' ..\n"
+        "  tostring(#lo.mac == 17)"), "true,true,true,true");
+}
+
 static void test_unref_interval_does_not_keep_loop_alive(void **state)
 {
     (void)state;
@@ -1438,6 +1486,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_dns_lookup_resolves_localhost, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_lookup_of_a_missing_host_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_reverse_maps_loopback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_os_basics_report_sane_values, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_os_cpus_lists_each_with_times, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_os_network_interfaces_lists_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

@@ -103,6 +103,29 @@ static void immediate_kick(void)
     uv_async_send(&g_immediate_kick);
 }
 
+/* handle:ref / handle:unref, shared by every face: an unref'd handle
+ * runs as usual — timers fire, callbacks deliver — but no longer keeps
+ * run() alive, and the loop drains once nothing ref'd remains. Purely
+ * uv-layer bookkeeping: keep-alive counting and the close paths are
+ * untouched, so ref/unref/close interleave in any order, and closed
+ * handles no-op (libuv checks). Every handle struct here starts with
+ * its uv handle — directly, or as the first union member — so one
+ * (uv_handle_t *) cast serves all. The macro is expanded right above
+ * each face's method table. */
+#define LUNA_HANDLE_CTL(face, type, mt)                                  \
+    static int l_##face##_unref(lua_State *L)                            \
+    {                                                                    \
+        type *p = luaL_checkudata(L, 1, mt);                             \
+        uv_unref((uv_handle_t *)p);                                      \
+        return 0;                                                        \
+    }                                                                    \
+    static int l_##face##_ref(lua_State *L)                              \
+    {                                                                    \
+        type *p = luaL_checkudata(L, 1, mt);                             \
+        uv_ref((uv_handle_t *)p);                                        \
+        return 0;                                                        \
+    }
+
 /* box from its handle (the union is the first member) */
 static struct loopbox *box_of(void *handle)
 {
@@ -888,8 +911,12 @@ static int fswatch_tostring(lua_State *L)
     return 1;
 }
 
+LUNA_HANDLE_CTL(fswatch, struct fswatch, "loop.fswatch")
+
 static const luaL_Reg fswatch_funcs[] = {
     { "close", l_fswatch_close },
+    { "unref", l_fswatch_unref },
+    { "ref", l_fswatch_ref },
     { NULL, NULL },
 };
 
@@ -1001,8 +1028,12 @@ static int sigwatch_tostring(lua_State *L)
     return 1;
 }
 
+LUNA_HANDLE_CTL(sigwatch, struct sigwatch, "loop.sigwatch")
+
 static const luaL_Reg sigwatch_funcs[] = {
     { "close", l_sigwatch_close },
+    { "unref", l_sigwatch_unref },
+    { "ref", l_sigwatch_ref },
     { NULL, NULL },
 };
 
@@ -1648,18 +1679,26 @@ static int server_tostring(lua_State *L)
     return 1;
 }
 
+LUNA_HANDLE_CTL(sock, struct sock, "loop.sock")
+
 static const luaL_Reg sock_funcs[] = {
     { "write", l_sock_write },
     { "read", l_sock_read },
     { "shutdown", l_sock_end },
     { "end", l_sock_end },  /* bracket-callable alias: 'end' is a keyword */
     { "close", l_sock_close },
+    { "unref", l_sock_unref },
+    { "ref", l_sock_ref },
     { NULL, NULL },
 };
+
+LUNA_HANDLE_CTL(server, struct lserver, "loop.server")
 
 static const luaL_Reg server_funcs[] = {
     { "close", l_server_close },
     { "port", l_server_port },
+    { "unref", l_server_unref },
+    { "ref", l_server_ref },
     { NULL, NULL },
 };
 
@@ -1935,10 +1974,14 @@ static int udpsock_tostring(lua_State *L)
     return 1;
 }
 
+LUNA_HANDLE_CTL(udpsock, struct udpsock, "loop.udpsock")
+
 static const luaL_Reg udpsock_funcs[] = {
     { "send", l_udp_send },
     { "port", l_udp_port },
     { "close", l_udp_close },
+    { "unref", l_udpsock_unref },
+    { "ref", l_udpsock_ref },
     { NULL, NULL },
 };
 
@@ -2419,18 +2462,34 @@ static int l_proc_stderr(lua_State *L)
     return proc_stdio_get(L, pr, pr->errref);
 }
 
+LUNA_HANDLE_CTL(proc, struct proc, "loop.process")
+
 static const luaL_Reg proc_funcs[] = {
     { "pid", l_proc_pid },
     { "kill", l_proc_kill },
     { "stdin", l_proc_stdin },
     { "stdout", l_proc_stdout },
     { "stderr", l_proc_stderr },
+    { "unref", l_proc_unref },
+    { "ref", l_proc_ref },
     { NULL, NULL },
 };
 
 static const luaL_Reg process_funcs[] = {
     { "run", l_process_run },
     { "spawn", l_process_spawn },
+    { NULL, NULL },
+};
+
+/* handle:ref / handle:unref — box's pair and method table live here,
+ * after loopbox; every other face expands the macro right above its own
+ * method table */
+
+LUNA_HANDLE_CTL(box, struct loopbox, "loop.handle")
+
+static const luaL_Reg box_funcs[] = {
+    { "unref", l_box_unref },
+    { "ref", l_box_ref },
     { NULL, NULL },
 };
 
@@ -2443,6 +2502,8 @@ int luaopen_luna_loop(lua_State *L)
         g_loop_ready = 1;
     }
     if (luaL_newmetatable(L, "loop.handle")) {
+        luaL_newlib(L, box_funcs);
+        lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, handle_tostring);
         lua_setfield(L, -2, "__tostring");
     }

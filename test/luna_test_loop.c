@@ -67,6 +67,15 @@ static int setup_loop(void **state)
 static int teardown_loop(void **state)
 {
     (void)state;
+    /* drain pending closes (uv_close finishes only when the loop turns)
+     * while THIS state is still alive: a closing callback touching a
+     * freed VM from the next case's run() is heap corruption */
+    lua_getglobal(L, "loop");
+    lua_getfield(L, -1, "run");
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        lua_pop(L, 1);
+    }
+    lua_pop(L, 1);
     lua_close(L);
     L = NULL;
     return 0;
@@ -637,6 +646,59 @@ static void test_signal_close_stops_delivery(void **state)
         "return out"), "b");
 }
 
+static void test_unref_interval_does_not_keep_loop_alive(void **state)
+{
+    (void)state;
+    /* an unref'd interval runs while the loop turns but does not keep
+     * it alive: run() drains on the ref'd timer and returns */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local iv\n"
+        "iv = loop.setInterval(function() end, 40)\n"
+        "iv:unref()\n"
+        "loop.setTimeout(function()\n"
+        "  loop.clearInterval(iv)\n"
+        "  out = 'drained'\n"
+        "end, 120)\n"
+        "assert(loop.run())\n"
+        "return 'drained'"), "drained");
+}
+
+static void test_unref_server_runs_but_does_not_keep(void **state)
+{
+    (void)state;
+    /* an unref'd server is alive and reachable from a later callback,
+     * yet the loop drains on the ref'd timer alone */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv\n"
+        "srv = net.listen('127.0.0.1', 0, function() end)\n"
+        "srv:unref()\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(srv ~= nil)\n"
+        "  srv:close()\n"
+        "end, 60)\n"
+        "assert(loop.run())\n"
+        "return out"), "true");
+}
+
+static void test_ref_restores_keepalive(void **state)
+{
+    (void)state;
+    /* ref after unref restores the keep-alive: the timer fires and the
+     * loop waits for it */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local t = loop.setTimeout(function() out = 'fired' end, 80)\n"
+        "t:unref()\n"
+        "t:ref()\n"
+        "assert(loop.run())\n"
+        "return out"), "fired");
+}
+
 /* -- net: a one-shot echo server on a real socket --------------------- */
 /* accept one connection, echo one read back, then close both ends —
  * so the client sees its chunk, then EOF */
@@ -1192,6 +1254,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_signal_reserved_refused, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_signal_multiple_watchers_fanout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_signal_close_stops_delivery, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_interval_does_not_keep_loop_alive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_server_runs_but_does_not_keep, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_ref_restores_keepalive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),

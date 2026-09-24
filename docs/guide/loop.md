@@ -25,6 +25,7 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 | `loop.run(mode?)` | `"default"`(默认,跑到空)、`"once"`(一轮,阻塞等就绪)、`"nowait"`(一轮,不阻塞) |
 | `loop.stop()` | 让当前 `run` 尽快返回;句柄保持已调度状态 |
 | `loop.now()` | 循环毫秒时钟(`uv_now`) |
+| `handle:unref()` / `handle:ref()` | 摘掉/恢复句柄的 keep-alive(见下节) |
 
 行为约定:
 
@@ -32,6 +33,34 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 - **keep-alive**:`run("default")` 在最后一个句柄关闭后自然返回;未清除的 interval 会让它永不返回,和 Node 一样;
 - **`^C` 中断**:循环阻塞在 `uv_run` 时,计数钩子看不见信号——prepare 钩子接管:置起的 `^C` 让 `run` 以 `interrupted` 抛错,脚本照常以退出码 130 结束;
 - **attach 仍然可达**:同一 prepare 钩子顺带轮询 attach 套接字——事件循环跑着的进程照常被 `luna --attach` 检查、求值、改状态,`serve.step` 的全部约束不变(只在轮询点到达)。
+
+## handle:unref/ref:谁撑着循环
+
+每个句柄默认**撑着**循环:只要有句柄在,`run("default")` 就不返回。`unref` 把一个句柄从这份账上摘掉——它照常运行(timer 照常到点、回调照常交付),只是**不再独自留住循环**;`ref` 把账加回来:
+
+```lua
+local loop = require("loop")
+
+local iv
+iv = loop.setInterval(function() log_flush() end, 30000)
+iv:unref()                    -- 周期日志不阻止脚本自然结束
+
+loop.run()                    -- 其余句柄清空后即返回,interval 随进程终止
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `handle:unref()` | 句柄继续运行,但不再撑着循环;幂等 |
+| `handle:ref()` | 恢复撑持;幂等 |
+
+适用面覆盖全部句柄:timer/interval/immediate 句柄、`fs.watch` 的 watcher、`loop.signal` 的 watcher、`loop.net` 的 sock 与 server、`loop.udp` 的 sock、`loop.process` 的 proc(以及 `process.spawn` 的三路 stdio sock)。
+
+行为约定:
+
+- **unref 不是暂停**:句柄的运行、回调交付、错误路径一概不变——唯一的变化是 keep-alive 计数不再算它;循环因其他句柄转着的时候,unref'd 的 timer 照常 fire;
+- **这是 Node `unref` 的语义**:定时器、server、watcher 都可以"在,但不留人"——后台周期任务、不关心连接何时来的监听端、看一眼就走的观察者;
+- **清账责任仍在**:unref 只影响循环何时退出,不替你清理——脚本结束前对不再需要的句柄照常 `close`/`clear*`(关着的句柄上调用是安全的空操作);
+- **run 的返回不区分谁撑的**:全 unref 之后 `run("default")` 返回,和"没有句柄"无法区分——要判断"还有活没干完",自己在回调里记状态,别猜循环。
 
 ## loop.fs:异步文件 IO
 
@@ -128,7 +157,7 @@ loop.run()
 行为约定:
 
 - **SIGINT 与 SIGUSR1 拒绝注册**:`^C` 是循环自己的中断键(超时以 `interrupted` 抛错、退出码 130),SIGUSR1 是 attach 的门铃——这两路各有主人,`signal` 同步抛错,别碰;
-- **最后一个 watcher 关闭 = 恢复默认处置**:对同一信号的最后一个 watcher `close()` 之后,libuv 撤销自家处置、恢复内核默认——再来的信号该终止进程就终止进程。想让进程对某信号"免疫",至少留一个 watcher 在;
+- **最后一个 watcher 关闭 = 恢复默认处置**:对同一信号的最后一个 watcher `close()` 之后,libuv 撤销自家处置、恢复内核默认——再来的信号该终止进程就终止进程。想让进程对某信号"免疫",至少留一个 watcher 在——不想让它撑着循环就 `watcher:unref()`(见 [handle:unref/ref](#handlerefref谁撑着循环)):处置仍然装着,交付照常,只是不阻止 `run` 排空;
 - **SIGKILL/SIGSTOP 编号在表里,但内核从不交付**:这两者不可捕获,是 Unix 的规矩;
 - **回调隔离**:回调抛错只打到 stderr,循环继续;信号在循环间隙到达也不会丢——处置已装上,事件由 libuv 排队,下一轮 `run` 交付;
 - **信号不是队列**:同号信号连发,内核不排队(标准信号合并)——回调收到的次数可能少于发送次数,要计数就在回调里自己数。

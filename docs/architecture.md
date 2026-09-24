@@ -136,7 +136,7 @@ Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "lo
 
 keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node。
 
-**底层后端选型**(IOCP 白送、io_uring 为何列 P2、多后端抽象的代价)专文讨论见 [事件循环后端设计](/loop-backend-design)。
+**底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/loop-backend-design)。
 
 先把模块、插件、高亮、内省做扎实——运行时的"骨头"长好了,事件循环才能长在正确的位置。
 

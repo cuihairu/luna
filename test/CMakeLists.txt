@@ -76,3 +76,8 @@ target_compile_definitions(luna_test_serve PRIVATE
         LUNA_BINARY="$<TARGET_FILE:luna>")
 add_test(NAME serve COMMAND luna_test_serve)
 
+
+# Opt-in event loop: timers/immediates, keep-alive, serve poll, ^C
+add_executable(luna_test_loop luna_test_loop.c)
+target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel)
+add_test(NAME loop COMMAND luna_test_loop)

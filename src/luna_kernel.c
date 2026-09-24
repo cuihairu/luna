@@ -38,6 +38,13 @@ void luna_kernel_request_interrupt(void)
     luna_interrupt_flag = 1;
 }
 
+int luna_kernel_take_interrupt(void)
+{
+    int taken = luna_interrupt_flag;
+    luna_interrupt_flag = 0;
+    return taken;
+}
+
 /* Called by the REPL loop when it returns to the prompt: an interrupt
  * that arrived while nothing was running is discarded, bash-style. */
 static int k_clear_interrupt(lua_State *L)

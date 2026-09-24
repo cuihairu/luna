@@ -20,7 +20,8 @@ export default defineConfig({
           { text: '快速上手', link: '/guide/getting-started' },
           { text: 'CLI 与 REPL', link: '/guide/cli-repl' },
           { text: '模块系统', link: '/guide/modules' },
-          { text: '插件开发', link: '/guide/plugins' }
+          { text: '插件开发', link: '/guide/plugins' },
+          { text: '事件循环', link: '/guide/loop' }
         ]
       },
       {

@@ -14,6 +14,12 @@ int luaopen_luna_kernel(lua_State *L);
  * count hook. Call from a SIGINT handler (or directly from tests). */
 void luna_kernel_request_interrupt(void);
 
+/* Reads and clears the pending-interrupt flag. The event loop's prepare
+ * hook uses this to turn a ^C that arrived while uv_run was blocking
+ * into "stop the loop, abort the script" — the count hook cannot see
+ * it there. */
+int luna_kernel_take_interrupt(void);
+
 /* Signal-safe: sets the pending-serve flag. The REPL loop polls it (the
  * attach client sends SIGUSR1 to interrupt the blocked line editor and
  * wake the poll). Call from a SIGUSR1 handler (or directly from tests). */

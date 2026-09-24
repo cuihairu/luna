@@ -102,6 +102,24 @@ target_include_directories(luna_kernel PUBLIC
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_BINARY_DIR}/generated")
 
+# libuv (deps/libuv, v1.44.2): the opt-in event loop behind require
+# "loop" (src/luna_loop.c). Static only — luna stays a single binary.
+set(LIBUV_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(LIBUV_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(LIBUV_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+# libuv declares cmake_minimum_required(3.4); CMake >= 4 refuses to run
+# it as-is. Newer CMake reads this variable, older ones ignore it.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+add_subdirectory("${PROJECT_SOURCE_DIR}/deps/libuv" EXCLUDE_FROM_ALL)
+
+# the loop module: Node-named timers/immediates over uv, with the
+# attach poll and ^C handling wired into the prepare hook
+add_library(luna_loop STATIC src/luna_loop.c src/luna_loop.h)
+target_include_directories(luna_loop PUBLIC
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/deps/libuv/include")
+target_link_libraries(luna_loop PUBLIC uv_a)
+
 # embed the entry plus policy modules into the binary (raw strings)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
@@ -136,7 +154,7 @@ list(APPEND luna_sources
 )
 
 add_executable(luna ${luna_sources})
-target_link_libraries(luna lualib lpeg luna_line luna_kernel
+target_link_libraries(luna lualib lpeg luna_line luna_kernel luna_loop
         lfs luasocket lua_zlib)
 if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna luaossl)

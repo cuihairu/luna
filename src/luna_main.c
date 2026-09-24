@@ -8,6 +8,7 @@
 
 #include "luna_kernel.h"
 #include "luna_line.h"
+#include "luna_loop.h"
 #include "luna_lua.h" /* generated: embedded Lua entry + repl sources */
 
 /* lpeg.c has no lpeg.h; this is its single exported entry point. */
@@ -243,6 +244,8 @@ int main(int argc, char *argv[])
     lua_pop(L, 1); /* registered, resolved on demand via require */
     luaL_requiref(L, "linedit", luaopen_luna_line, 0);
     lua_pop(L, 1);
+    luaL_requiref(L, "loop", luaopen_luna_loop, 0);
+    lua_pop(L, 1); /* opt-in: require "loop", never a global */
 
     register_c_modules(L);
 

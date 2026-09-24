@@ -13,7 +13,14 @@
  * pending ^C; when the last handle closes the hook stops and
  * loop.run('default') falls through — Node's "empty loop exits".
  * A pending ^C stops the run and surfaces as an "interrupted" error,
- * which the entry chunk maps to exit code 130 like a busy script. */
+ * which the entry chunk maps to exit code 130 like a busy script.
+ *
+ * loop.net (first slice, client only): stream sockets with the same
+ * err-first callbacks. connect(host, port) resolves asynchronously
+ * (uv_getaddrinfo) then dials TCP; connectPipe(path) dials a unix
+ * domain socket. A sock offers write/read/end/close; read delivers
+ * cb(nil, chunk) per chunk and cb(nil, nil) at EOF. Each open socket
+ * holds the loop alive until its uv_close lands, like Node. */
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -567,6 +574,387 @@ static const luaL_Reg fs_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- async sockets (loop.net) ---------------------------------------------
+ *
+ * Client-side TCP and unix-domain streams, Node-shaped: connect(host,
+ * port, cb(err, sock)) resolves through uv_getaddrinfo (never a
+ * blocking lookup), connectPipe(path, cb) dials a unix socket. A sock
+ * is a userdata over uv_tcp_t / uv_pipe_t:
+ *
+ *   sock:write(data, cb(err))    flushes, cb optional
+ *   sock:read(cb)                cb(nil, chunk) per chunk, cb(nil, nil)
+ *                                at EOF, cb(err) on error; repeats
+ *   sock:end(cb(err))            half-close (FIN), reads keep working
+ *   sock:close()                 idempotent, drops every callback
+ *
+ * The registry pins the userdata until uv_close completes — an open
+ * socket keeps the loop alive, exactly like a Node handle. Callbacks
+ * run under pcall; a raising one is reported, not fatal. */
+
+enum { SOCK_TCP, SOCK_PIPE };
+
+struct sock {
+    union {
+        uv_tcp_t tcp;    /* first member: same address as the union */
+        uv_pipe_t pipe;
+    } h;
+    int kind;
+    int closed;          /* close() begun: uv_close in flight or done */
+    int connected;
+    int got_eof;         /* a later read() answers (nil, nil) at once */
+    lua_State *L;
+    int selfref;         /* registry -> userdata, dropped on close */
+    int connectref;      /* pending connect callback */
+    int readref;         /* active read callback (streaming) */
+    int endref;          /* pending end() callback */
+    uv_connect_t conn;
+    uv_shutdown_t shut;
+};
+
+static void sock_close(struct sock *s);
+
+/* deliver cb(err, value) and drop the callback reference; returns 1 if
+ * the callback ran. A raising callback is reported, never fatal. */
+static int sock_deliver(struct sock *s, int *cbref, int errcode,
+                        int push_sock, const char *data, size_t len)
+{
+    lua_State *L = s->L;
+    int ref = *cbref;
+    *cbref = LUA_NOREF;
+    if (ref == LUA_NOREF || ref == LUA_REFNIL) {
+        return 0;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    if (errcode != 0) {
+        lua_pushstring(L, uv_strerror(errcode));
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        if (push_sock) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, s->selfref);
+        } else if (data) {
+            lua_pushlstring(L, data, len);
+        } else {
+            lua_pushnil(L); /* write/end: pad to two args */
+        }
+    }
+    luaL_unref(L, LUA_REGISTRYINDEX, ref);
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: net callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+    return 1;
+}
+
+static void on_sock_closed(uv_handle_t *handle)
+{
+    struct sock *s = (struct sock *)handle; /* union is the first member */
+    keepalive_close();
+    luaL_unref(s->L, LUA_REGISTRYINDEX, s->selfref);
+}
+
+static void sock_close(struct sock *s)
+{
+    if (s->closed) {
+        return;
+    }
+    s->closed = 1;
+    luaL_unref(s->L, LUA_REGISTRYINDEX, s->connectref);
+    s->connectref = LUA_NOREF;
+    luaL_unref(s->L, LUA_REGISTRYINDEX, s->readref);
+    s->readref = LUA_NOREF;
+    luaL_unref(s->L, LUA_REGISTRYINDEX, s->endref);
+    s->endref = LUA_NOREF;
+    uv_close((uv_handle_t *)&s->h.tcp, on_sock_closed);
+}
+
+/* -- connect --------------------------------------------------------- */
+
+static void on_connected(uv_connect_t *req, int status)
+{
+    struct sock *s = (struct sock *)req->handle;
+    if (s->closed) {
+        return; /* user closed mid-connect: refs already dropped */
+    }
+    if (status != 0) {
+        sock_deliver(s, &s->connectref, status, 0, NULL, 0);
+        sock_close(s);
+        return;
+    }
+    s->connected = 1;
+    sock_deliver(s, &s->connectref, 0, 1, NULL, 0);
+}
+
+/* malloc'd carrier for the async resolve: ai.data points back at it */
+struct resolver {
+    uv_getaddrinfo_t ai;
+    struct sock *s;
+};
+
+static void on_resolved(uv_getaddrinfo_t *ai, int status, struct addrinfo *res)
+{
+    struct resolver *r = (struct resolver *)ai->data;
+    struct sock *s = r->s;
+    free(r); /* the carrier was only a shuttle into this callback */
+    if (s->closed) {
+        if (res) {
+            uv_freeaddrinfo(res);
+        }
+        return;
+    }
+    if (status != 0) {
+        sock_deliver(s, &s->connectref, status, 0, NULL, 0);
+        sock_close(s);
+        return;
+    }
+    uv_tcp_connect(&s->conn, &s->h.tcp, res->ai_addr, on_connected);
+    uv_freeaddrinfo(res);
+}
+
+/* both dials share this: allocate, pin, keep-alive */
+static struct sock *sock_new(lua_State *L, int kind)
+{
+    struct sock *s = lua_newuserdata(L, sizeof(*s));
+    memset(s, 0, sizeof(*s));
+    s->kind = kind;
+    s->L = L;
+    s->connectref = LUA_NOREF;
+    s->readref = LUA_NOREF;
+    s->endref = LUA_NOREF;
+    luaL_getmetatable(L, "loop.sock");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    s->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    if (kind == SOCK_TCP) {
+        uv_tcp_init(&g_loop, &s->h.tcp);
+    } else {
+        uv_pipe_init(&g_loop, &s->h.pipe, 0);
+    }
+    keepalive_open();
+    return s;
+}
+
+static int pin_cb(lua_State *L, int idx)
+{
+    lua_pushvalue(L, idx);
+    return luaL_ref(L, LUA_REGISTRYINDEX);
+}
+
+/* loop.net.connect(host, port, cb(err, sock)) */
+static int l_net_connect(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, port >= 1 && port <= 65535, 2, "port out of range");
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+    struct sock *s = sock_new(L, SOCK_TCP);
+    s->connectref = pin_cb(L, 3);
+
+    struct resolver *r = malloc(sizeof(*r));
+    if (!r) {
+        return luaL_error(L, "loop.net: out of memory");
+    }
+    r->s = s;
+    r->ai.data = r;
+    char service[8];
+    snprintf(service, sizeof(service), "%d", (int)port);
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    int rc = uv_getaddrinfo(&g_loop, &r->ai, on_resolved, host, service,
+                            &hints);
+    if (rc != 0) {
+        free(r);
+        sock_deliver(s, &s->connectref, rc, 0, NULL, 0);
+        sock_close(s);
+    }
+    return 1; /* the sock userdata */
+}
+
+/* loop.net.connectPipe(path, cb(err, sock)) — unix domain stream */
+static int l_net_connect_pipe(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    struct sock *s = sock_new(L, SOCK_PIPE);
+    s->connectref = pin_cb(L, 2);
+    uv_pipe_connect(&s->conn, &s->h.pipe, path, on_connected);
+    return 1; /* the sock userdata */
+}
+
+/* -- sock methods ----------------------------------------------------- */
+
+/* uv_write needs the payload alive until the callback: one malloc'd
+ * request carries the copy and the optional callback. */
+struct sockwrite {
+    uv_write_t req;
+    lua_State *L;
+    int cbref;
+};
+
+static void on_written(uv_write_t *req, int status)
+{
+    struct sockwrite *w = (struct sockwrite *)req;
+    struct sock *s = (struct sock *)req->handle;
+    lua_State *L = w->L;
+    int cbref = w->cbref;
+    free(w);
+    if (cbref == LUA_NOREF || cbref == LUA_REFNIL) {
+        return;
+    }
+    if (s->closed) {
+        luaL_unref(L, LUA_REGISTRYINDEX, cbref);
+        return;
+    }
+    sock_deliver(s, &cbref, status < 0 ? status : 0, 0, NULL, 0);
+}
+
+/* sock:write(data, cb(err)?) */
+static int l_sock_write(lua_State *L)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    size_t len;
+    const char *data = luaL_checklstring(L, 2, &len);
+    int with_cb = !lua_isnoneornil(L, 3);
+    if (with_cb) {
+        luaL_checktype(L, 3, LUA_TFUNCTION);
+    }
+    luaL_argcheck(L, s->connected && !s->closed, 1, "socket not connected");
+    struct sockwrite *w = malloc(sizeof(*w) + len);
+    if (!w) {
+        return luaL_error(L, "loop.net: out of memory");
+    }
+    w->L = L;
+    w->cbref = with_cb ? pin_cb(L, 3) : LUA_NOREF;
+    char *copy = (char *)(w + 1);
+    memcpy(copy, data, len);
+    uv_buf_t buf = uv_buf_init(copy, (unsigned)len);
+    int rc = uv_write(&w->req, (uv_stream_t *)&s->h.tcp, &buf, 1, on_written);
+    if (rc != 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, w->cbref);
+        free(w);
+        return luaL_error(L, "loop.net: write failed: %s", uv_strerror(rc));
+    }
+    return 0;
+}
+
+static void on_read(uv_stream_t *st, ssize_t n, const uv_buf_t *buf)
+{
+    struct sock *s = (struct sock *)st;
+    if (n < 0) {
+        free(buf->base);
+        uv_read_stop(st);
+        if (s->closed) {
+            return; /* closing: refs already dropped */
+        }
+        s->got_eof = 1;
+        if (n == UV_EOF) {
+            sock_deliver(s, &s->readref, 0, 0, NULL, 0); /* (nil, nil) */
+        } else {
+            sock_deliver(s, &s->readref, (int)n, 0, NULL, 0);
+        }
+        return;
+    }
+    if (n == 0) {
+        free(buf->base); /* nothing read this round, keep going */
+        return;
+    }
+    sock_deliver(s, &s->readref, 0, 0, buf->base, (size_t)n);
+    free(buf->base);
+}
+
+static void on_alloc(uv_handle_t *h, size_t suggested, uv_buf_t *buf)
+{
+    (void)h;
+    buf->base = malloc(suggested ? suggested : 1);
+    buf->len = (unsigned)(suggested ? suggested : 1);
+}
+
+/* sock:read(cb) — cb(nil, chunk) per chunk; cb(nil, nil) at EOF;
+ * cb(err) on error. A second call swaps the callback. */
+static int l_sock_read(lua_State *L)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    luaL_argcheck(L, !s->closed, 1, "socket is closed");
+    luaL_unref(L, LUA_REGISTRYINDEX, s->readref);
+    s->readref = pin_cb(L, 2);
+    if (s->got_eof) {
+        sock_deliver(s, &s->readref, 0, 0, NULL, 0); /* already at EOF */
+        return 0;
+    }
+    if (!s->connected) {
+        return luaL_error(L, "loop.net: socket not connected");
+    }
+    uv_read_start((uv_stream_t *)&s->h.tcp, on_alloc, on_read);
+    return 0;
+}
+
+static void on_shutdown(uv_shutdown_t *req, int status)
+{
+    struct sock *s = (struct sock *)req->data;
+    if (s->closed) {
+        return;
+    }
+    sock_deliver(s, &s->endref, status < 0 ? status : 0, 0, NULL, 0);
+}
+
+/* sock:end(cb(err)?) — half-close: the peer sees EOF, reads keep working */
+static int l_sock_end(lua_State *L)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    int with_cb = !lua_isnoneornil(L, 2);
+    if (with_cb) {
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+    }
+    luaL_argcheck(L, s->connected && !s->closed, 1, "socket not connected");
+    s->endref = with_cb ? pin_cb(L, 2) : LUA_NOREF;
+    s->shut.data = s;
+    int rc = uv_shutdown(&s->shut, (uv_stream_t *)&s->h.tcp, on_shutdown);
+    if (rc != 0) {
+        luaL_unref(L, LUA_REGISTRYINDEX, s->endref);
+        s->endref = LUA_NOREF;
+        return luaL_error(L, "loop.net: end failed: %s", uv_strerror(rc));
+    }
+    return 0;
+}
+
+/* sock:close() — idempotent; open sockets keep the loop alive, so a
+ * finished client must close (Node parity). */
+static int l_sock_close(lua_State *L)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    sock_close(s);
+    return 0;
+}
+
+static int sock_tostring(lua_State *L)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    const char *kind = s->kind == SOCK_PIPE ? "pipe" : "tcp";
+    const char *state = s->closed ? "closed"
+                      : s->connected ? "connected" : "connecting";
+    lua_pushfstring(L, "loop.sock(%s, %s): %p", kind, state, (void *)s);
+    return 1;
+}
+
+static const luaL_Reg sock_funcs[] = {
+    { "write", l_sock_write },
+    { "read", l_sock_read },
+    { "end", l_sock_end },
+    { "close", l_sock_close },
+    { NULL, NULL },
+};
+
+static const luaL_Reg net_funcs[] = {
+    { "connect", l_net_connect },
+    { "connectPipe", l_net_connect_pipe },
+    { NULL, NULL },
+};
+
 int luaopen_luna_loop(lua_State *L)
 {
     if (!g_loop_ready) {
@@ -580,8 +968,17 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.sock")) {
+        luaL_newlib(L, sock_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, sock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     luaL_newlib(L, loop_funcs);
     luaL_newlib(L, fs_funcs);
     lua_setfield(L, -2, "fs");
+    luaL_newlib(L, net_funcs);
+    lua_setfield(L, -2, "net");
     return 1;
 }

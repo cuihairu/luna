@@ -63,3 +63,41 @@ loop.run()
 - **IO 在线程池,回调在循环线程**:大文件读写不阻塞定时器;回调照常经隔离执行,抛错不影响循环;
 - **错误是字符串**:libuv 的 `uv_strerror` 直出(如 `no such file or directory`),与 Node 的 Error 对象相比是刻意简化——Lua 里 `err ~= nil` 判定即可;
 - **嵌套安全**:一个操作的回调里可以再发起下一个操作——keep-alive 计数容许在两个操作之间短暂归零,回调链从 `run()` 内一路接续到全部完成。
+
+## loop.net:异步套接字(客户端)
+
+`loop.net` 是循环的第三块:流式套接字客户端,TCP 与 unix domain 一对入口,同一套"回调首参"约定,同一个 `sock` 对象:
+
+```lua
+local net = require("loop").net
+
+net.connect("localhost", 8080, function(err, sock)
+    assert(err == nil, err)
+    sock:write("ping\n", function(e)
+        assert(e == nil, e)
+        sock:read(function(e2, chunk)
+            if chunk then print(chunk) end
+            sock:close()          -- 打开的 socket 撑着循环,完事必须关
+        end)
+    end)
+end)
+
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `net.connect(host, port, cb)` | 异步 DNS 解析 + TCP 连接;`cb(err, sock)` |
+| `net.connectPipe(path, cb)` | unix domain 流套接字;`cb(err, sock)` |
+| `sock:write(data, cb(err)?)` | 写出载荷,送达后回调(载荷由实现持有到回调落地) |
+| `sock:read(cb)` | 流式读:每块 `cb(nil, chunk)`;对端 EOF 是 `cb(nil, nil)`;出错 `cb(err)`;再次调用即换回调 |
+| `sock:end(cb(err)?)` | 半关闭(FIN):对端读到 EOF,本端仍可继续读 |
+| `sock:close()` | 幂等关闭;打开的 socket 让 `run()` 持续——和 Node 一样,完事必须关 |
+
+行为约定:
+
+- **连接失败走回调**:DNS 失败或拒连从 `cb(err)` 出来,失败的 socket 自行收尾,循环照常排空到自然返回;
+- **EOF 是 `(nil, nil)`**:对端关闭让下一次 `read` 回调拿到 `err=nil, chunk=nil`——用 `chunk == nil` 判结束,语义对齐 Node 流的 end;
+- **半关闭**:`end()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
+- **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused` 等);
+- **首片只做客户端**:监听端(listen/accept)留给后续批次;服务场景今天由 unix socket + attach 体系覆盖。

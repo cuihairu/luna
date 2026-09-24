@@ -79,7 +79,7 @@ add_test(NAME serve COMMAND luna_test_serve)
 
 # Opt-in event loop: timers/immediates, keep-alive, serve poll, ^C
 add_executable(luna_test_loop luna_test_loop.c)
-target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel)
+target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel Threads::Threads)
 add_test(NAME loop COMMAND luna_test_loop)
 
 # Package management: install → luna.lock → reproduce-from-lock, driven

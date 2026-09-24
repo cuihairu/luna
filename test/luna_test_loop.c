@@ -1,14 +1,21 @@
 /* luna_test_loop.c — the opt-in event loop: timers, immediates, keep-
- * alive semantics, the prepare hook's serve poll, ^C interruption, and
- * the loop.fs async file operations.
+ * alive semantics, the prepare hook's serve poll, ^C interruption, the
+ * loop.fs async file operations, and loop.net client sockets against
+ * real pthread echo servers (TCP on an ephemeral port + a unix path).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
  * callbacks drain. */
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <setjmp.h>
 #include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <netinet/in.h>
 #include <cmocka.h>
 
 #include "lua.h"
@@ -224,6 +231,145 @@ static void test_fs_write_of_empty_data_roundtrips(void **state)
         "return out"), "true:true");
 }
 
+/* -- net: a one-shot echo server on a real socket --------------------- */
+
+/* accept one connection, echo one read back, then close both ends —
+ * so the client sees its chunk, then EOF */
+static void echo_serve(int listener)
+{
+    int c = accept(listener, NULL, NULL);
+    char buf[256];
+    ssize_t n = read(c, buf, sizeof buf);
+    if (n > 0) {
+        ssize_t off = 0;
+        while (off < n) {
+            ssize_t w = write(c, buf + off, (size_t)(n - off));
+            if (w <= 0) {
+                break;
+            }
+            off += w;
+        }
+    }
+    close(c);
+    close(listener);
+}
+
+static void *echo_main(void *arg)
+{
+    echo_serve((int)(intptr_t)arg);
+    return NULL;
+}
+
+/* loopback listener on an ephemeral port; caller spawns echo_main */
+static int tcp_listen_loopback(void)
+{
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    assert_int_equal(bind(fd, (struct sockaddr *)&addr, sizeof addr), 0);
+    assert_int_equal(listen(fd, 1), 0);
+    return fd;
+}
+
+static int tcp_port_of(int fd)
+{
+    struct sockaddr_in addr;
+    socklen_t len = sizeof addr;
+    getsockname(fd, (struct sockaddr *)&addr, &len);
+    return ntohs(addr.sin_port);
+}
+
+static void test_net_tcp_echo_then_eof(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  if e then log[1] = 'connect:' .. e return end\n"
+        "  sock:write('ping', function(e2)\n"
+        "    if e2 then log[1] = 'write:' .. e2 return end\n"
+        "    sock:read(function(e3, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      sock:read(function(e4, eof)\n"
+        "        log[2] = tostring(e4) .. '/' .. tostring(eof)\n"
+        "        sock:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", tcp_port_of(listener));
+    /* the echo comes back as one chunk; the server then closed, so the
+     * second read is the EOF signal (err=nil, chunk=nil) */
+    assert_string_equal(eval_string(code), "ping,nil/nil");
+    pthread_join(th, NULL);
+}
+
+static void test_net_tcp_connect_refused_yields_error(void **state)
+{
+    (void)state;
+    /* grab a free port, then release it: nothing is listening there */
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    close(fd);
+    char code[320];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  out = tostring(e ~= nil) .. ',' .. tostring(sock)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", port);
+    /* err in slot one, no sock; the failed socket closes itself and the
+     * loop must still drain to a natural return */
+    assert_string_equal(eval_string(code), "true,nil");
+}
+
+static void test_net_pipe_echo(void **state)
+{
+    (void)state;
+    const char *path = "/tmp/luna-loop-net-test.sock";
+    unlink(path);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof addr);
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path, sizeof addr.sun_path - 1);
+    assert_int_equal(bind(fd, (struct sockaddr *)&addr, sizeof addr), 0);
+    assert_int_equal(listen(fd, 1), 0);
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)fd), 0);
+
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "log = 'none'\n"
+        "net.connectPipe('/tmp/luna-loop-net-test.sock', function(e, sock)\n"
+        "  if e then log = 'connect:' .. e return end\n"
+        "  sock:write('hello', function(e2)\n"
+        "    if e2 then log = 'write:' .. e2 return end\n"
+        "    sock:read(function(e3, chunk)\n"
+        "      log = tostring(chunk)\n"
+        "      sock:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return log"), "hello");
+    pthread_join(th, NULL);
+    unlink(path);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -239,6 +385,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_read_of_a_missing_file_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_stat_reports_size, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_write_of_empty_data_roundtrips, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

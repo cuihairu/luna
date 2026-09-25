@@ -1449,12 +1449,14 @@ static void sock_read_deliver(struct sock *s, int errcode,
         return;
     }
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
-    lua_pushnil(L);
     if (errcode != 0) {
         lua_pushstring(L, uv_strerror(errcode));
+        lua_pushnil(L);                    /* (err, nil), like sock_deliver */
     } else if (data) {
+        lua_pushnil(L);
         lua_pushlstring(L, data, len);
     } else {
+        lua_pushnil(L);
         lua_pushnil(L);                    /* (nil, nil): EOF */
     }
     if (terminal) {

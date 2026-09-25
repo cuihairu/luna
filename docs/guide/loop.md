@@ -363,7 +363,7 @@ loop.run()
 
 ## loop.http:异步 HTTP 客户端与服务端
 
-`loop.http` 是一个纯 Lua 的 HTTP/1.1 客户端(`require "loop.http"`,与 Node 的 `require("http")` 同名),架在 `net.connect` / `connectTls` 之上:一次请求,一次聚合回调——`cb(err, res)`,其中 `res = {status, headers(键小写), body}`:
+`loop.http` 是一个纯 Lua 的 HTTP/1.1 客户端(`require "loop.http"`,与 Node 的 `require("http")` 同名),架在 `net.connect` / `connectTls` 之上:一次请求,一次聚合回调——`cb(err, res)`,其中 `res = {status, headers(键小写), body}`;大响应可通过 `onData`/`onHead` 转为流式观察:
 
 ```lua
 local http = require("loop.http")
@@ -383,6 +383,8 @@ loop.run()
 | `http.get(url, opts?, cb)` | GET 简写 |
 | `opts.maxRedirects` | 跟随上限,默认 5;`0` 禁用跟随(原始 3xx 照常交付) |
 | `opts.timeoutMs` | 整个请求的时限(连接、每一跳重定向与 body 共享预算),超时 `cb("... timed out ...")` |
+| `opts.onHead(res)` | 响应头落地即调(只有最终响应——重定向跳不经过它);在其中抛错则以该错误交付 `cb` |
+| `opts.onData(chunk)` | **流式开关**:body 每批经它交付,`res.body` 变为空串;content-length 与无帧 body 真增量(不在内存攒整个 body),chunked 仍内部缓冲、在终止块落地时整体交付一次;抛错则以该错误交付 `cb` |
 | `res` | `{status = 200, reason = "OK", headers = {小写键, 多值以逗号合并}, body = 字符串}` |
 
 服务端一面:`http.listen(host, port, handler)` 返回 net 的 server(`port()`/`address()`/`close()` 都在),handler 在**整个请求落地后**执行一次:
@@ -412,6 +414,7 @@ loop.run()
 行为约定:
 
 - **body 分帧三路**:按 `content-length` 收满、按 `chunked` 解码(含终止块),两者皆无时读到对端关闭——每个请求都发送 `Connection: close`,响应以连接结束为界;
+- **流式是纯附加观察**:设了 `onData` 后每个 body 字节恰好经它交付一次、`res.body` 为空串,分帧与完结判定不变;没设则一切照旧聚合;`onHead`/`onData` 里抛错转成 `cb(err)` 终止请求;
 - **无 body 的状态码**(1xx/204/304)直接以空 body 交付;
 - **重定向**:301/302/303/307/308 带 `Location` 时跟随,绝对 URL、`//host/path` 与相对路径都能解析(`../` 归约);301/302/303 把非 GET/HEAD 方法折叠成 GET 并清掉 body,307/308 原样保留;跨主机跟随不做限制;预算用尽报 `too many redirects`;
 - **超时是整条请求的**:从连接前起表,重定向不清表;超时先关 socket 再交付错误,迟到的响应或已排队的连接回调不会再进回调;
@@ -421,7 +424,7 @@ loop.run()
 - **服务端在请求整体落地后才调 handler**:请求体按 `content-length` 收满为准(chunked 请求体不在面内);请求行不匹配 HTTP/1.x 或头部越过 64KiB,直接回 400 并关连接;
 - **handler 抛错**:若此时响应尚未发出,实现回一个 500;已 `send` 过的连接不受影响;
 - **handler 不发 `send` 连接就挂着**:没有自动补发——忘了回就是挂到对端超时;
-- **边界**:本面不做流式响应与多路复用(大文件请直接用 net 面);IPv6 字面量主机暂不支持;传入的 opts 表不会被修改(重定向折叠写在内部拷贝上);与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
+- **边界**:本面不做多路复用与无限流(如 SSE——聚合模型等不到完结;大文件下载用 `onData` 流式,双向长连接请直接用 net 面);IPv6 字面量主机暂不支持;传入的 opts 表不会被修改(重定向折叠写在内部拷贝上);与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
 
 ## loop.udp:异步数据报
 

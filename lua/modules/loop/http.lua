@@ -6,6 +6,15 @@
 -- when the response carries neither — by reading to EOF (every request
 -- sends Connection: close, so servers end the response there).
 --
+-- Streaming: when opts.onData(chunk) is set the body flows through it
+-- instead of res.body (which comes back as "" — every byte is handed
+-- to onData exactly once). content-length and EOF frames deliver
+-- incrementally without buffering the whole body; chunked still
+-- buffers internally and hands the decoded body over in one piece at
+-- the terminating chunk. opts.onHead(res) fires when the final
+-- response head lands (redirect hops stay internal and never reach
+-- it); an error raised inside onData/onHead becomes cb(err).
+--
 -- Redirects: 301/302/303/307/308 responses carrying Location are
 -- followed, up to opts.maxRedirects hops (default 5). 301/302/303 fold
 -- non-GET/HEAD methods down to GET and drop the body; 307/308 keep the
@@ -261,12 +270,18 @@ local function run(opts, cb)
     local function attempt(u, left)
         local wire, method = build_request(u, opts)
 
+        -- streaming observers: onData present means the body flows
+        -- through it and res.body comes back empty
+        local data_cb, head_cb = opts.onData, opts.onHead
+        local streaming = data_cb ~= nil
+
         local st = {
             buf = "",
             head = nil,      -- parsed status/headers after the blank line
             body_len = nil,  -- content-length, when declared
             chunked = false,
             done = false,
+            received = 0,    -- body bytes already handed to data_cb
         }
         local sock
 
@@ -287,12 +302,26 @@ local function run(opts, cb)
         local function try_complete()
             local body = st.buf
             if st.chunked then
-                local decoded, derr, done = decode_chunked(body)
+                local decoded, derr = decode_chunked(body)
                 if decoded then
-                    finish(nil, { status = st.head.status,
-                                  reason = st.head.reason,
-                                  headers = st.head.headers,
-                                  body = decoded })
+                    -- chunked streaming still buffers internally; the
+                    -- decoded body goes to data_cb in one piece
+                    if streaming then
+                        local ok, derr2 = pcall(data_cb, decoded)
+                        if not ok then
+                            finish(derr2)
+                            return
+                        end
+                        finish(nil, { status = st.head.status,
+                                      reason = st.head.reason,
+                                      headers = st.head.headers,
+                                      body = "" })
+                    else
+                        finish(nil, { status = st.head.status,
+                                      reason = st.head.reason,
+                                      headers = st.head.headers,
+                                      body = decoded })
+                    end
                 elseif derr then
                     finish(derr)
                 end
@@ -309,6 +338,39 @@ local function run(opts, cb)
             end
         end
 
+        -- body bytes once the head is out of the way: stream them
+        -- through the caller's onData or buffer them for try_complete.
+        -- Every path into the body — a later chunk or the tail of the
+        -- chunk that carried the head — goes through here, or a
+        -- head+body-in-one-packet response would bypass streaming.
+        local function feed_body(chunk)
+            if streaming and (st.body_len or not st.chunked) then
+                -- content-length and EOF streaming: hand every byte to
+                -- data_cb as it lands and keep nothing (trimmed to the
+                -- declared length when there is one)
+                local room = st.body_len and (st.body_len - st.received)
+                             or #chunk
+                local part = #chunk > room and chunk:sub(1, room) or chunk
+                if #part > 0 then
+                    st.received = st.received + #part
+                    local ok, derr = pcall(data_cb, part)
+                    if not ok then
+                        finish(derr)
+                        return
+                    end
+                end
+                if st.body_len and st.received >= st.body_len then
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = "" })
+                end
+                return
+            end
+            st.buf = st.buf .. chunk
+            try_complete()
+        end
+
         local function feed(chunk)
             if st.done then
                 return
@@ -320,13 +382,14 @@ local function run(opts, cb)
                     return -- still inside the head
                 end
                 local head_text = st.buf:sub(1, split + 1)
+                local rest = st.buf:sub(split + 4)
                 local res, perr = parse_head(head_text)
                 if not res then
                     finish(perr)
                     return
                 end
                 st.head = res
-                st.buf = st.buf:sub(split + 4)
+                st.buf = ""
                 local code = res.status
                 local loc = res.headers["location"]
                 if loc and REDIRECT_METHODS[code] ~= nil
@@ -357,6 +420,15 @@ local function run(opts, cb)
                     attempt(nu, left - 1)
                     return
                 end
+                -- the head is final here: redirect hops never reach
+                -- the caller's onHead
+                if head_cb then
+                    local ok, herr = pcall(head_cb, res)
+                    if not ok then
+                        finish(herr)
+                        return
+                    end
+                end
                 local te = res.headers["transfer-encoding"] or ""
                 st.chunked = te:lower():find("chunked", 1, true) ~= nil
                 local cl = res.headers["content-length"]
@@ -370,14 +442,13 @@ local function run(opts, cb)
                                   body = "" })
                     return
                 end
-                if not st.chunked and not st.body_len then
-                    -- no framing headers: rely on the peer closing
-                    return
-                end
+                -- no framing headers: the peer's close is the end
+                -- marker, handled at EOF — but the tail bytes already
+                -- here still stream through
+                feed_body(rest)
             else
-                st.buf = st.buf .. chunk
+                feed_body(chunk)
             end
-            try_complete()
         end
 
         local on_data
@@ -396,13 +467,34 @@ local function run(opts, cb)
             -- EOF: only the unframed case can legitimately end here
             if not st.head then
                 finish("loop.http: connection closed before a response")
-            elseif st.chunked or (st.body_len and #st.buf < st.body_len) then
+            elseif st.chunked
+                or (st.body_len
+                    and (streaming and st.received or #st.buf)
+                        < st.body_len) then
                 finish("loop.http: connection closed mid-body")
             else
-                finish(nil, { status = st.head.status,
-                              reason = st.head.reason,
-                              headers = st.head.headers,
-                              body = st.buf })
+                if streaming then
+                    -- unframed streaming: the rest goes to data_cb,
+                    -- res.body stays empty
+                    local pending = st.buf:sub(st.received + 1)
+                    if #pending > 0 then
+                        st.received = #st.buf
+                        local ok, derr = pcall(data_cb, pending)
+                        if not ok then
+                            finish(derr)
+                            return
+                        end
+                    end
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = "" })
+                else
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = st.buf })
+                end
             end
         end
 

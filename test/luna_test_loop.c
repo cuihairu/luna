@@ -10,7 +10,8 @@
  * request wiring, redirect chains with method folding, relative
  * Location, the whole-request timeout, url validation) and its server
  * face (self-served roundtrips, handler errors as 500, malformed
- * requests as 400).
+ * requests as 400), plus streaming bodies through onData/onHead
+ * (content-length, unframed EOF and redirect hops staying internal).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -1743,6 +1744,114 @@ static void test_http_server_error_paths(void **state)
         "true,500;true");
 }
 
+static void test_http_stream_content_length(void **state)
+{
+    (void)state;
+    /* streaming by content-length: every body byte flows through
+     * onData exactly once, res.body comes back empty, onHead sees the
+     * final head (status + content-length) */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local big = ('x'):rep(50000)\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send(big)\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "local n, total\n"
+        "http.request({ url = base .. '/big',\n"
+        "  onHead = function(h)\n"
+        "    out = out .. tostring(h.status) .. ',' ..\n"
+        "        tostring(h.headers['content-length']) .. ';'\n"
+        "  end,\n"
+        "  onData = function(c)\n"
+        "    n = (n or 0) + 1\n"
+        "    total = (total or 0) + #c\n"
+        "  end },\n"
+        "  function(err, res)\n"
+        "    out = out .. tostring(err) .. ',' .. tostring(total) ..\n"
+        "        ',' .. tostring(n >= 1) .. ',' ..\n"
+        "        tostring(res.body == '')\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "200,50000;nil,50000,true,true");
+}
+
+static void test_http_stream_eof_mode(void **state)
+{
+    (void)state;
+    /* streaming with no framing at all: a raw origin server that reads
+     * the request first, answers with an unframed body and closes —
+     * the client streams the body through onData and ends by EOF */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "local srv = net.listen('127.0.0.1', 0, function(e, s)\n"
+        "  if e then return end\n"
+        "  local answered = false\n"
+        "  s:read(function(err, chunk)\n"
+        "    if err or not chunk then s:close() return end\n"
+        "    if answered then return end\n"
+        "    answered = true\n"
+        "    s:write('HTTP/1.1 200 OK\\r\\nX-Raw: yes\\r\\n\\r\\n'\n"
+        "        .. 'streamed-by-eof', function() s:close() end)\n"
+        "  end)\n"
+        "end)\n"
+        "out = ''\n"
+        "local n, total\n"
+        "http.request({ url = 'http://127.0.0.1:' .. srv:port() .. '/',\n"
+        "  onHead = function(h)\n"
+        "    out = out .. tostring(h.headers['x-raw']) .. ';'\n"
+        "  end,\n"
+        "  onData = function(c)\n"
+        "    n = (n or 0) + 1\n"
+        "    total = (total or 0) + #c\n"
+        "  end },\n"
+        "  function(err, res)\n"
+        "    out = out .. tostring(err) .. ',' .. tostring(total) ..\n"
+        "        ',' .. tostring(n >= 1) .. ',' ..\n"
+        "        tostring(res and res.body == '') .. ',' ..\n"
+        "        tostring(res and res.headers['x-raw'])\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "yes;nil,15,true,true,yes");
+}
+
+static void test_http_stream_onhead_once_after_redirect(void **state)
+{
+    (void)state;
+    /* onHead is the final head only: a redirect hop stays internal and
+     * never reaches it; streaming onData stays empty-bodied too */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  if req.path == '/hop' then\n"
+        "    res.send(302, '', { Location = '/dst' })\n"
+        "  else\n"
+        "    res.send('arrived')\n"
+        "  end\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "local heads = 0\n"
+        "http.request({ url = base .. '/hop', maxRedirects = 5,\n"
+        "  onHead = function() heads = heads + 1 end,\n"
+        "  onData = function() end },\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',heads=' .. heads .. ',' ..\n"
+        "        tostring(res and res.status) .. ',' ..\n"
+        "        tostring(res and res.body == '')\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,heads=1,200,true");
+}
+
 static void test_http_bad_url_throws(void **state)
 {
     (void)state;
@@ -2320,6 +2429,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_redirect_budget_and_timeout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_server_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_server_error_paths, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_content_length, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_eof_mode, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_onhead_once_after_redirect, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),

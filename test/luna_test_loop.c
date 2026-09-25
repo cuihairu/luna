@@ -555,6 +555,32 @@ static void test_udp_send_recv_loopback(void **state)
         "return out"), "x|y|127.0.0.1|true");
 }
 
+static void test_udp_sockname_reports_bind(void **state)
+{
+    (void)state;
+    /* sockname: a bound socket reports its bind; a sender reports the
+     * ephemeral wildcard uv picked on its first send */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function() end)\n"
+        "local a = r:sockname()\n"
+        "local base = a.address .. '|' .. a.family .. '|'\n"
+        "          .. tostring(a.port == r:port())\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', r:port(), function(e2)\n"
+        "  assert(e2 == nil, e2)\n"
+        "  local b = snd:sockname()\n"
+        "  out = base .. '|' .. tostring(b.port > 0) .. '|'\n"
+        "      .. b.family\n"
+        "  snd:close()\n"
+        "  r:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "127.0.0.1|inet|true|true|inet");
+}
+
 static void test_udp_bind_conflict_throws(void **state)
 {
     (void)state;
@@ -1378,6 +1404,57 @@ static void test_tls_listen_bad_cert_throws(void **state)
         "return tostring(ok) .. ',' .. tostring(err ~= nil)"),
         "false,true");
 }
+
+static void test_tls_sock_addr_and_server_address(void **state)
+{
+    (void)state;
+    /* both TLS ends and the listener report {address, port, family};
+     * both callbacks must be live before either closes — the connect
+     * callback can land first and an early close makes the server's
+     * fd ENOTCONN, which is kernel truth, not a defect */
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[2048];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local tconn, tcli, srv\n"
+        "local function finish()\n"
+        "  if not (tconn and tcli) then return end\n"
+        "  local sp, cp = tconn:peer(), tcli:peer()\n"
+        "  local a = srv:address()\n"
+        "  out = table.concat({\n"
+        "    tostring(a.address == '127.0.0.1'),\n"
+        "    tostring(a.port == srv:port()),\n"
+        "    a.family,\n"
+        "    tostring(sp.address == '127.0.0.1'),\n"
+        "    tostring(sp.port > 0),\n"
+        "    tostring(cp.address == '127.0.0.1'),\n"
+        "    tostring(cp.port == srv:port()),\n"
+        "    tcli:sockname().family,\n"
+        "  }, ',')\n"
+        "  tconn:close()\n"
+        "  tcli:close()\n"
+        "  srv:close()\n"
+        "end\n"
+        "srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  tconn = c\n"
+        "  c:read(function() end)\n"
+        "  finish()\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {ca = '%s'},\n"
+        "  function(e, s)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  tcli = s\n"
+        "  finish()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key, cert);
+    assert_string_equal(eval_string(code),
+        "true,true,inet,true,true,true,true,inet");
+}
 #endif /* LUNA_LOOP_HAVE_OPENSSL */
 
 /* -- loop.http: the pure-Lua client, served by net.listen in-process ---
@@ -2123,6 +2200,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_truncate_shortens_and_defaults_to_zero, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_stat_and_lstat_report_types, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_send_recv_loopback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_sockname_reports_bind, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_bind_conflict_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_udp_send_without_callback_drains, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_watch_reports_events, setup_loop, teardown_loop),
@@ -2159,6 +2237,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_sock_addr_and_server_address, setup_loop, teardown_loop),
 #endif
         cmocka_unit_test_setup_teardown(test_http_get_plain_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_get_chunked_body, setup_loop, teardown_loop),

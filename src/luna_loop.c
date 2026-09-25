@@ -2193,6 +2193,22 @@ static int l_udp_port(lua_State *L)
     return 1;
 }
 
+/* sock:sockname() -> {address, port, family}: the socket's own
+ * address — a bound one reports its bind, a sender reports the
+ * ephemeral one uv picked on its first send */
+static int l_udp_sockname(lua_State *L)
+{
+    struct udpsock *u = luaL_checkudata(L, 1, "loop.udpsock");
+    luaL_argcheck(L, !u->closed, 1, "socket is closed");
+    struct sockaddr_storage ss;
+    int len = sizeof ss;
+    int rc = uv_udp_getsockname(&u->h, (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.udp: getsockname: %s", uv_strerror(rc));
+    }
+    return push_sockaddr(L, &ss);
+}
+
 /* sock:close() — idempotent; open sockets keep the loop alive */
 static int l_udp_close(lua_State *L)
 {
@@ -2214,6 +2230,7 @@ LUNA_HANDLE_CTL(udpsock, struct udpsock, "loop.udpsock")
 static const luaL_Reg udpsock_funcs[] = {
     { "send", l_udp_send },
     { "port", l_udp_port },
+    { "sockname", l_udp_sockname },
     { "close", l_udp_close },
     { "unref", l_udpsock_unref },
     { "ref", l_udpsock_ref },
@@ -3120,6 +3137,39 @@ static int l_tsock_close(lua_State *L)
     return 0;
 }
 
+/* peer/sockname for a hand-rolled fd: the BSD calls read the kernel
+ * directly (uv owns no handle on this fd), push_sockaddr formats */
+static int fd_addr(lua_State *L, int fd, int peer)
+{
+    struct sockaddr_storage ss;
+    socklen_t len = sizeof ss;
+    int rc = peer ? getpeername(fd, (struct sockaddr *)&ss, &len)
+                  : getsockname(fd, (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.net: get%sname: %s",
+                          peer ? "peer" : "sock", strerror(errno));
+    }
+    return push_sockaddr(L, &ss);
+}
+
+/* tsock:peer() / tsock:sockname() -> {address, port, family}; take
+ * them while the socket is live */
+static int l_tsock_peer(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    luaL_argcheck(L, !t->closed, 1, "tsock is closed");
+    return fd_addr(L, t->fd, 1);
+}
+
+static int l_tsock_sockname(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    luaL_argcheck(L, !t->closed, 1, "tsock is closed");
+    return fd_addr(L, t->fd, 0);
+}
+
 static int l_tsock_tostring(lua_State *L)
 {
     struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
@@ -3138,6 +3188,8 @@ static const luaL_Reg tsock_funcs[] = {
     { "write", l_tsock_write },
     { "read", l_tsock_read },
     { "close", l_tsock_close },
+    { "peer", l_tsock_peer },
+    { "sockname", l_tsock_sockname },
     { "unref", l_tsock_unref },
     { "ref", l_tsock_ref },
     { NULL, NULL },
@@ -3369,6 +3421,17 @@ static int l_tserver_port(lua_State *L)
     return 1;
 }
 
+/* server:address() -> {address, port, family}: the listening fd's own
+ * address, read like net.server:address but off the raw fd */
+static int l_tserver_address(lua_State *L)
+{
+    struct tserver *sv = luaL_checkudata(L, 1, "loop.tserver");
+    if (sv->closed) {
+        return luaL_error(L, "loop.net: tls server is closed");
+    }
+    return fd_addr(L, sv->listen_fd, 0);
+}
+
 static int l_tserver_tostring(lua_State *L)
 {
     struct tserver *sv = luaL_checkudata(L, 1, "loop.tserver");
@@ -3385,6 +3448,7 @@ LUNA_HANDLE_CTL(tserver, struct tserver, "loop.tserver")
 static const luaL_Reg tserver_funcs[] = {
     { "close", l_tserver_close },
     { "port", l_tserver_port },
+    { "address", l_tserver_address },
     { "unref", l_tserver_unref },
     { "ref", l_tserver_ref },
     { NULL, NULL },

@@ -12,7 +12,9 @@
 --      node_modules convention). Inside a package directory the
 --      package.json manifest picks the entry: {"main": "lib/entry.lua"};
 --      without a manifest the convention is dep/init.lua, and a flat
---      luna_modules/dep.lua is also accepted.
+--      luna_modules/dep.lua is also accepted. Dotted or slashed
+--      subpaths (require "dep.sub" / "dep/sub") resolve as files inside
+--      the package, like Node's node_modules/dep/sub.
 --
 -- Results are cached by the native package.loaded machinery, exactly
 -- like any other module. Forms these rules do not resolve (or rooted
@@ -124,19 +126,61 @@ local function load_entry(path)
     return nil
 end
 
+-- Dots and slashes both segment a module name here: Lua spells
+-- submodules with dots, Node with slashes, and both spellings must
+-- find the same files.
+local function segments(modname)
+    local segs = {}
+    for seg in modname:gmatch("[^%.:/]+") do
+        segs[#segs + 1] = seg
+    end
+    return segs
+end
+
+-- In-package subpath: require("dep.sub") / require("dep/sub") treat the
+-- leading segments as the package and the REST as a file path inside it
+-- (sub.lua, then sub/init.lua) — the package's manifest "main" does not
+-- apply to subpaths, matching Node. Longest prefix first, so a literal
+-- "a.b" package beats subpath resolution inside "a". Returns the entry
+-- path (load_entry turns it into the loader + path pair every other
+-- branch of resolve_bare produces).
+local function package_subpath(pkg_root, segs)
+    for i = #segs - 1, 1, -1 do
+        local pkg_dir = pkg_root .. "/" .. table.concat(segs, ".", 1, i)
+        local sub = table.concat(segs, "/", i + 1)
+        local direct = pkg_dir .. "/" .. sub .. ".lua"
+        if readfile(direct) then
+            return direct
+        end
+        local init = pkg_dir .. "/" .. sub .. "/init.lua"
+        if readfile(init) then
+            return init
+        end
+    end
+    return nil
+end
+
 -- A bare name: walk up looking for luna_modules/<name>/{package.json,
--- init.lua} or a flat luna_modules/<name>.lua.
+-- init.lua} or a flat luna_modules/<name>.lua; a dotted/slashed name
+-- additionally resolves as a subpath of a shorter-prefix package.
 function modules.resolve_bare(modname, from)
     local dir = from or start_dir()
+    local segs = segments(modname)
     while dir do
-        local pkg = dir .. "/luna_modules/" .. modname
-        local entry = package_entry(pkg)
+        local root = dir .. "/luna_modules"
+        local entry = package_entry(root .. "/" .. modname)
         if entry then
             return load_entry(entry)
         end
-        local flat = dir .. "/luna_modules/" .. modname .. ".lua"
+        local flat = root .. "/" .. modname .. ".lua"
         if readfile(flat) then
             return load_entry(flat)
+        end
+        if #segs > 1 then
+            local sub = package_subpath(root, segs)
+            if sub then
+                return load_entry(sub)
+            end
         end
         dir = parent(dir)
     end

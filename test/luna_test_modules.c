@@ -154,8 +154,38 @@ static void test_relative_require_resolves_to_caller_dir(void **state)
         "util");
 }
 
-static void test_loaded_caches_across_requires(void **state)
+/* -- in-package subpath group ------------------------------------------- */
+
+static void test_subpath_resolves_inside_package(void **state)
 {
+    (void)state;
+    /* dep1.lib.helper (dotted and slash spellings), dep4.lib.deep's
+     * init.lua convention, and dep3.sub where the literal dotted
+     * package wins over the subpath file dep3/sub.lua */
+    assert_string_equal(
+        eval_string("return dofile('" FIXTURES "/myapp/app3.lua')"),
+        "subpaths:dep1-helper:dep1-helper:dep4-deep:dep3-literal");
+}
+
+static void test_subpath_walks_up_directories(void **state)
+{
+    (void)state;
+    /* inner/ has no luna_modules: dep1.tools.hook resolves one level up */
+    assert_string_equal(
+        eval_string("return dofile('" FIXTURES "/nested/inner/app4.lua')"),
+        "nested-hook");
+}
+
+static void test_missing_subpath_still_falls_through(void **state)
+{
+    (void)state;
+    /* no dep5 anywhere: the searcher chain keeps its "not found" verdict */
+    assert_true(eval_bool(
+        "local ok, err = pcall(dofile, '" FIXTURES "/myapp/app5.lua')\n"
+        "return ok == false and tostring(err):find('not found', 1, true) ~= nil"));
+}
+
+static void test_loaded_caches_across_requires(void **state){
     (void)state;
     run(L, "_G.__DEP1_LOADS = nil");
     /* two dofile passes: the second require "dep1" must hit
@@ -281,6 +311,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_manifest_main_picks_entry, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_bare_lookup_walks_up_directories, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_relative_require_resolves_to_caller_dir, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_subpath_resolves_inside_package, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_subpath_walks_up_directories, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_missing_subpath_still_falls_through, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_loaded_caches_across_requires, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_missing_module_reports_clearly, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_json_roundtrip_and_node_aliases, setup_modules, teardown_modules),

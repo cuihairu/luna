@@ -59,29 +59,43 @@ function magic.echo_result(session, res)
     kernel.write("Out[" .. n .. "]: " .. table.concat(parts, "  ") .. "\n")
 end
 
+-- "%time <code>": expression form gets the Out[n] echo; statement form
+-- just runs. The wrapped probe mirrors what the session does with
+-- input lines (expressions recompile as `return <code>`).
+local function runnable(code)
+    if kernel.check("return " .. code, "=magic") == "ok" then
+        return "return " .. code
+    end
+    return code
+end
+
 magic.register("time", function(session, arg)
     if arg == "" then
         error("usage: %time <expression or code>")
     end
+    local src = runnable(arg)
     local t0 = kernel.millis()
-    local res = table.pack(kernel.exec("return " .. arg, "=magic[time]"))
+    local res = table.pack(kernel.exec(src, "=magic[time]"))
     local dt = kernel.millis() - t0
     if not res[1] then
         error(tostring(res[2]))
     end
-    magic.echo_result(session, res)
+    if src:sub(1, 7) == "return " then
+        magic.echo_result(session, res)
+    end
     kernel.write(string.format("Wall time: %.3f ms\n", dt))
-end, "%time <expr> — run expr once and report wall time")
+end, "%time <expr> — run expr/code once and report wall time")
 
 magic.register("timeit", function(session, arg)
     if arg == "" then
         error("usage: %timeit <expression>")
     end
+    local src = runnable(arg)
     local reps, best = 0, math.huge
     local t0 = kernel.millis()
     while reps < 1000 and kernel.millis() - t0 < 100 do
         local r0 = kernel.millis()
-        local res = table.pack(kernel.exec("return " .. arg, "=magic[timeit]"))
+        local res = table.pack(kernel.exec(src, "=magic[timeit]"))
         if not res[1] then
             error(tostring(res[2]))
         end
@@ -91,11 +105,26 @@ magic.register("timeit", function(session, arg)
     kernel.write(string.format("%d loops, best of session: %.3f ms per loop\n", reps, best))
 end, "%timeit <expr> — repeated runs, reports per-loop time")
 
-magic.register("hist", function(session)
-    for i, line in pairs(session.inputs or {}) do
-        kernel.write(string.format("In [%d]: %s\n", i, line))
+magic.register("hist", function(session, arg)
+    local lo, hi = 1, session.in_n
+    if arg ~= "" then
+        local a, b = arg:match("^(%d+)%s*-%s*(%d+)$")
+        local one = arg:match("^(%d+)$")
+        if a then
+            lo, hi = tonumber(a), tonumber(b)
+        elseif one then
+            lo, hi = tonumber(one), tonumber(one)
+        else
+            error("usage: %hist [first-last | n]")
+        end
     end
-end, "%hist — print the inputs of this session")
+    for i = lo, hi do
+        local line = session.inputs and session.inputs[i]
+        if line then
+            kernel.write(string.format("In [%d]: %s\n", i, line))
+        end
+    end
+end, "%hist [range] — print session inputs (e.g. %hist 2-5)")
 
 magic.register("whos", function(session)
     kernel.write(intro.whos())
@@ -166,7 +195,20 @@ magic.register("plugins", function()
     if bad > 0 then
         kernel.write(string.format("%d plugin(s) failed to load (see stderr)\n", bad))
     end
-end, "%plugins — list loaded plugins and load failures")
+    local shadowed = {}
+    for name, dir in pairs(plugs.overridden or {}) do
+        shadowed[#shadowed + 1] = { name = name, dir = dir }
+    end
+    if #shadowed > 0 then
+        table.sort(shadowed, function(a, b)
+            return a.name < b.name
+        end)
+        kernel.write("overridden by an earlier same-name plugin:\n")
+        for _, o in ipairs(shadowed) do
+            kernel.write(string.format("  %s  %s\n", o.name, o.dir))
+        end
+    end
+end, "%plugins — list loaded plugins, failures, and shadowed names")
 
 magic.register("help", function()
     local names = {}

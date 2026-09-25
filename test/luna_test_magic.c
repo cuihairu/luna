@@ -59,11 +59,14 @@ static int setup_magic(void **state)
     lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
     lua_setglobal(L, "__LUNA_REPL_SRC");
+    lua_pushlstring(L, LUNA_LUA_PLUGINS, sizeof(LUNA_LUA_PLUGINS) - 1);
+    lua_setglobal(L, "__LUNA_PLUGINS_SRC");
     assert_int_equal(luaL_dostring(L,
                        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))\n"
                        "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
                        "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
                        "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))\n"
+                       "package.preload['luna.plugins'] = assert(load(__LUNA_PLUGINS_SRC, '=(luna/plugins)'))\n"
                        "M = require 'luna.magic'\n"
                        "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"
                        "S = repl.new()\n"
@@ -124,6 +127,18 @@ static void test_timeit_runs_repeats(void **state)
     assert_non_null(strstr(outbuf, "per loop"));
 }
 
+static void test_time_runs_statement_code(void **state)
+{
+    (void)state;
+    /* statements cannot compile as `return <code>`: they still run */
+    assert_string_equal(feed("%time for i = 1, 100 do end"), "ok");
+    assert_non_null(strstr(outbuf, "Wall time:"));
+    assert_null(strstr(outbuf, "Out[")); /* statements echo no result */
+    /* an error inside statement code still surfaces */
+    assert_string_equal(feed("%time if true then error('kaboom-statement') end"), "ok");
+    assert_non_null(strstr(outbuf, "kaboom-statement"));
+}
+
 static void test_hist_prints_session_inputs(void **state)
 {
     (void)state;
@@ -132,6 +147,42 @@ static void test_hist_prints_session_inputs(void **state)
     assert_string_equal(feed("%hist"), "ok");
     assert_non_null(strstr(outbuf, "In [1]: alpha = 1"));
     assert_non_null(strstr(outbuf, "In [2]: %time 2+2"));
+}
+
+static void test_hist_range_selection(void **state)
+{
+    (void)state;
+    feed("a1 = 1");
+    feed("a2 = 2");
+    feed("a3 = 3");
+    assert_string_equal(feed("%hist 2-3"), "ok");
+    assert_null(strstr(outbuf, "In [1]: a1 = 1"));
+    assert_non_null(strstr(outbuf, "In [2]: a2 = 2"));
+    assert_non_null(strstr(outbuf, "In [3]: a3 = 3"));
+    /* a single number selects one entry */
+    assert_string_equal(feed("%hist 1"), "ok");
+    assert_non_null(strstr(outbuf, "In [1]: a1 = 1"));
+    assert_null(strstr(outbuf, "In [2]"));
+    /* a bad range spec is a usage error, not a crash */
+    assert_string_equal(feed("%hist banana"), "ok");
+    assert_non_null(strstr(outbuf, "usage"));
+}
+
+static void test_plugins_lists_overridden(void **state)
+{
+    (void)state;
+    /* no plugin directories in this VM: nothing loaded, nothing failed */
+    assert_string_equal(feed("%plugins"), "ok");
+    assert_non_null(strstr(outbuf, "no plugins loaded"));
+    /* a shadowed discovery is reported with its directory */
+    if (luaL_dostring(L,
+                      "require('luna.plugins').overridden['dup'] = '/tmp/dup-copy'") != LUA_OK) {
+        fail_msg("cannot seed overridden: %s", lua_tostring(L, -1));
+    }
+    assert_string_equal(feed("%plugins"), "ok");
+    assert_non_null(strstr(outbuf, "overridden"));
+    assert_non_null(strstr(outbuf, "dup"));
+    assert_non_null(strstr(outbuf, "/tmp/dup-copy"));
 }
 
 static void test_whos_magic_lists_globals(void **state)
@@ -214,7 +265,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_time_reports_wall_time_and_value, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_time_usage_error, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_timeit_runs_repeats, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_time_runs_statement_code, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_hist_prints_session_inputs, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_hist_range_selection, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_plugins_lists_overridden, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_whos_magic_lists_globals, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_reset_clears_user_globals, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_unknown_magic_reports, setup_magic, teardown_magic),

@@ -24,9 +24,11 @@ target_compile_definitions(luna_test_cli PRIVATE
         LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME cli COMMAND luna_test_cli)
 
-# Tab completion: chains, fields, metatables, plugin sources
+# Tab completion: chains, fields, metatables, plugin sources, require
 add_executable(luna_test_complete luna_test_complete.c)
-target_link_libraries(luna_test_complete PRIVATE cmocka-static lualib luna_kernel)
+target_link_libraries(luna_test_complete PRIVATE cmocka-static lualib lfs luna_kernel)
+target_compile_definitions(luna_test_complete PRIVATE
+        COMPLETE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complete_modules")
 add_test(NAME complete COMMAND luna_test_complete)
 
 # Introspection: repr, help/whos, ?-sugar

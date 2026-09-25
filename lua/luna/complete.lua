@@ -131,16 +131,24 @@ local function builtin(line)
 end
 
 -- The engine entry point: builtin candidates merged with every
--- registered plugin source. Sources see the whole line (they may
--- implement e.g. path completion after "dofile('") and a raising
--- source is skipped, not fatal.
+-- registered source (the built-in require-target source below, plus
+-- plugin additions). Sources see the whole line (they may implement
+-- e.g. path completion after "dofile('") and a raising source is
+-- skipped, not fatal. Later candidates never duplicate earlier ones.
 function complete.line(line)
     local cands = builtin(line)
+    local seen = {}
+    for _, c in ipairs(cands) do
+        seen[c] = true
+    end
     for _, source in ipairs(complete.sources) do
         local ok, more = pcall(source, line)
         if ok and type(more) == "table" then
             for _, c in ipairs(more) do
-                cands[#cands + 1] = c
+                if not seen[c] then
+                    seen[c] = true
+                    cands[#cands + 1] = c
+                end
             end
         end
     end
@@ -153,5 +161,111 @@ function complete.add_source(source)
     end
     complete.sources[#complete.sources + 1] = source
 end
+
+-- --------------------------------------------------------------------- --
+-- require-target completion: `require "pre` / `require("pre` proposes
+-- loadable names — package.loaded and package.preload entries, plus
+-- packages found on disk in every directory the package.path "?"/
+-- "?/init.lua" elements point at (the bundled luna_modules tree, user
+-- project trees). A dotted prefix continues into the container: its
+-- loaded table's fields and its subpackage files on disk. Filesystem
+-- scans need lfs; without it that part simply shrinks the candidate
+-- set, and any unreadable directory is skipped.
+
+-- Directories behind the two path-element shapes require actually uses.
+local function path_dirs()
+    local dirs, seen = {}, {}
+    for elem in package.path:gmatch("[^;]+") do
+        local dir = elem:match("^(.*)/%?%.lua$")
+            or elem:match("^(.*)/%?/init%.lua$")
+        if dir and dir ~= "" and not seen[dir] then
+            seen[dir] = true
+            dirs[#dirs + 1] = dir
+        end
+    end
+    return dirs
+end
+
+-- Entry names of a directory, or nil when it cannot be listed.
+local function scan_dir(path)
+    local okl, lfs = pcall(require, "lfs")
+    if not okl or type(lfs) ~= "table" or not lfs.dir then
+        return nil
+    end
+    local ok, entries = pcall(function()
+        local out = {}
+        for entry in lfs.dir(path) do
+            out[#out + 1] = entry
+        end
+        return out
+    end)
+    return ok and entries or nil
+end
+
+local function add_matches(names, seen, entries, prefix, base)
+    for _, entry in ipairs(entries or {}) do
+        if entry:sub(1, 1) ~= "." then
+            local name = entry:gsub("%.lua$", "")
+            if name:sub(1, #prefix) == prefix then
+                local full = base and (base .. "." .. name) or name
+                if not seen[full] then
+                    seen[full] = true
+                    names[#names + 1] = full
+                end
+            end
+        end
+    end
+end
+
+local function require_source(line)
+    local prefix = line:match('require%s*%(%s*["\']([%w_.%-]*)$')
+        or line:match('require%s*["\']([%w_.%-]*)$')
+    if not prefix then
+        return {}
+    end
+
+    local names, seen = {}, {}
+    local function add(full)
+        if full ~= "" and not seen[full] then
+            seen[full] = true
+            names[#names + 1] = full
+        end
+    end
+
+    local base, tail = prefix:match("^(.*)%.([^%.]*)$")
+    if base then
+        -- dotted continuation: sub-names of the container package
+        local loaded = package.loaded[base]
+        if type(loaded) == "table" then
+            for k in pairs(loaded) do
+                if type(k) == "string" and k:sub(1, #tail) == tail then
+                    add(base .. "." .. k)
+                end
+            end
+        end
+        local dirpath = base:gsub("%.", "/")
+        for _, dir in ipairs(path_dirs()) do
+            add_matches(names, seen, scan_dir(dir .. "/" .. dirpath), tail, base)
+        end
+    else
+        for name in pairs(package.loaded) do
+            if type(name) == "string" and name:sub(1, #prefix) == prefix then
+                add(name)
+            end
+        end
+        for name in pairs(package.preload) do
+            if type(name) == "string" and name:sub(1, #prefix) == prefix then
+                add(name)
+            end
+        end
+        for _, dir in ipairs(path_dirs()) do
+            add_matches(names, seen, scan_dir(dir), prefix, nil)
+        end
+    end
+    table.sort(names)
+    return names
+end
+
+complete.add_source(require_source)
 
 return complete

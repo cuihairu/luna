@@ -16,6 +16,8 @@
 #include "luna_kernel.h"
 #include "luna_lua.h" /* generated: embedded complete module */
 
+int luaopen_lfs(lua_State *L); /* directory scans for require completion */
+
 static lua_State *L;
 
 static int setup_complete(void **state)
@@ -27,6 +29,15 @@ static int setup_complete(void **state)
 
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luaL_requiref(L, "lfs", luaopen_lfs, 0);
+    lua_pop(L, 1);
+
+    /* a fixture package tree reachable through package.path, the way
+     * the bundled luna_modules dir is in real runs */
+    if (luaL_dostring(L, "package.path = '" COMPLETE_FIXTURES
+                          "/?.lua;" COMPLETE_FIXTURES "/?/init.lua;' .. package.path") != LUA_OK) {
+        fail_msg("cannot set package.path: %s", lua_tostring(L, -1));
+    }
 
     /* preload the embedded completion module, then grab a handle */
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
@@ -234,6 +245,76 @@ static void test_complete_plugin_source_non_table_ignored(void **state)
     assert_non_null(strstr(buf, "print"));
 }
 
+/* -- require-target completion ------------------------------------------ */
+
+static void test_complete_require_lists_disk_packages(void **state)
+{
+    (void)state;
+    char buf[256];
+    completions("require \"dep", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "depalpha")); /* flat package file on disk */
+    /* loaded stdlib names join the candidates */
+    completions("require \"st", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "string"));
+}
+
+static void test_complete_require_preload_entries(void **state)
+{
+    (void)state;
+    if (luaL_dostring(L, "package.preload['depbeta'] = function() end") != LUA_OK) {
+        fail_msg("cannot seed preload: %s", lua_tostring(L, -1));
+    }
+    char buf[256];
+    completions("require('depb", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "depbeta"));
+}
+
+static void test_complete_require_dotted_subpackage_file(void **state)
+{
+    (void)state;
+    char buf[256];
+    /* subpkg/flourish.lua on disk, dotted through the package name */
+    completions("require \"subpkg.fl", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "subpkg.flourish"));
+}
+
+static void test_complete_require_dotted_loaded_field(void **state)
+{
+    (void)state;
+    /* load the package, then continue into its loaded table's fields */
+    if (luaL_dostring(L, "package.loaded['subpkg'] = { alpha = function() end, beta = 2 }") != LUA_OK) {
+        fail_msg("cannot seed loaded: %s", lua_tostring(L, -1));
+    }
+    char buf[256];
+    completions("require 'subpkg.al", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "subpkg.alpha"));
+}
+
+static void test_complete_require_no_match_is_empty(void **state)
+{
+    (void)state;
+    char buf[256];
+    completions("require \"zzzznope", buf, sizeof(buf));
+    assert_string_equal(buf, "");
+    /* the require source stays quiet when the line is not a require */
+    completions("pri", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "print"));
+}
+
+static void test_complete_later_source_duplicates_dropped(void **state)
+{
+    (void)state;
+    if (luaL_dostring(L,
+                      "C.add_source(function(line) return { 'dup_once', 'dup_once' } end)\n"
+                      "C.add_source(function(line) return { 'dup_once' } end)") != LUA_OK) {
+        fail_msg("add_source failed");
+    }
+    char buf[256];
+    completions("pri", buf, sizeof(buf));
+    assert_non_null(strstr(buf, "dup_once"));
+    assert_null(strstr(buf, "dup_once|dup_once")); /* deduped on merge */
+}
+
 /* -- runner ------------------------------------------------------------- */
 
 int main(void)
@@ -254,6 +335,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_complete_plugin_source_merged, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_complete_plugin_source_failure_isolated, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_complete_plugin_source_non_table_ignored, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_require_lists_disk_packages, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_require_preload_entries, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_require_dotted_subpackage_file, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_require_dotted_loaded_field, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_require_no_match_is_empty, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_complete_later_source_duplicates_dropped, setup_complete, teardown_complete),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

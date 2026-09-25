@@ -287,6 +287,46 @@ static void test_interrupt_hook_installed_only_during_exec(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 'xxx'"));
 }
 
+/* -- error hint group -------------------------------------------------- */
+
+static void test_runtime_error_hints_did_you_mean(void **state)
+{
+    (void)state;
+    out_len_reset();
+    /* a typo'd global earns its nearest real name */
+    assert_string_equal(feed("prnt('hi')"), "error");
+    assert_non_null(strstr(outbuf, "(global 'prnt')"));
+    assert_non_null(strstr(outbuf, "did you mean 'print'?"));
+}
+
+static void test_no_hint_when_nothing_is_close(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("qqzzxx_wxyz('hi')"), "error");
+    assert_null(strstr(outbuf, "did you mean"));
+}
+
+static void test_no_hint_when_the_global_exists(void **state)
+{
+    (void)state;
+    out_len_reset();
+    /* the name exists (just not callable): a suggestion would be noise */
+    assert_string_equal(feed("t0 = 1; t0()"), "error");
+    assert_null(strstr(outbuf, "did you mean"));
+}
+
+static void test_suggest_lists_two_tied_candidates(void **state)
+{
+    (void)state;
+    assert_string_equal(feed("gamma = 1"), "ok");
+    assert_string_equal(feed("gammy = 2"), "ok");
+    out_len_reset();
+    /* both real names are one edit away: list them together */
+    assert_string_equal(feed("gammx(1)"), "error");
+    assert_non_null(strstr(outbuf, "did you mean 'gamma' or 'gammy'?"));
+}
+
 /* -- In/Out register group -------------------------------------------- */
 
 static void test_in_register_records_inputs(void **state)
@@ -358,6 +398,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_interrupt_aborts_running_chunk, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_flag_cleared_after_abort, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_hook_installed_only_during_exec, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_runtime_error_hints_did_you_mean, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_no_hint_when_nothing_is_close, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_no_hint_when_the_global_exists, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_suggest_lists_two_tied_candidates, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_in_register_records_inputs, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_multiline_chunk_recorded_wholesale, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_help_sugar_is_numbered_input, setup_session, teardown_session),

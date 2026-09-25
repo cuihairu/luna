@@ -38,6 +38,18 @@ local function repr(v)
     return intro.repr(v)
 end
 
+-- Errors go out painted; messages annotating a missing global (Lua's
+-- "attempt to call a nil value (global 'fooo')") additionally earn a
+-- "did you mean" hint from luna.introspect. The hint must never turn
+-- the error report itself into a crash.
+local function report_error(session, err)
+    emit(paint(tostring(err), COLOR_ERR, session.color) .. "\n")
+    local ok_hint, hint = pcall(intro.suggest, err)
+    if ok_hint and type(hint) == "string" then
+        emit(paint("hint: " .. hint, COLOR_ERR, session.color) .. "\n")
+    end
+end
+
 local Session = {}
 Session.__index = Session
 
@@ -134,7 +146,7 @@ function Session:feed(line)
     self:record(chunk)
 
     if status == "error" and not wrapped_ok then
-        emit(paint(tostring(err), COLOR_ERR, self.color) .. "\n")
+        report_error(self, err)
         return "error"
     end
 
@@ -142,7 +154,7 @@ function Session:feed(line)
 
     local res = table.pack(kernel.exec(src, self.chunk_name .. "[" .. self.in_n .. "]"))
     if not res[1] then
-        emit(paint(tostring(res[2]), COLOR_ERR, self.color) .. "\n")
+        report_error(self, res[2])
         return "error"
     end
 

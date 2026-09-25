@@ -182,6 +182,77 @@ function introspect.whos()
     return table.concat(out, "\n") .. "\n"
 end
 
+-- Bounded Levenshtein distance; returns cutoff + 1 as soon as both
+-- strings are provably further apart than the cutoff (whole rows wider
+-- than it cannot recover).
+local function edit_distance(a, b, cutoff)
+    if math.abs(#a - #b) > cutoff then
+        return cutoff + 1
+    end
+    local prev, cur = {}, {}
+    for j = 0, #b do
+        prev[j + 1] = j
+    end
+    for i = 1, #a do
+        cur[1] = i
+        local row_best = i
+        local ca = a:byte(i)
+        for j = 1, #b do
+            local v = math.min(prev[j + 1] + 1, cur[j] + 1,
+                prev[j] + (ca == b:byte(j) and 0 or 1))
+            cur[j + 1] = v
+            if v < row_best then
+                row_best = v
+            end
+        end
+        if row_best > cutoff then
+            return cutoff + 1
+        end
+        for j = 0, #b do
+            prev[j + 1] = cur[j + 1]
+        end
+    end
+    return prev[#b + 1]
+end
+
+-- Suggest near-miss globals for runtime errors. Lua annotates failures
+-- like "attempt to call a nil value (global 'fooo')"; when the annotated
+-- global does not exist, the closest _G names are what the user meant.
+-- Returns "did you mean 'x'?" (two candidates when two are equally
+-- close), or nil when there is nothing credible to offer.
+function introspect.suggest(err)
+    local kind, name = tostring(err):match("%((%a+) '([%w_]+)'%)")
+    if kind ~= "global" or type(_G) ~= "table" then
+        return nil
+    end
+    if rawget(_G, name) ~= nil then
+        return nil -- exists but is not callable etc.: nothing to suggest
+    end
+    local cutoff = #name >= 4 and 2 or 1
+    local best, second
+    for cand in pairs(_G) do
+        if type(cand) == "string" and cand ~= name then
+            local d = edit_distance(name, cand, cutoff)
+            if d <= cutoff then
+                if not best or d < best.d or (d == best.d and cand < best.name) then
+                    second = best
+                    best = { name = cand, d = d }
+                elseif not second or d < second.d
+                    or (d == second.d and cand < second.name) then
+                    second = { name = cand, d = d }
+                end
+            end
+        end
+    end
+    if not best then
+        return nil
+    end
+    if second and second.d == best.d then
+        return string.format("did you mean '%s' or '%s'?", best.name, second.name)
+    end
+    return string.format("did you mean '%s'?", best.name)
+end
+
 -- seed docs: a handful of stdlib one-liners, extendable at runtime
 local seed = {
     print = "print(...) — writes its arguments (tab-separated) to the output funnel",

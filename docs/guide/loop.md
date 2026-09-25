@@ -346,9 +346,10 @@ loop.run()
 | 调用 | 语义 |
 | --- | --- |
 | `net.connectTls(host, port, opts?, cb)` | 异步解析 + TCP 连接 + TLS 握手;`cb(err, sock)`;opts 可省略 |
-| `net.listenTls(host, port, opts, onConn)` | 监听 TCP + TLS;opts 的 `cert`/`key` 必填;返回 server(`port` / `close` / `unref` / `ref` 同 net 面) |
+| `net.listenTls(host, port, opts, onConn)` | 监听 TCP + TLS;opts 的 `cert`/`key` 必填;返回 server(`port` / `address` / `close` / `unref` / `ref` 同 net 面) |
 | `sock:write(data, cb(err)?)` | 加密写出,送达后回调;握手未完时载荷先挂起,握手完成后自动冲出 |
 | `sock:read(cb)` | 解密后的明文按块交付;对端 close_notify 是 `cb(nil, nil)`,且连接随即收尾 |
+| `sock:peer()` / `sock:sockname()` | 同 net 面形状(裸 fd 直读内核);须在 socket 活着时调用 |
 | `sock:close(cb?)` / `sock:unref()` / `sock:ref()` | 同 net 面语义 |
 
 行为约定:
@@ -424,6 +425,7 @@ loop.run()
 | `udp.socket()` | 未绑定的发送端;首次 `send` 时 libuv 自动绑临时端口 |
 | `sock:send(data, host, port, cb(err)?)` | 发一个数据报(host 须为数字地址);回调按包一次性交付,载荷由实现持有到回调落地 |
 | `sock:port()` | 实际绑定的端口(临时端口读回用) |
+| `sock:sockname()` | 自己的地址 `{address, port, family}`——bind 端报绑定的地址;sender 首次 send 后报 libuv 选的临时端口(通配地址 `0.0.0.0`) |
 | `sock:close()` | 幂等关闭;打开的 sock 撑着循环——完事必须关 |
 
 行为约定:

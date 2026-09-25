@@ -66,10 +66,13 @@ static int setup_session(void **state)
     lua_setglobal(L, "__LUNA_INTROSPECT_SRC");
     lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
     lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
+    lua_pushlstring(L, LUNA_LUA_MAGIC, sizeof(LUNA_LUA_MAGIC) - 1);
+    lua_setglobal(L, "__LUNA_MAGIC_SRC");
     if (luaL_dostring(L,
                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-                      "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))") != LUA_OK) {
+                      "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))\n"
+                      "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))") != LUA_OK) {
         fail_msg("cannot preload modules: %s", lua_tostring(L, -1));
     }
 
@@ -78,6 +81,16 @@ static int setup_session(void **state)
     const char *src = "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"
                       "S = repl.new()\n";
     assert_int_equal(luaL_dostring(L, src), LUA_OK);
+
+    /* capture the base-globals snapshot the way luna_main does before
+     * the entry runs (session S included, so %reset spares it), so
+     * %reset keeps the runtime environment */
+    if (luaL_dostring(L,
+                      "local base = {}\n"
+                      "for k in pairs(_G) do base[k] = true end\n"
+                      "_G.__LUNA_BASE_GLOBALS = base") != LUA_OK) {
+        fail_msg("cannot snapshot base globals: %s", lua_tostring(L, -1));
+    }
     return 0;
 }
 
@@ -103,6 +116,26 @@ static const char *feed(const char *line)
     const char *status = lua_tostring(L, -1);
     lua_pop(L, 1); /* pcall already consumed func+args; only the result is left */
     return status;
+}
+
+/* evaluate code in the session VM and return the string it produced */
+static const char *eval_in_vm(const char *code)
+{
+    static char buf[512];
+    if (luaL_dostring(L, code) != LUA_OK) {
+        fail_msg("vm eval failed: %s", lua_tostring(L, -1));
+        return NULL;
+    }
+    if (lua_isboolean(L, -1)) {
+        snprintf(buf, sizeof(buf), "%s", lua_toboolean(L, -1) ? "true" : "false");
+    } else if (lua_isnil(L, -1)) {
+        snprintf(buf, sizeof(buf), "(nil)");
+    } else {
+        const char *s = lua_tostring(L, -1);
+        snprintf(buf, sizeof(buf), "%s", s ? s : "(other)");
+    }
+    lua_pop(L, 1);
+    return buf;
 }
 
 /* -- eval group ------------------------------------------------------ */
@@ -254,6 +287,59 @@ static void test_interrupt_hook_installed_only_during_exec(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 'xxx'"));
 }
 
+/* -- In/Out register group -------------------------------------------- */
+
+static void test_in_register_records_inputs(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("alpha = 7"), "ok");
+    assert_string_equal(feed("alpha * 2"), "ok");
+    assert_string_equal(eval_in_vm("return In[1]"), "alpha = 7");
+    assert_string_equal(eval_in_vm("return In[2]"), "alpha * 2");
+    /* a magic line is an input too */
+    assert_string_equal(feed("%whos"), "ok");
+    assert_string_equal(eval_in_vm("return In[3]"), "%whos");
+}
+
+static void test_multiline_chunk_recorded_wholesale(void **state)
+{
+    (void)state;
+    /* In[n] holds the whole accumulated chunk, not just the line that
+     * happened to complete it */
+    assert_string_equal(feed("function g(a)"), "continue");
+    assert_string_equal(feed("  return a + 1"), "continue");
+    assert_string_equal(feed("end"), "ok");
+    assert_string_equal(eval_in_vm("return In[1]"),
+                        "function g(a)\n  return a + 1\nend");
+}
+
+static void test_help_sugar_is_numbered_input(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("?type"), "ok");
+    assert_non_null(strstr(outbuf, "function"));
+    assert_string_equal(eval_in_vm("return In[1]"), "?type");
+}
+
+static void test_reset_clears_underscore_registers(void **state)
+{
+    (void)state;
+    assert_string_equal(feed("6*7"), "ok");
+    assert_string_equal(eval_in_vm("return _ == 42 and __ == nil"), "true");
+    assert_string_equal(feed("%reset"), "ok");
+    /* _ / __ / Out are cleared; the In history survives (what %hist reads) */
+    assert_string_equal(eval_in_vm("return _ == nil"), "true");
+    assert_string_equal(eval_in_vm("return __ == nil"), "true");
+    assert_string_equal(eval_in_vm("return next(Out) == nil"), "true");
+    assert_string_equal(eval_in_vm("return In[1] == '6*7'"), "true");
+    /* Out numbering starts over */
+    out_len_reset();
+    assert_string_equal(feed("8*8"), "ok");
+    assert_non_null(strstr(outbuf, "Out[1]: 64"));
+}
+
 /* -- runner ----------------------------------------------------------- */
 
 int main(void)
@@ -272,6 +358,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_interrupt_aborts_running_chunk, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_flag_cleared_after_abort, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_hook_installed_only_during_exec, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_in_register_records_inputs, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_multiline_chunk_recorded_wholesale, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_help_sugar_is_numbered_input, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_reset_clears_underscore_registers, setup_session, teardown_session),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

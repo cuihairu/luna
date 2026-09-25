@@ -112,6 +112,16 @@ magic.register("reset", function(session)
         end
     end
     _G.Out = {}
+    _G._ = nil
+    _G.__ = nil
+    -- In[n] is the input history (what %hist reads), not a result
+    -- register — IPython's %reset keeps In too. The sweep above takes
+    -- it like any post-startup global, so rebuild it from the session
+    -- log, the same source %hist reads.
+    _G.In = {}
+    for i, line in pairs(session.inputs or {}) do
+        _G.In[i] = line
+    end
     session.out = {}
     session.out_n = 0
     session.pending = nil

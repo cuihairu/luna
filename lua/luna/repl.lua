@@ -61,6 +61,18 @@ function Session:build(line)
     return self.pending .. "\n" .. line
 end
 
+-- One consumed input (a magic line, a help probe, or a complete
+-- chunk): session history plus the IPython-style In[n] global — the
+-- Out[n] counterpart, so `In[3]` recalls what was typed.
+function Session:record(line)
+    self.in_n = self.in_n + 1
+    self.inputs = self.inputs or {}
+    self.inputs[self.in_n] = line
+    _G.In = _G.In or {}
+    _G.In[self.in_n] = line
+    return self.in_n
+end
+
 -- feed(line) -> "ok" | "continue" | "error" | "done"
 -- nil line means EOF.
 function Session:feed(line)
@@ -76,9 +88,7 @@ function Session:feed(line)
     if line:sub(1, 1) == "%" then
         local mname, marg = line:match("^%%(%S+)%s*(.-)%s*$")
         if mname then
-            self.in_n = self.in_n + 1
-            self.inputs = self.inputs or {}
-            self.inputs[self.in_n] = line
+            self:record(line)
             local okm, magic = pcall(require, "luna.magic")
             if okm then
                 local okd, err = magic.dispatch(self, mname, marg)
@@ -94,13 +104,13 @@ function Session:feed(line)
     -- valid Lua, so interception here is unambiguous.
     local help_target = line:match("^%s*%?+%s*(.-)%s*$")
     if help_target and help_target ~= "" then
-        self.in_n = self.in_n + 1
+        self:record(line)
         self:show_help(help_target)
         return "ok"
     end
     local trailing = line:match("^(.-)%s*%?+%s*$")
     if trailing and trailing ~= "" then
-        self.in_n = self.in_n + 1
+        self:record(line)
         self:show_help(trailing)
         return "ok"
     end
@@ -119,9 +129,9 @@ function Session:feed(line)
         return "continue"
     end
     self.pending = nil
-    self.in_n = self.in_n + 1
-    self.inputs = self.inputs or {}
-    self.inputs[self.in_n] = line
+    -- the whole accumulated chunk goes to history/In[n], IPython
+    -- cell-style — not just the line that happened to complete it
+    self:record(chunk)
 
     if status == "error" and not wrapped_ok then
         emit(paint(tostring(err), COLOR_ERR, self.color) .. "\n")

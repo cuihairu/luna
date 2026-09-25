@@ -299,9 +299,9 @@ loop.run()
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。
 
-## loop.net:TLS 客户端(connectTls)
+## loop.net:TLS(connectTls / listenTls)
 
-`net.connectTls` 在 net 面上加一层 TLS:连接、证书校验、握手全部走事件循环,握手完成后交付的 `sock` 与普通 TCP 套接字同一套 `write` / `read` / `close` 契约——载荷加密在实现里完成,回调首参约定不变:
+net 面的 TLS 一对:客户端 `connectTls` 与服务端 `listenTls`。连接、证书校验、握手全部走事件循环,握手完成后交付的 `sock` 与普通 TCP 套接字同一套 `write` / `read` / `close` 契约——载荷加密在实现里完成,回调首参约定不变:
 
 ```lua
 local net = require("loop").net
@@ -320,20 +320,42 @@ end)
 loop.run()
 ```
 
+服务端与 `net.listen` 同构:opts 带上 `cert` / `key` 文件路径,每个完成握手的连接交给常驻的 `onConn` 回调:
+
+```lua
+local net = require("loop").net
+
+local srv
+srv = net.listenTls("127.0.0.1", 0, {   -- 0 = 临时端口
+    cert = "server-cert.pem",
+    key = "server-key.pem",
+}, function(err, sock)
+    assert(err == nil, err)
+    sock:read(function(e, chunk)
+        if chunk then sock:write(chunk) else sock:close() end
+    end)                                -- 一个 TLS echo 服务端
+end)
+print("listening on", srv:port())
+
+loop.run()
+```
+
 | 调用 | 语义 |
 | --- | --- |
 | `net.connectTls(host, port, opts?, cb)` | 异步解析 + TCP 连接 + TLS 握手;`cb(err, sock)`;opts 可省略 |
+| `net.listenTls(host, port, opts, onConn)` | 监听 TCP + TLS;opts 的 `cert`/`key` 必填;返回 server(`port` / `close` / `unref` / `ref` 同 net 面) |
 | `sock:write(data, cb(err)?)` | 加密写出,送达后回调;握手未完时载荷先挂起,握手完成后自动冲出 |
 | `sock:read(cb)` | 解密后的明文按块交付;对端 close_notify 是 `cb(nil, nil)`,且连接随即收尾 |
 | `sock:close(cb?)` / `sock:unref()` / `sock:ref()` | 同 net 面语义 |
 
 行为约定:
 
-- **证书校验默认开启**:系统 CA 库 + 主机名核对(SNI 随 host 发出);校验不过(自签、域名不符、过期)握手失败,错误从 `cb(err)` 出来;
-- **opts 定制校验**:`insecure = true` 跳过校验(自签开发服务器用);`ca = "路径"` 用指定 CA 文件替代系统库;
-- **失败即收尾**:解析、连接、握手任一步失败,`cb(err, nil)` 一次,半建的 socket 自行清理,循环照常排空;
+- **证书校验默认开启**:客户端按系统 CA 库 + 主机名核对(SNI 随 host 发出);校验不过(自签、域名不符、过期)握手失败,错误从 `cb(err)` 出来;
+- **opts 定制校验**:`insecure = true` 跳过校验(自签开发服务器用);`ca = "路径"` 用指定 CA 文件替代系统库;服务端 `cert`/`key` 加载失败是**同步抛错**(与 listen 的 bind 失败同款);
+- **失败即收尾**:客户端解析、连接、握手任一步失败,`cb(err, nil)` 一次,半建的 socket 自行清理;**服务端握手失败的连接被静默丢弃**,`onConn` 只收完成握手的对端;
 - **EOF 即终结**:对端发 close_notify 后 read 拿到 `(nil, nil)`,连接整体关闭(与 TCP 的半关闭不同,TLS 面没有 `shutdown`);
-- **构建依赖**:luna 带 OpenSSL 构建时 `connectTls` 可用;不带时调用报错说明如何启用,其余 loop 面不受影响。
+- **关 listener 不及于存量**:server:close 只停监听,已建立的连接各自继续;
+- **构建依赖**:luna 带 OpenSSL 构建时可用;不带时两个入口都报错说明如何启用,其余 loop 面不受影响。
 
 ## loop.udp:异步数据报
 

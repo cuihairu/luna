@@ -2,8 +2,9 @@
  * alive semantics, the prepare hook's serve poll, ^C interruption, the
  * loop.fs async file operations, loop.net client sockets against
  * real pthread echo servers (TCP on an ephemeral port + a unix path),
- * and loop.process aggregate child processes (capture, exit codes,
- * kill-by-signal, synchronous spawn failure).
+ * TLS client and server sockets against a baked-in self-signed
+ * certificate, and loop.process aggregate child processes (capture,
+ * exit codes, kill-by-signal, synchronous spawn failure).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -1169,6 +1170,17 @@ static const char *tls_cert_file(void)
     return path;
 }
 
+/* listenTls needs the key on disk too */
+static const char *tls_key_file(void)
+{
+    static const char *path = "/tmp/luna-loop-tls-key.pem";
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    fputs(TLS_TEST_KEY, f);
+    fclose(f);
+    return path;
+}
+
 /* connect + handshake + one write/read round trip, then the server's
  * close_notify arrives as the EOF signal; opts is the Lua table text */
 static void tls_roundtrip_case(const char *opts, int port)
@@ -1259,6 +1271,94 @@ static void test_tls_connect_refused_yields_error(void **state)
     /* the failure surfaces in slot one, the loop drains to a natural
      * return, and the half-built sock cleaned itself up */
     assert_string_equal(eval_string(code), "true,nil");
+}
+
+/* -- net.listenTls: the server side, clients over connectTls ----------- */
+
+/* one case runs listener and client in the same VM: listenTls echoes
+ * one record back then closes (close_notify), connectTls reads it and
+ * then the EOF signal, trusting the server via opts.ca */
+static void tls_listen_case(void)
+{
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1152];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then log[1] = 'conn:' .. e return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('pong:' .. chunk, function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {ca = '%s'}, function(e, s)\n"
+        "  if e then log[1] = 'connect:' .. e return end\n"
+        "  s:write('ping', function(e3)\n"
+        "    if e3 then log[1] = 'write:' .. e3 return end\n"
+        "    s:read(function(e4, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      s:read(function(e5, eof)\n"
+        "        log[2] = tostring(e5) .. '/' .. tostring(eof)\n"
+        "        s:close()\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key, cert);
+    assert_string_equal(eval_string(code), "pong:ping,nil/nil");
+}
+
+static void test_tls_listen_with_custom_ca_roundtrips(void **state)
+{
+    (void)state;
+    /* the client trusts the server's self-signed cert via opts.ca and
+     * the hostname check passes on the baked-in IP SAN */
+    tls_listen_case();
+}
+
+static void test_tls_listen_default_verify_rejected(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[896];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c) end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), function(e, s)\n"
+        "  out = tostring(e ~= nil) .. ',' .. tostring(s)\n"
+        "  if s then s:close() end\n"
+        "  srv:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    /* no opts: the self-signed server cert has no anchor in the system
+     * store, the handshake fails into cb(err, nil), the server never
+     * sees the peer, and the loop still drains */
+    assert_string_equal(eval_string(code), "true,nil");
+}
+
+static void test_tls_listen_bad_cert_throws(void **state)
+{
+    (void)state;
+    /* a missing certificate file is a setup error: it throws instead
+     * of waiting for the loop to run */
+    assert_string_equal(eval_string(
+        "local ok, err = pcall(function()\n"
+        "  return loop.net.listenTls('127.0.0.1', 0,"
+        " {cert = '/nonexistent.pem', key = '/nonexistent.pem'},\n"
+        "  function() end)\n"
+        "end)\n"
+        "return tostring(ok) .. ',' .. tostring(err ~= nil)"),
+        "false,true");
 }
 #endif /* LUNA_LOOP_HAVE_OPENSSL */
 
@@ -1705,6 +1805,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_custom_ca_accepts_self_signed, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_default_verify_rejects_self_signed, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_connect_refused_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),
 #endif
         cmocka_unit_test_setup_teardown(test_proc_run_echo_captures_stdout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_exit_code_and_stderr, setup_loop, teardown_loop),

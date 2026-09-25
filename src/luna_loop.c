@@ -1823,6 +1823,7 @@ static const luaL_Reg server_funcs[] = {
 };
 
 static int l_net_connect_tls(lua_State *L);   /* TLS section, below */
+static int l_net_listen_tls(lua_State *L);    /* TLS section, below */
 
 static const luaL_Reg net_funcs[] = {
     { "connect", l_net_connect },
@@ -1830,6 +1831,7 @@ static const luaL_Reg net_funcs[] = {
     { "connectTls", l_net_connect_tls },
     { "listen", l_net_listen },
     { "listenPipe", l_net_listen_pipe },
+    { "listenTls", l_net_listen_tls },
     { NULL, NULL },
 };
 
@@ -2484,6 +2486,7 @@ struct tsock {
     int tcp_connected;   /* the connect() probe has seen WRITABLE */
     int handshaked;
     int got_eof;
+    int is_server;       /* accepted by listenTls: SSL_accept, quiet fail */
     lua_State *L;
     int selfref;         /* registry -> userdata, dropped on close */
     int connectref;      /* pending connect/handshake callback */
@@ -2503,6 +2506,49 @@ static void tsock_close(struct tsock *t);
 static void on_tls_event(uv_poll_t *h, int status, int events);
 static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
                             struct addrinfo *res);
+
+/* shared construction for client and accepted socks: userdata plus
+ * metatable plus registry pin, an SSL object over fd, the handshake
+ * state pointed the right way. SSL_new up-references the context; only
+ * client socks keep (and free) a ctx of their own, accepted ones
+ * borrow the listener's. Returns NULL (already cleaned up) when the
+ * SSL object cannot be built; the caller raises. */
+static struct tsock *tsock_new(lua_State *L, int fd, SSL_CTX *ctx,
+                               int is_server)
+{
+    struct tsock *t = calloc(1, sizeof(*t));
+    if (!t) {
+        return NULL;
+    }
+    t->L = L;
+    t->fd = fd;
+    t->is_server = is_server;
+    t->tcp_connected = is_server; /* accepted sockets are connected */
+    t->readref = LUA_NOREF;
+    t->writeref = LUA_NOREF;
+    t->closeref = LUA_NOREF;
+    t->connectref = LUA_NOREF;
+    t->selfref = LUA_NOREF;
+
+    struct tsock **p = (struct tsock **)lua_newuserdata(L, sizeof(*p));
+    *p = t;
+    luaL_getmetatable(L, "loop.tsock");
+    lua_setmetatable(L, -2);
+    t->selfref = luaL_ref(L, LUA_REGISTRYINDEX); /* pin until close */
+    keepalive_open();
+
+    t->ctx = NULL;
+    t->ssl = SSL_new(ctx);
+    if (!t->ssl) {
+        tsock_close(t);
+        return NULL;
+    }
+    SSL_set_fd(t->ssl, fd);
+    if (is_server) {
+        SSL_set_accept_state(t->ssl);
+    }
+    return t;
+}
 
 /* deliver cb(err, value...) and drop the callback reference; a raising
  * callback is reported, never fatal — net.sock's delivery shape */
@@ -2592,6 +2638,14 @@ static void tls_fail(struct tsock *t, const char *err)
         tls_errstr(msg, sizeof(msg));
         err = msg;
     }
+    if (t->is_server) {
+        /* a peer whose handshake fails never reaches onConn: drop it
+         * quietly (the error is the client's problem) */
+        luaL_unref(t->L, LUA_REGISTRYINDEX, t->connectref);
+        t->connectref = LUA_NOREF;
+        tsock_close(t);
+        return;
+    }
     /* every outstanding callback hears about it, then we close */
     tsock_deliver(t, &t->writeref, err, NULL, 0);
     tsock_deliver(t, &t->readref, err, NULL, 0);
@@ -2609,7 +2663,7 @@ static void tls_pump(struct tsock *t)
     char buf[16384];
 
     if (!t->handshaked) {
-        int r = SSL_connect(t->ssl);
+        int r = t->is_server ? SSL_accept(t->ssl) : SSL_connect(t->ssl);
         if (r == 1) {
             t->handshaked = 1;
             tls_update_events(t);
@@ -2752,34 +2806,9 @@ static int l_net_connect_tls(lua_State *L)
     }
     luaL_checktype(L, cb_idx, LUA_TFUNCTION);
 
-    struct tsock *t = calloc(1, sizeof(*t));
-    if (!t) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) {
         return luaL_error(L, "loop.net: out of memory");
-    }
-    t->L = L;
-    t->fd = -1;
-    t->readref = LUA_NOREF;
-    t->writeref = LUA_NOREF;
-    t->closeref = LUA_NOREF;
-    t->connectref = LUA_NOREF;
-    t->selfref = LUA_NOREF;
-    snprintf(t->host, sizeof(t->host), "%s", host);
-
-    /* the userdata + metatable, pushed before anything can fail */
-    struct tsock **p = (struct tsock **)lua_newuserdata(L, sizeof(*p));
-    *p = t;
-    luaL_getmetatable(L, "loop.tsock");
-    lua_setmetatable(L, -2);
-    t->selfref = luaL_ref(L, LUA_REGISTRYINDEX); /* pin until close */
-    keepalive_open();
-
-    lua_pushvalue(L, cb_idx);
-    t->connectref = luaL_ref(L, LUA_REGISTRYINDEX);
-
-    t->ctx = SSL_CTX_new(TLS_client_method());
-    if (!t->ctx) {
-        tls_fail(t, NULL);
-        return 1;
     }
     int insecure = 0;
     if (opt_idx) {
@@ -2788,27 +2817,33 @@ static int l_net_connect_tls(lua_State *L)
         lua_pop(L, 1);
         lua_getfield(L, opt_idx, "ca");
         const char *ca = lua_tostring(L, -1);
-        if (ca) {
-            if (SSL_CTX_load_verify_locations(t->ctx, ca, NULL) != 1) {
-                lua_pop(L, 1);
-                tls_fail(t, "tls: cannot load CA file");
-                return 1;
-            }
+        if (ca && SSL_CTX_load_verify_locations(ctx, ca, NULL) != 1) {
+            lua_pop(L, 1);
+            SSL_CTX_free(ctx);
+            return luaL_error(L, "loop.net: cannot load CA file '%s'", ca);
         }
         lua_pop(L, 1);
     }
     if (insecure) {
-        SSL_CTX_set_verify(t->ctx, SSL_VERIFY_NONE, NULL);
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
     } else {
-        SSL_CTX_set_verify(t->ctx, SSL_VERIFY_PEER, NULL);
-        SSL_CTX_set_default_verify_paths(t->ctx);
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_default_verify_paths(ctx);
     }
 
-    t->ssl = SSL_new(t->ctx);
-    if (!t->ssl) {
-        tls_fail(t, NULL);
-        return 1;
+    /* the sock (userdata, pin, SSL) — setup failures raise: a bad CA
+     * path or a starved allocator is the caller's mistake, while
+     * resolution/connect/handshake failures reach cb(err) at runtime */
+    struct tsock *t = tsock_new(L, -1, ctx, 0);
+    if (!t) {
+        SSL_CTX_free(ctx);
+        return luaL_error(L, "loop.net: out of memory");
     }
+    t->ctx = ctx; /* the sock frees the context at close */
+    snprintf(t->host, sizeof(t->host), "%s", host);
+    lua_pushvalue(L, cb_idx);
+    t->connectref = luaL_ref(L, LUA_REGISTRYINDEX);
+
     if (!insecure) {
         SSL_set1_host(t->ssl, t->host); /* hostname checked at verify */
     }
@@ -2998,12 +3033,266 @@ static const luaL_Reg tsock_funcs[] = {
     { NULL, NULL },
 };
 
-#else  /* no OpenSSL: connectTls exists and explains itself */
+/* -- net.listenTls: the server side of the TLS face ------------------------
+ *
+ * The same hand-rolled style as connectTls, mirrored: a plain listening
+ * socket (bind/listen synchronously, like net.listen) polled for
+ * incoming connections; every accept builds a server-side tsock whose
+ * SSL_accept runs off the same pump. Only fully handshaken connections
+ * reach onConn — one that fails verification or tears mid-handshake is
+ * dropped quietly, the error being the client's to see. */
+
+struct tserver {
+    uv_poll_t h;         /* first member: polls the listening fd */
+    int closed;
+    int poll_inited;
+    lua_State *L;
+    int selfref, connref, closeref;
+    SSL_CTX *ctx;
+    int listen_fd;
+    int bound_port;      /* read back by :port() */
+};
+
+static void tserver_close(struct tserver *sv);
+
+static void on_tserver_closed(uv_handle_t *handle)
+{
+    struct tserver *sv = (struct tserver *)handle;
+    keepalive_close();
+    if (sv->closeref != LUA_NOREF) {
+        int ref = sv->closeref;
+        sv->closeref = LUA_NOREF;
+        lua_State *L = sv->L;
+        lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+        luaL_unref(L, LUA_REGISTRYINDEX, ref);
+        if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            const char *msg = lua_tostring(L, -1);
+            fprintf(stderr, "loop: tls callback error: %s\n",
+                    msg ? msg : lua_typename(L, lua_type(L, -1)));
+            lua_pop(L, 1);
+        }
+    }
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->selfref);
+}
+
+static void tserver_close(struct tserver *sv)
+{
+    if (sv->closed) {
+        return;
+    }
+    sv->closed = 1;
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->connref);
+    sv->connref = LUA_NOREF;
+    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->closeref);
+    sv->closeref = LUA_NOREF;
+    /* live connections keep their SSL up-reference to the context, so
+     * freeing here is safe while they finish out their conversations */
+    SSL_CTX_free(sv->ctx);
+    sv->ctx = NULL;
+    if (sv->listen_fd >= 0) {
+        close(sv->listen_fd);
+        sv->listen_fd = -1;
+    }
+    if (sv->poll_inited) {
+        uv_close((uv_handle_t *)&sv->h, on_tserver_closed);
+    } else {
+        on_tserver_closed((uv_handle_t *)&sv->h);
+    }
+}
+
+/* deliver a handshaken connection to the retained onConn callback */
+static void tserver_deliver_conn(struct tserver *sv, struct tsock *t)
+{
+    lua_State *L = sv->L;
+    if (sv->connref == LUA_NOREF) {
+        if (t) {
+            tsock_close(t); /* nobody is listening for peers */
+        }
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, sv->connref);
+    lua_pushnil(L);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, t->selfref);
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: tls callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+/* poll callback on the listening socket: accept one, start its TLS
+ * handshake; the peer surfaces through onConn when the pump finishes */
+static void on_tserver_event(uv_poll_t *h, int status, int events)
+{
+    struct tserver *sv = (struct tserver *)h;
+    if (sv->closed || status != 0 || !(events & UV_READABLE)) {
+        if (status != 0 && !sv->closed) {
+            tserver_close(sv); /* the listener itself failed */
+        }
+        return;
+    }
+    int c = accept(sv->listen_fd, NULL, NULL);
+    if (c < 0) {
+        return; /* EAGAIN or a transient accept error: poll re-arms */
+    }
+    int flags = fcntl(c, F_GETFL, 0);
+    fcntl(c, F_SETFL, flags | O_NONBLOCK);
+    struct tsock *t = tsock_new(sv->L, c, sv->ctx, 1);
+    if (!t) {
+        close(c);
+        return;
+    }
+    /* pending handshake delivery: tsock_deliver pushes (nil, sock),
+     * exactly the onConn shape — the conn ref rides in connectref */
+    lua_rawgeti(sv->L, LUA_REGISTRYINDEX, sv->connref);
+    t->connectref = luaL_ref(sv->L, LUA_REGISTRYINDEX);
+    t->poll_inited = 1;
+    uv_poll_init(&g_loop, &t->h, c);
+    uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
+    tls_pump(t); /* the ClientHello may already be readable */
+}
+
+/* net.listenTls(host, port, opts, onConn) -> server; opts carries
+ * cert and key paths (required). Bind/listen/cert errors throw. */
+static int l_net_listen_tls(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, port >= 0 && port <= 65535, 2, "port out of range");
+    luaL_checktype(L, 3, LUA_TTABLE);
+    luaL_checktype(L, 4, LUA_TFUNCTION);
+
+    lua_getfield(L, 3, "cert");
+    const char *cert = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "key");
+    const char *key = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    luaL_argcheck(L, cert != NULL, 3, "opts.cert (path) required");
+    luaL_argcheck(L, key != NULL, 3, "opts.key (path) required");
+
+    struct sockaddr_storage ss;
+    if (bind_addr_of(host, (int)port, &ss) != 0) {
+        return luaL_error(L, "loop.net: cannot bind '%s' (numeric address "
+                             "required)", host);
+    }
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) {
+        return luaL_error(L, "loop.net: out of memory");
+    }
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert) != 1 ||
+        SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) != 1 ||
+        SSL_CTX_check_private_key(ctx) != 1) {
+        char msg[256];
+        tls_errstr(msg, sizeof(msg));
+        SSL_CTX_free(ctx);
+        return luaL_error(L, "loop.net: cannot load certificate: %s", msg);
+    }
+
+    struct tserver *sv = lua_newuserdata(L, sizeof(*sv));
+    memset(sv, 0, sizeof(*sv));
+    sv->L = L;
+    sv->connref = LUA_NOREF;
+    sv->closeref = LUA_NOREF;
+    sv->ctx = ctx;
+    sv->listen_fd = -1;
+    luaL_getmetatable(L, "loop.tserver");
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1);
+    sv->selfref = luaL_ref(L, LUA_REGISTRYINDEX);
+    keepalive_open();
+
+    sv->listen_fd = socket(ss.ss_family, SOCK_STREAM, 0);
+    if (sv->listen_fd < 0) {
+        int e = errno;
+        tserver_close(sv);
+        return luaL_error(L, "loop.net: socket failed: %s", strerror(e));
+    }
+    int one = 1;
+    setsockopt(sv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    if (bind(sv->listen_fd, (struct sockaddr *)&ss, sizeof ss) != 0 ||
+        listen(sv->listen_fd, SOMAXCONN) != 0) {
+        int e = errno;
+        tserver_close(sv);
+        return luaL_error(L, "loop.net: listen failed: %s", strerror(e));
+    }
+    struct sockaddr_in bound;
+    socklen_t blen = sizeof bound;
+    if (getsockname(sv->listen_fd, (struct sockaddr *)&bound, &blen) == 0) {
+        sv->bound_port = ntohs(bound.sin_port);
+    }
+    sv->connref = pin_cb(L, 4);
+
+    sv->poll_inited = 1;
+    uv_poll_init(&g_loop, &sv->h, sv->listen_fd);
+    int rc = uv_poll_start(&sv->h, UV_READABLE, on_tserver_event);
+    if (rc != 0) {
+        tserver_close(sv);
+        return luaL_error(L, "loop.net: listen failed: %s", uv_strerror(rc));
+    }
+    return 1;
+}
+
+static int l_tserver_close(lua_State *L)
+{
+    struct tserver *sv = luaL_checkudata(L, 1, "loop.tserver");
+    int with_cb = !lua_isnoneornil(L, 2);
+    if (with_cb) {
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        if (sv->closeref != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, sv->closeref);
+        }
+        sv->closeref = pin_cb(L, 2);
+    }
+    tserver_close(sv);
+    return 0;
+}
+
+static int l_tserver_port(lua_State *L)
+{
+    struct tserver *sv = luaL_checkudata(L, 1, "loop.tserver");
+    if (sv->closed) {
+        return luaL_error(L, "loop.net: tls server is closed");
+    }
+    lua_pushinteger(L, sv->bound_port);
+    return 1;
+}
+
+static int l_tserver_tostring(lua_State *L)
+{
+    struct tserver *sv = luaL_checkudata(L, 1, "loop.tserver");
+    if (sv->closed) {
+        lua_pushliteral(L, "tserver (closed)");
+    } else {
+        lua_pushfstring(L, "tserver (%d)", sv->bound_port);
+    }
+    return 1;
+}
+
+LUNA_HANDLE_CTL(tserver, struct tserver, "loop.tserver")
+
+static const luaL_Reg tserver_funcs[] = {
+    { "close", l_tserver_close },
+    { "port", l_tserver_port },
+    { "unref", l_tserver_unref },
+    { "ref", l_tserver_ref },
+    { NULL, NULL },
+};
+
+#else  /* no OpenSSL: connectTls/listenTls exist and explain themselves */
 
 static int l_net_connect_tls(lua_State *L)
 {
     return luaL_error(L,
         "loop.net: connectTls needs a build with OpenSSL (the crypto "
+        "module's dependency); this binary was built without it");
+}
+
+static int l_net_listen_tls(lua_State *L)
+{
+    return luaL_error(L,
+        "loop.net: listenTls needs a build with OpenSSL (the crypto "
         "module's dependency); this binary was built without it");
 }
 
@@ -3538,6 +3827,13 @@ int luaopen_luna_loop(lua_State *L)
         luaL_newlib(L, tsock_funcs);
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, l_tsock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+    if (luaL_newmetatable(L, "loop.tserver")) {
+        luaL_newlib(L, tserver_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_tserver_tostring);
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);

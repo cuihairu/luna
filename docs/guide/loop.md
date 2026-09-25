@@ -284,10 +284,12 @@ loop.run()
 | `net.listen(host, port, onConn)` | 监听 TCP;host 须为**数字地址**(`"0.0.0.0"` = 全接口),`port 0` = 临时端口;返回 server |
 | `net.listenPipe(path, onConn)` | 监听 unix domain;路径须不存在(先 unlink),关闭**不会**删除路径 |
 | `server:port()` | 实际绑定的端口(临时端口读回用) |
+| `server:address()` | 监听地址 `{address = "127.0.0.1", port = N, family = "inet"}`;pipe server 是 `{address = path, family = "unix"}` |
 | `server:close(cb?)` | 幂等关闭;回调在句柄真正关闭后落地 |
 | `sock:write(data, cb(err)?)` | 写出载荷,送达后回调(载荷由实现持有到回调落地) |
 | `sock:read(cb)` | 流式读:每块 `cb(nil, chunk)`;对端 EOF 是 `cb(nil, nil)`;出错 `cb(err)`;再次调用即换回调 |
 | `sock:shutdown(cb(err)?)` | 半关闭(FIN):对端读到 EOF,本端仍可继续读;不叫 `end` 是因为它是 Lua 关键字(`sock:end()` 无法解析) |
+| `sock:peer()` / `sock:sockname()` | 对端 / 本端地址,形状同 `server:address()`;须在 socket 活着时调用 |
 | `sock:close()` | 幂等关闭;打开的 socket 或 server 让 `run()` 持续——和 Node 一样,完事必须关 |
 
 行为约定:
@@ -297,6 +299,7 @@ loop.run()
 - **半关闭**:`shutdown()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
 - **连接回调常驻**:`onConn(err, sock)` 对每个连接交付一次,引用由实现持有;accept 出错(如 fd 耗尽)也从它的 `err` 出来,不掀翻循环;
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
+- **地址面是同步取值**:`peer()`/`sockname()`/`address()` 直读内核,不在回调里;TCP 的 `family` 是 `inet`/`inet6`,pipe 是 `unix` 且无 `port`;pipe 的对端若未显式 bind 自己的路径,`peer().address` 是空串(OS 的匿名语义);已关闭的 sock 调它们会抛错;
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。
 
 ## loop.net:TLS(connectTls / listenTls)

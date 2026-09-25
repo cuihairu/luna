@@ -1571,6 +1571,84 @@ static int sock_tostring(lua_State *L)
     return 1;
 }
 
+/* push {address = ..., port = ..., family = "inet"|"inet6"} for an
+ * AF_INET/6 sockaddr — the shape sock:peer/sockname and
+ * server:address all return */
+static int push_sockaddr(lua_State *L, const struct sockaddr_storage *ss)
+{
+    char host[128];
+    lua_createtable(L, 0, 3);
+    if (ss->ss_family == AF_INET || ss->ss_family == AF_INET6) {
+        if (uv_ip_name((const struct sockaddr *)ss, host,
+                       sizeof(host)) != 0) {
+            host[0] = '\0';
+        }
+        lua_pushstring(L, host);
+        lua_setfield(L, -2, "address");
+        if (ss->ss_family == AF_INET6) {
+            lua_pushinteger(L,
+                ntohs(((const struct sockaddr_in6 *)ss)->sin6_port));
+        } else {
+            lua_pushinteger(L,
+                ntohs(((const struct sockaddr_in *)ss)->sin_port));
+        }
+        lua_setfield(L, -2, "port");
+        lua_pushstring(L, ss->ss_family == AF_INET ? "inet" : "inet6");
+        lua_setfield(L, -2, "family");
+    } else {
+        lua_pushstring(L, "unknown");
+        lua_setfield(L, -2, "family");
+    }
+    return 1;
+}
+
+/* sock:peer() / sock:sockname() -> {address, port?, family}; the pipe
+ * variants report the path with family = "unix". Call while the
+ * socket is live — a closed handle has no name to report, and a TCP
+ * socket still connecting reports the OS's ENOTCONN. */
+static int sock_addr(lua_State *L, int peer)
+{
+    struct sock *s = luaL_checkudata(L, 1, "loop.sock");
+    luaL_argcheck(L, !s->closed, 1, "sock is closed");
+    if (s->kind == SOCK_PIPE) {
+        char buf[1024];
+        size_t len = sizeof buf;
+        int rc = peer ? uv_pipe_getpeername(&s->h.pipe, buf, &len)
+                      : uv_pipe_getsockname(&s->h.pipe, buf, &len);
+        if (rc != 0) {
+            return luaL_error(L, "loop.net: get%sname: %s",
+                              peer ? "peer" : "sock", uv_strerror(rc));
+        }
+        lua_createtable(L, 0, 2);
+        lua_pushlstring(L, buf, len);
+        lua_setfield(L, -2, "address");
+        lua_pushstring(L, "unix");
+        lua_setfield(L, -2, "family");
+        return 1;
+    }
+    struct sockaddr_storage ss;
+    int len = sizeof ss;
+    int rc = peer ? uv_tcp_getpeername(&s->h.tcp,
+                                       (struct sockaddr *)&ss, &len)
+                  : uv_tcp_getsockname(&s->h.tcp,
+                                       (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.net: get%sname: %s",
+                          peer ? "peer" : "sock", uv_strerror(rc));
+    }
+    return push_sockaddr(L, &ss);
+}
+
+static int l_sock_peer(lua_State *L)
+{
+    return sock_addr(L, 1);
+}
+
+static int l_sock_sockname(lua_State *L)
+{
+    return sock_addr(L, 0);
+}
+
 /* -- listen (server side) --------------------------------------------- */
 
 /* a listening socket. The connection callback is retained (the
@@ -1799,6 +1877,35 @@ static int server_tostring(lua_State *L)
     return 1;
 }
 
+/* server:address() -> {address, port?, family}; the pipe variant
+ * reports the bound path with family = "unix" */
+static int l_server_address(lua_State *L)
+{
+    struct lserver *sv = luaL_checkudata(L, 1, "loop.server");
+    if (sv->kind == SOCK_PIPE) {
+        char buf[1024];
+        size_t len = sizeof buf;
+        int rc = uv_pipe_getsockname(&sv->h.pipe, buf, &len);
+        if (rc != 0) {
+            return luaL_error(L, "loop.net: getsockname: %s",
+                              uv_strerror(rc));
+        }
+        lua_createtable(L, 0, 2);
+        lua_pushlstring(L, buf, len);
+        lua_setfield(L, -2, "address");
+        lua_pushstring(L, "unix");
+        lua_setfield(L, -2, "family");
+        return 1;
+    }
+    struct sockaddr_storage ss;
+    int len = sizeof ss;
+    int rc = uv_tcp_getsockname(&sv->h.tcp, (struct sockaddr *)&ss, &len);
+    if (rc != 0) {
+        return luaL_error(L, "loop.net: getsockname: %s", uv_strerror(rc));
+    }
+    return push_sockaddr(L, &ss);
+}
+
 LUNA_HANDLE_CTL(sock, struct sock, "loop.sock")
 
 static const luaL_Reg sock_funcs[] = {
@@ -1807,6 +1914,8 @@ static const luaL_Reg sock_funcs[] = {
     { "shutdown", l_sock_end },
     { "end", l_sock_end },  /* bracket-callable alias: 'end' is a keyword */
     { "close", l_sock_close },
+    { "peer", l_sock_peer },
+    { "sockname", l_sock_sockname },
     { "unref", l_sock_unref },
     { "ref", l_sock_ref },
     { NULL, NULL },
@@ -1817,6 +1926,7 @@ LUNA_HANDLE_CTL(server, struct lserver, "loop.server")
 static const luaL_Reg server_funcs[] = {
     { "close", l_server_close },
     { "port", l_server_port },
+    { "address", l_server_address },
     { "unref", l_server_unref },
     { "ref", l_server_ref },
     { NULL, NULL },

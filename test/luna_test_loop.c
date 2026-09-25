@@ -2,6 +2,7 @@
  * alive semantics, the prepare hook's serve poll, ^C interruption, the
  * loop.fs async file operations, loop.net client sockets against
  * real pthread echo servers (TCP on an ephemeral port + a unix path),
+ * the sock:peer/sockname and server:address reporting face,
  * TLS client and server sockets against a baked-in self-signed
  * certificate, loop.process aggregate child processes (capture,
  * exit codes, kill-by-signal, synchronous spawn failure), and the
@@ -1937,6 +1938,80 @@ static void test_net_read_survives_multiple_chunks(void **state)
     close(fd);
 }
 
+/* -- sock:peer / sock:sockname / server:address ------------------------- */
+
+static void test_net_sock_addr_tcp(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local cshared\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local p = c:peer()   -- the server sees the client's address\n"
+        "  gport = p.port > 0\n"
+        "  gaddr = p.address\n"
+        "  cshared = c\n"
+        "end)\n"
+        "local a = srv:address()\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  local p, sn = s:peer(), s:sockname()\n"
+        "  s:close()\n"
+        "  local ok = pcall(function() return s:peer() end)\n"
+        "  out = table.concat({\n"
+        "    tostring(a.address == '127.0.0.1'),\n"
+        "    tostring(a.port == srv:port()),\n"
+        "    a.family,\n"
+        "    tostring(p.address == '127.0.0.1'),\n"
+        "    tostring(p.port == srv:port()),\n"
+        "    sn.family,\n"
+        "    tostring(sn.port > 0),\n"
+        "    tostring(gaddr == '127.0.0.1'),\n"
+        "    tostring(gport),\n"
+        "    tostring(not ok),\n"
+        "  }, ',')\n"
+        "  cshared:close()\n"
+        "  srv:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true,true,inet,true,true,inet,true,true,true,true");
+}
+
+static void test_net_sock_addr_pipe(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "local path = '/tmp/luna-test-addrpipe.sock'\n"
+        "os.remove(path)\n"
+        "out = 'none'\n"
+        "local cshared\n"
+        "psrv = net.listenPipe(path, function(e, c)\n"
+        "  cshared = c\n"
+        "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
+        "end)\n"
+        "local a = psrv:address()\n"
+        "net.connectPipe(path, function(e, s)\n"
+        "  local p, sn = s:peer(), s:sockname()\n"
+        "  out = table.concat({\n"
+        "    tostring(a.family == 'unix'),\n"
+        "    tostring(a.address == path),\n"
+        "    tostring(a.port == nil),\n"
+        "    tostring(p.family == 'unix'),\n"
+        "    tostring(p.address == path),\n"
+        "    tostring(sn.family == 'unix'),\n"
+        "    gfamily,\n"
+        "  }, ',')\n"
+        "  s:close()\n"
+        "  cshared:close()\n"
+        "  psrv:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true,true,true,true,true,true,unix");
+}
+
 /* -- process.spawn: live stdio as ordinary socks ----------------------- */
 
 static void test_proc_spawn_cat_roundtrip(void **state)
@@ -2074,6 +2149,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_read_survives_multiple_chunks, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_sock_addr_tcp, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_sock_addr_pipe, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_tls_insecure_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_custom_ca_accepts_self_signed, setup_loop, teardown_loop),

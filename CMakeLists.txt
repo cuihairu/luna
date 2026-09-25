@@ -124,6 +124,12 @@ target_include_directories(luna_loop PUBLIC
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_SOURCE_DIR}/deps/libuv/include")
 target_link_libraries(luna_loop PUBLIC uv_a)
+# net.connectTls rides on OpenSSL when it is around; without it the
+# loop builds fine and connectTls reports how to enable TLS
+if(LUNA_HAVE_OPENSSL)
+    target_compile_definitions(luna_loop PUBLIC LUNA_LOOP_HAVE_OPENSSL=1)
+    target_link_libraries(luna_loop PUBLIC OpenSSL::SSL)
+endif()
 
 # embed the entry plus policy modules into the binary (raw strings)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)

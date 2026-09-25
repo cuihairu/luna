@@ -1822,9 +1822,12 @@ static const luaL_Reg server_funcs[] = {
     { NULL, NULL },
 };
 
+static int l_net_connect_tls(lua_State *L);   /* TLS section, below */
+
 static const luaL_Reg net_funcs[] = {
     { "connect", l_net_connect },
     { "connectPipe", l_net_connect_pipe },
+    { "connectTls", l_net_connect_tls },
     { "listen", l_net_listen },
     { "listenPipe", l_net_listen_pipe },
     { NULL, NULL },
@@ -2450,6 +2453,562 @@ static const luaL_Reg os_funcs[] = {
     { NULL, NULL },
 };
 
+/* -- TLS sockets (net.connectTls) ------------------------------------------
+ *
+ * An OpenSSL state machine driven by uv_poll on a hand-rolled fd: the
+ * fd cannot live in a uv_tcp_t (that would fight the SSL layer for
+ * the event subscription), so connect, read and write are all our own
+ * non-blocking loops around SSL_connect/SSL_read/SSL_write, resumed
+ * from poll events whenever OpenSSL says WANT_READ/WANT_WRITE.
+ *
+ * The face mirrors loop.net's sock: write(data, cb), read(cb) with
+ * cb(nil, chunk) streaming and cb(nil, nil) on EOF, close(cb?), the
+ * same keep-alive and callback-first contract. Certificates verify
+ * against the system store with SNI + hostname checking on; opts
+ * {insecure = true} turns both off, opts {ca = path} pins a store. */
+
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stddef.h>
+
+struct tsock {
+    uv_poll_t h;         /* first member: tsock == (struct tsock *)handle */
+    int closed;
+    int poll_inited;     /* h may only uv_close after uv_poll_init */
+    int tcp_connected;   /* the connect() probe has seen WRITABLE */
+    int handshaked;
+    int got_eof;
+    lua_State *L;
+    int selfref;         /* registry -> userdata, dropped on close */
+    int connectref;      /* pending connect/handshake callback */
+    int readref;         /* resident read callback (NOREF when none) */
+    int writeref;        /* pending one-shot write callback */
+    int closeref;        /* pending close() callback */
+    SSL_CTX *ctx;
+    SSL *ssl;
+    int fd;
+    char host[256];      /* SNI + hostname check, copied out of Lua */
+    char *pend;          /* pending write payload, owned until flushed */
+    size_t pend_len, pend_off;
+    uv_getaddrinfo_t ai; /* only during name resolution */
+};
+
+static void tsock_close(struct tsock *t);
+static void on_tls_event(uv_poll_t *h, int status, int events);
+static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
+                            struct addrinfo *res);
+
+/* deliver cb(err, value...) and drop the callback reference; a raising
+ * callback is reported, never fatal — net.sock's delivery shape */
+static int tsock_deliver(struct tsock *t, int *ref, const char *err,
+                         const char *data, size_t len)
+{
+    lua_State *L = t->L;
+    int r = *ref;
+    *ref = LUA_NOREF;
+    if (r == LUA_NOREF || r == LUA_REFNIL) {
+        return 0;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, r);
+    luaL_unref(L, LUA_REGISTRYINDEX, r);
+    if (err) {
+        lua_pushstring(L, err);
+        lua_pushnil(L);
+    } else {
+        lua_pushnil(L);
+        if (data) {
+            lua_pushlstring(L, data, len);
+        } else {
+            lua_pushnil(L);
+        }
+    }
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: tls callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+    return 1;
+}
+
+/* the last SSL error on the thread's queue, as a printable string */
+static void tls_errstr(char *buf, size_t cap)
+{
+    unsigned long code = ERR_peek_last_error();
+    if (code != 0) {
+        ERR_error_string_n(code, buf, cap);
+    } else {
+        snprintf(buf, cap, "tls: unknown error");
+    }
+}
+
+/* subscribe what the state machine needs next: WRITE while a payload
+ * waits (or the handshake runs), READ whenever the stream is live */
+static void tls_update_events(struct tsock *t)
+{
+    /* a callback may have closed the sock mid-pump; libuv asserts on
+     * uv_poll_start against a closing handle */
+    if (t->closed || uv_is_closing((const uv_handle_t *)&t->h)) {
+        return;
+    }
+    int ev = t->pend || !t->handshaked ? UV_READABLE | UV_WRITABLE
+                                       : UV_READABLE;
+    uv_poll_start(&t->h, ev, on_tls_event);
+}
+
+/* the handshake callback is delivered as cb(nil, sock): push the
+ * pinned userdata itself back out of the registry */
+static void tls_connect_ok(struct tsock *t)
+{
+    lua_State *L = t->L;
+    int cr = t->connectref;
+    t->connectref = LUA_NOREF;
+    if (cr == LUA_NOREF || cr == LUA_REFNIL) {
+        return;
+    }
+    lua_rawgeti(L, LUA_REGISTRYINDEX, cr);
+    luaL_unref(L, LUA_REGISTRYINDEX, cr);
+    lua_pushnil(L);
+    lua_rawgeti(L, LUA_REGISTRYINDEX, t->selfref);
+    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        const char *msg = lua_tostring(L, -1);
+        fprintf(stderr, "loop: tls callback error: %s\n",
+                msg ? msg : lua_typename(L, lua_type(L, -1)));
+        lua_pop(L, 1);
+    }
+}
+
+static void tls_fail(struct tsock *t, const char *err)
+{
+    char msg[256];
+    /* SSL errors need the queue drained; plain strings pass through */
+    if (t->ssl && ERR_peek_last_error() != 0) {
+        tls_errstr(msg, sizeof(msg));
+        err = msg;
+    }
+    /* every outstanding callback hears about it, then we close */
+    tsock_deliver(t, &t->writeref, err, NULL, 0);
+    tsock_deliver(t, &t->readref, err, NULL, 0);
+    tsock_deliver(t, &t->connectref, err, NULL, 0);
+    free(t->pend);
+    t->pend = NULL;
+    tsock_close(t);
+}
+
+/* the whole state machine: handshake, then flush pending writes, then
+ * drain reads — each stage may stop at WANT_READ/WANT_WRITE and wait
+ * for the next poll event */
+static void tls_pump(struct tsock *t)
+{
+    char buf[16384];
+
+    if (!t->handshaked) {
+        int r = SSL_connect(t->ssl);
+        if (r == 1) {
+            t->handshaked = 1;
+            tls_update_events(t);
+            tls_connect_ok(t);
+            return;
+        }
+        int e = SSL_get_error(t->ssl, r);
+        if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+            return; /* events already cover both during handshake */
+        }
+        tls_fail(t, NULL);
+        return;
+    }
+
+    if (t->pend) {
+        int r = SSL_write(t->ssl, t->pend + t->pend_off,
+                          (int)(t->pend_len - t->pend_off));
+        if (r > 0) {
+            t->pend_off += (size_t)r;
+            if (t->pend_off == t->pend_len) {
+                free(t->pend);
+                t->pend = NULL;
+                tsock_deliver(t, &t->writeref, NULL, NULL, 0);
+            }
+        } else {
+            int e = SSL_get_error(t->ssl, r);
+            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+                return;
+            }
+            tls_fail(t, NULL);
+            return;
+        }
+    }
+
+    if (t->readref == LUA_NOREF || t->got_eof) {
+        tls_update_events(t);
+        return;
+    }
+    for (;;) {
+        int r = SSL_read(t->ssl, buf, sizeof(buf));
+        if (r > 0) {
+            tsock_deliver(t, &t->readref, NULL, buf, (size_t)r);
+            if (t->readref == LUA_NOREF) { /* cb swapped itself out */
+                break;
+            }
+            continue;
+        }
+        if (r == 0) { /* close_notify: the peer is done */
+            t->got_eof = 1;
+            tsock_deliver(t, &t->readref, NULL, NULL, 0); /* (nil, nil) */
+            tsock_close(t); /* the connection is over; nothing to poll */
+            return;
+        }
+        int e = SSL_get_error(t->ssl, r);
+        if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+            break;
+        }
+        tls_fail(t, NULL);
+        return;
+    }
+    tls_update_events(t);
+}
+
+static void on_tls_event(uv_poll_t *h, int status, int events)
+{
+    struct tsock *t = (struct tsock *)h;
+    if (t->closed) {
+        return;
+    }
+    if (status != 0) {
+        tls_fail(t, uv_strerror(status));
+        return;
+    }
+    if (!t->tcp_connected && (events & UV_WRITABLE)) {
+        /* the kernel-level connect finished (or failed): the pending
+         * error surfaces through SO_ERROR */
+        int soerr = 0;
+        socklen_t slen = sizeof(soerr);
+        getsockopt(t->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen);
+        if (soerr != 0) {
+            tls_fail(t, uv_strerror(soerr));
+            return;
+        }
+        t->tcp_connected = 1;
+        SSL_set_fd(t->ssl, t->fd);
+    }
+    tls_pump(t);
+}
+
+static void on_tls_closed(uv_handle_t *h)
+{
+    struct tsock *t = (struct tsock *)h;
+    tsock_deliver(t, &t->closeref, NULL, NULL, 0);
+    luaL_unref(t->L, LUA_REGISTRYINDEX, t->selfref);
+    t->selfref = LUA_NOREF;
+    keepalive_close();
+}
+
+static void tsock_close(struct tsock *t)
+{
+    if (t->closed) {
+        return;
+    }
+    t->closed = 1;
+    if (t->ssl) {
+        SSL_shutdown(t->ssl); /* best effort, no wait */
+        SSL_free(t->ssl);
+        t->ssl = NULL;
+    }
+    if (t->ctx) {
+        SSL_CTX_free(t->ctx);
+        t->ctx = NULL;
+    }
+    if (t->fd >= 0) {
+        close(t->fd);
+        t->fd = -1;
+    }
+    if (t->poll_inited) {
+        uv_close((uv_handle_t *)&t->h, on_tls_closed);
+    } else {
+        /* resolution failed before any poll existed: finish inline */
+        on_tls_closed((uv_handle_t *)&t->h);
+    }
+}
+
+/* net.connectTls(host, port, opts?, cb) -> tsock */
+static int l_net_connect_tls(lua_State *L)
+{
+    const char *host = luaL_checkstring(L, 1);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    luaL_argcheck(L, port >= 1 && port <= 65535, 2, "port out of range");
+    /* Node-style optional table: dropping it puts cb one slot earlier */
+    int cb_idx, opt_idx = 0;
+    if (lua_isfunction(L, 3)) {
+        cb_idx = 3;
+    } else {
+        luaL_checktype(L, 3, LUA_TTABLE);
+        opt_idx = 3;
+        cb_idx = 4;
+    }
+    luaL_checktype(L, cb_idx, LUA_TFUNCTION);
+
+    struct tsock *t = calloc(1, sizeof(*t));
+    if (!t) {
+        return luaL_error(L, "loop.net: out of memory");
+    }
+    t->L = L;
+    t->fd = -1;
+    t->readref = LUA_NOREF;
+    t->writeref = LUA_NOREF;
+    t->closeref = LUA_NOREF;
+    t->connectref = LUA_NOREF;
+    t->selfref = LUA_NOREF;
+    snprintf(t->host, sizeof(t->host), "%s", host);
+
+    /* the userdata + metatable, pushed before anything can fail */
+    struct tsock **p = (struct tsock **)lua_newuserdata(L, sizeof(*p));
+    *p = t;
+    luaL_getmetatable(L, "loop.tsock");
+    lua_setmetatable(L, -2);
+    t->selfref = luaL_ref(L, LUA_REGISTRYINDEX); /* pin until close */
+    keepalive_open();
+
+    lua_pushvalue(L, cb_idx);
+    t->connectref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    t->ctx = SSL_CTX_new(TLS_client_method());
+    if (!t->ctx) {
+        tls_fail(t, NULL);
+        return 1;
+    }
+    int insecure = 0;
+    if (opt_idx) {
+        lua_getfield(L, opt_idx, "insecure");
+        insecure = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, opt_idx, "ca");
+        const char *ca = lua_tostring(L, -1);
+        if (ca) {
+            if (SSL_CTX_load_verify_locations(t->ctx, ca, NULL) != 1) {
+                lua_pop(L, 1);
+                tls_fail(t, "tls: cannot load CA file");
+                return 1;
+            }
+        }
+        lua_pop(L, 1);
+    }
+    if (insecure) {
+        SSL_CTX_set_verify(t->ctx, SSL_VERIFY_NONE, NULL);
+    } else {
+        SSL_CTX_set_verify(t->ctx, SSL_VERIFY_PEER, NULL);
+        SSL_CTX_set_default_verify_paths(t->ctx);
+    }
+
+    t->ssl = SSL_new(t->ctx);
+    if (!t->ssl) {
+        tls_fail(t, NULL);
+        return 1;
+    }
+    if (!insecure) {
+        SSL_set1_host(t->ssl, t->host); /* hostname checked at verify */
+    }
+    SSL_set_tlsext_host_name(t->ssl, t->host); /* SNI */
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    char service[8];
+    snprintf(service, sizeof(service), "%d", (int)port);
+    int rc = uv_getaddrinfo(&g_loop, &t->ai, on_tls_resolved, host, service,
+                            &hints);
+    if (rc != 0) {
+        tls_fail(t, uv_strerror(rc));
+        return 1;
+    }
+    return 1; /* the tsock userdata */
+}
+
+static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
+                            struct addrinfo *res)
+{
+    struct tsock *t = (struct tsock *)((char *)req -
+                                       offsetof(struct tsock, ai));
+    if (t->closed) {
+        if (res) {
+            uv_freeaddrinfo(res);
+        }
+        return;
+    }
+    if (status != 0 || !res) {
+        tls_fail(t, status != 0 ? uv_strerror(status)
+                                : "no address found");
+        return;
+    }
+    int fd = socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) {
+        uv_freeaddrinfo(res);
+        tls_fail(t, uv_strerror(-errno));
+        return;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    uv_freeaddrinfo(res);
+    if (rc != 0 && errno != EINPROGRESS) {
+        close(fd);
+        tls_fail(t, uv_strerror(-errno));
+        return;
+    }
+    t->fd = fd;
+    uv_poll_init(&g_loop, &t->h, fd);
+    t->poll_inited = 1;
+    if (rc == 0) { /* connected on the spot */
+        t->tcp_connected = 1;
+        SSL_set_fd(t->ssl, fd);
+        uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
+        tls_pump(t);
+    } else {
+        uv_poll_start(&t->h, UV_WRITABLE, on_tls_event);
+    }
+}
+
+/* tsock:write(data, cb(err)?) — payload held until fully flushed */
+static int l_tsock_write(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    luaL_argcheck(L, !t->closed, 1, "tls sock is closed");
+    size_t len;
+    const char *data = luaL_checklstring(L, 2, &len);
+    int with_cb = !lua_isnoneornil(L, 3);
+    if (with_cb) {
+        luaL_checktype(L, 3, LUA_TFUNCTION);
+    }
+    if (t->pend) {
+        luaL_argerror(L, 2, "previous write still in flight");
+    }
+    if (with_cb) {
+        t->writeref = pin_cb(L, 3);
+    }
+    if (!t->handshaked) {
+        /* hold the payload until the handshake completes */
+        t->pend = malloc(len ? len : 1);
+        if (!t->pend) {
+            return luaL_error(L, "loop.net: out of memory");
+        }
+        memcpy(t->pend, data, len);
+        t->pend_len = len;
+        t->pend_off = 0;
+        return 0;
+    }
+    int r = SSL_write(t->ssl, data, (int)len);
+    if (r == (int)len) {
+        tsock_deliver(t, &t->writeref, NULL, NULL, 0);
+        return 0;
+    }
+    if (r < 0) {
+        int e = SSL_get_error(t->ssl, r);
+        if (e != SSL_ERROR_WANT_READ && e != SSL_ERROR_WANT_WRITE) {
+            tls_fail(t, NULL);
+            return 0;
+        }
+    }
+    /* partial or blocked: copy what is left into the pending slot */
+    int off = r > 0 ? r : 0;
+    t->pend = malloc(len ? len : 1);
+    if (!t->pend) {
+        return luaL_error(L, "loop.net: out of memory");
+    }
+    memcpy(t->pend, data + off, len - (size_t)off);
+    t->pend_len = len;
+    t->pend_off = (size_t)off;
+    tls_update_events(t);
+    return 0;
+}
+
+/* tsock:read(cb) — resident callback, net.sock semantics: every chunk
+ * cb(nil, chunk), EOF cb(nil, nil), errors cb(err); call again to swap */
+static int l_tsock_read(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    luaL_argcheck(L, !t->closed, 1, "tls sock is closed");
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (t->readref != LUA_NOREF) {
+        luaL_unref(L, LUA_REGISTRYINDEX, t->readref);
+    }
+    t->readref = pin_cb(L, 2);
+    if (t->handshaked && !t->got_eof) {
+        tls_pump(t); /* bytes may already be waiting in the SSL buffer */
+    }
+    return 0;
+}
+
+/* tsock:close(cb?) — idempotent; pending write cb hears an error */
+static int l_tsock_close(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    int with_cb = !lua_isnoneornil(L, 2);
+    if (with_cb) {
+        luaL_checktype(L, 2, LUA_TFUNCTION);
+        if (t->closeref != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, t->closeref);
+        }
+        t->closeref = pin_cb(L, 2);
+    }
+    if (t->closed) {
+        /* already down (or going down): answer the cb at once */
+        tsock_deliver(t, &t->closeref, NULL, NULL, 0);
+        return 0;
+    }
+    if (t->pend) {
+        free(t->pend);
+        t->pend = NULL;
+        tsock_deliver(t, &t->writeref, "tls: closed with a write pending",
+                      NULL, 0);
+    }
+    tsock_deliver(t, &t->connectref, "tls: closed before handshake",
+                  NULL, 0);
+    tsock_close(t);
+    return 0;
+}
+
+static int l_tsock_tostring(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    struct tsock *t = *p;
+    if (t->closed) {
+        lua_pushliteral(L, "tsock (closed)");
+    } else {
+        lua_pushfstring(L, "tsock (%s)", t->handshaked ? "open" : "handshake");
+    }
+    return 1;
+}
+
+LUNA_HANDLE_CTL(tsock, struct tsock, "loop.tsock")
+
+static const luaL_Reg tsock_funcs[] = {
+    { "write", l_tsock_write },
+    { "read", l_tsock_read },
+    { "close", l_tsock_close },
+    { "unref", l_tsock_unref },
+    { "ref", l_tsock_ref },
+    { NULL, NULL },
+};
+
+#else  /* no OpenSSL: connectTls exists and explains itself */
+
+static int l_net_connect_tls(lua_State *L)
+{
+    return luaL_error(L,
+        "loop.net: connectTls needs a build with OpenSSL (the crypto "
+        "module's dependency); this binary was built without it");
+}
+
+#endif /* LUNA_LOOP_HAVE_OPENSSL */
+
 /* -- async child processes (loop.process) ---------------------------------
  *
  * run(cmd, args, [opts], cb): no shell, no PATH games beyond execvp's
@@ -2974,6 +3533,15 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+    if (luaL_newmetatable(L, "loop.tsock")) {
+        luaL_newlib(L, tsock_funcs);
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_tsock_tostring);
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+#endif
     if (luaL_newmetatable(L, "loop.server")) {
         luaL_newlib(L, server_funcs);
         lua_setfield(L, -2, "__index");

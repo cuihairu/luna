@@ -1058,6 +1058,210 @@ static void test_net_pipe_echo(void **state)
     unlink(path);
 }
 
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+/* -- net: connectTls against a one-shot TLS echo server --------------- */
+
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/pem.h>
+
+/* a throwaway self-signed certificate (CN=localhost, SAN carrying
+ * DNS:localhost and IP:127.0.0.1) baked in at build time, so the TLS
+ * cases need no openssl binary and no fixture files at runtime */
+static const char *TLS_TEST_CERT =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDJzCCAg+gAwIBAgIUTicMsl/o/ZyMM0t14vgKkSe6h7owDQYJKoZIhvcNAQEL\n"
+    "BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDkyNDIzNTUxNloYDzIxMjYw\n"
+    "ODMxMjM1NTE2WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwggEiMA0GCSqGSIb3DQEB\n"
+    "AQUAA4IBDwAwggEKAoIBAQDbf+KLpqIq2JdldVkIZMg745ANHF6PRFK3trVbG20U\n"
+    "wp+flm726jVJDGTTcAHuP/DzD4afzJ842geUvq9KXDRvuQvgpRHpsddr1B/VryVK\n"
+    "FZG5d/Gddo5M2r5P+q4tZ1boCoWB0YtplP0lTq62DSNKkop7+TYey+ls5/TZ099V\n"
+    "F2DFNByp1jydQ9Fqk2nDk+atZCrXbyAI3BZ+cIzfA9Ftqg3FYF424+5HaD8MIvdO\n"
+    "PYOXuFi82Wcn9cznUEBjf6b1vzIm6T3LVzEyybTQaeENpYb1xKRrTDMxvs2vgluh\n"
+    "m2ZJI7Jk6SmgBB/6y8Zf4atmOkQ+1Hg2TXSjgQragzmlAgMBAAGjbzBtMB0GA1Ud\n"
+    "DgQWBBTMVTU1snr9UXgI1ZQzbT8w0Xi31jAfBgNVHSMEGDAWgBTMVTU1snr9UXgI\n"
+    "1ZQzbT8w0Xi31jAPBgNVHRMBAf8EBTADAQH/MBoGA1UdEQQTMBGCCWxvY2FsaG9z\n"
+    "dIcEfwAAATANBgkqhkiG9w0BAQsFAAOCAQEAc0MbjFbEHeX8YRb2s37hyTNiCE81\n"
+    "FK+RK/5a/q9P+7ac11qZnZCA2O1WgZp3SDpkYT4wQ36pOJO3v3T4Q4zVrEeG67EQ\n"
+    "JOVRSjjaXpe7WpEuHUfFJcmxE5A0p7uAJ1xuGaOm8hn43e3wwiUy/nLbC/GzbQX3\n"
+    "tyorwLVK036JiMM7YuflKbDqb8G1YXvinPjIXl57Y/fPJFwUtGjVyU5kgP0hn3ag\n"
+    "XWfR+Xo+ijTE9mNFXH0EB3xPTfgBflCaaPL9pSVdhZq54c6Tps8nZEhFnOmV2gUz\n"
+    "f3LRiUhn6v+3hF5HdaQB3KuffDQMvzZeef1ToRNNU4SzBJGlLaAOjeu3PQ==\n"
+    "-----END CERTIFICATE-----\n";
+static const char *TLS_TEST_KEY =
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDbf+KLpqIq2Jdl\n"
+    "dVkIZMg745ANHF6PRFK3trVbG20Uwp+flm726jVJDGTTcAHuP/DzD4afzJ842geU\n"
+    "vq9KXDRvuQvgpRHpsddr1B/VryVKFZG5d/Gddo5M2r5P+q4tZ1boCoWB0YtplP0l\n"
+    "Tq62DSNKkop7+TYey+ls5/TZ099VF2DFNByp1jydQ9Fqk2nDk+atZCrXbyAI3BZ+\n"
+    "cIzfA9Ftqg3FYF424+5HaD8MIvdOPYOXuFi82Wcn9cznUEBjf6b1vzIm6T3LVzEy\n"
+    "ybTQaeENpYb1xKRrTDMxvs2vgluhm2ZJI7Jk6SmgBB/6y8Zf4atmOkQ+1Hg2TXSj\n"
+    "gQragzmlAgMBAAECggEALVrKryP+mL9Z4yFBBRq8BCH0mzzsLgrGU8cpSJrNao9/\n"
+    "h6yAH72Lxp0MvWLEx1vHeBXScbUIhmkIzXusQT91p0szcNby8VipxFJXxKHU4O69\n"
+    "hncKAgkkBK3jSqfn8yJKAxbfeNBZT/b06s9MCvqCew92FYFMZUcpo7L3NUZR/KT+\n"
+    "xy00Dd0fH87OZdScKKOriCSc99IvkrmCCrxBB9y4S/NnXST1bqPoJPZeWZjcBbCz\n"
+    "VaJUt/z2NSX7P2mWgqsmqy0V/nFmYCfgg+v83OBMGcugg+KWF8eOLxbAJMSgHPYI\n"
+    "K+AIjv2hQgS17baZ4km7VkRG/FoeMWdVDRpwBD5soQKBgQDuhJKxjDhq/3BndAa9\n"
+    "Qo18LiOViTVXmogc8hmS8sKyfWJtXQ0EfNTq+27j6zqOqx8VGMD4yudpvhk083fc\n"
+    "x4IC6o2FgdVJHmFxnjhrEEJCJfFbFTV3d1+w50vXbZE9bl2/3iE3uRXK4sGeo/c+\n"
+    "Fpe7QK2SdCA8/OfbRnvG54ZlxQKBgQDrlnZIj80SIlkCFI0BP4doWahu2Hnj3PNt\n"
+    "4I2/PINvUTpMNfBiTYa3K7twFbeXIIvHja9gA8Jk5Qj87tMS29BlXUln4RGTxSXx\n"
+    "MIZdiDHF2ybRC6oSiBb88MM8SfigE8CstdIDl19F2UWpzQyGkW0bhx5HKwGdtiWt\n"
+    "2PyuNnCiYQKBgQCZQqh722zZG9+fKge2jtAY7hDBYlPbQZmad9oE+WYviK+5NCRM\n"
+    "MOYjQ4KCg0CyMbScOrasZryBzrulsZfgTnX058Ad/EoPXK0ic5cu/FiG5piKfTtI\n"
+    "03SyWDz8ZRQBVCx7QAE6K/ybzE67YAJba+r9UFb3lxSr+5oD5Otd6KEMPQKBgQCa\n"
+    "Azc4oKnT3RiLP5we4MVI9rQiIussh9msT0zbZFgYgeW2xNxtp3kWbkSPNeNbrS80\n"
+    "OfAYuNxw0TpbAFaE0acfXSkL/Btdm1j+oFZ29v5y9p4ds55vlwBQQ6We2EzteXxQ\n"
+    "bFzrdB4Yr73XD/HMV24YvPCSXg8kZ1uil2Q5D+X6gQKBgB7jiCXPl60mIXYuGQmo\n"
+    "ChJ1FvqpJH54zaNwuZFNgCNR1BUhvG3u6Ufcej8EUoAbk4/+yJoemAFvSpAM8hNP\n"
+    "N54KQmT52ZOkudMtIKB4Ts9XU21Zg2WLWAed4A8dPH7hKs23oI2gwA4Yr/o05Ge6\n"
+    "aMfnJPJezhfdbsWXbhB5woVp\n"
+    "-----END PRIVATE KEY-----\n";
+
+/* accept one TLS connection, echo one record back, then send
+ * close_notify — the client sees its chunk, then EOF */
+static void tls_serve(int listener)
+{
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx) {
+        BIO *cb = BIO_new_mem_buf(TLS_TEST_CERT, -1);
+        BIO *kb = BIO_new_mem_buf(TLS_TEST_KEY, -1);
+        X509 *x = PEM_read_bio_X509(cb, NULL, 0, NULL);
+        EVP_PKEY *k = PEM_read_bio_PrivateKey(kb, NULL, NULL, NULL);
+        SSL_CTX_use_certificate(ctx, x);
+        SSL_CTX_use_PrivateKey(ctx, k);
+        int c = accept(listener, NULL, NULL);
+        SSL *ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, c);
+        SSL_accept(ssl); /* rejects on its own when the client fails */
+        char buf[256];
+        int n = SSL_read(ssl, buf, sizeof buf);
+        if (n > 0) {
+            SSL_write(ssl, buf, n);
+        }
+        /* close_notify: the client's next read is the EOF signal */
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(c);
+        X509_free(x);
+        EVP_PKEY_free(k);
+        BIO_free(cb);
+        BIO_free(kb);
+        SSL_CTX_free(ctx);
+    }
+    close(listener);
+}
+
+static void *tls_main(void *arg)
+{
+    tls_serve((int)(intptr_t)arg);
+    return NULL;
+}
+
+/* opts.ca points at a file: stage the baked-in certificate once */
+static const char *tls_cert_file(void)
+{
+    static const char *path = "/tmp/luna-loop-tls-cert.pem";
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    fputs(TLS_TEST_CERT, f);
+    fclose(f);
+    return path;
+}
+
+/* connect + handshake + one write/read round trip, then the server's
+ * close_notify arrives as the EOF signal; opts is the Lua table text */
+static void tls_roundtrip_case(const char *opts, int port)
+{
+    char code[896];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connectTls('127.0.0.1', %d, %s, function(e, sock)\n"
+        "  if e then log[1] = 'connect:' .. e return end\n"
+        "  sock:write('ping', function(e2)\n"
+        "    if e2 then log[1] = 'write:' .. e2 return end\n"
+        "    sock:read(function(e3, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      sock:read(function(e4, eof)\n"
+        "        log[2] = tostring(e4) .. '/' .. tostring(eof)\n"
+        "        sock:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", port, opts);
+    assert_string_equal(eval_string(code), "ping,nil/nil");
+}
+
+static void test_tls_insecure_echo_then_eof(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_main,
+                                    (void *)(intptr_t)listener), 0);
+    tls_roundtrip_case("{insecure = true}", tcp_port_of(listener));
+    pthread_join(th, NULL);
+}
+
+static void test_tls_custom_ca_accepts_self_signed(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_main,
+                                    (void *)(intptr_t)listener), 0);
+    char opts[80];
+    snprintf(opts, sizeof opts, "{ca = '%s'}", tls_cert_file());
+    tls_roundtrip_case(opts, tcp_port_of(listener));
+    pthread_join(th, NULL);
+    unlink("/tmp/luna-loop-tls-cert.pem");
+}
+
+static void test_tls_default_verify_rejects_self_signed(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[384];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.net.connectTls('127.0.0.1', %d, function(e, sock)\n"
+        "  out = tostring(e ~= nil) .. ',' .. tostring(sock)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    /* no opts: the system store has no trust anchor for this cert, so
+     * the handshake fails into cb(err) with no sock */
+    assert_string_equal(eval_string(code), "true,nil");
+    pthread_join(th, NULL);
+}
+
+static void test_tls_connect_refused_yields_error(void **state)
+{
+    (void)state;
+    /* grab a free port, then release it: nothing is listening there */
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    close(fd);
+    char code[320];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.net.connectTls('127.0.0.1', %d, function(e, sock)\n"
+        "  out = tostring(e ~= nil) .. ',' .. tostring(sock)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", port);
+    /* the failure surfaces in slot one, the loop drains to a natural
+     * return, and the half-built sock cleaned itself up */
+    assert_string_equal(eval_string(code), "true,nil");
+}
+#endif /* LUNA_LOOP_HAVE_OPENSSL */
+
 /* -- net: luna as the server, pthread as the client ------------------- */
 
 /* a real client in a thread: connect (waiting for the TCP port file or
@@ -1496,6 +1700,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_read_survives_multiple_chunks, setup_loop, teardown_loop),
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+        cmocka_unit_test_setup_teardown(test_tls_insecure_echo_then_eof, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_custom_ca_accepts_self_signed, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_default_verify_rejects_self_signed, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_connect_refused_yields_error, setup_loop, teardown_loop),
+#endif
         cmocka_unit_test_setup_teardown(test_proc_run_echo_captures_stdout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_exit_code_and_stderr, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_cwd_option, setup_loop, teardown_loop),

@@ -3,8 +3,10 @@
  * loop.fs async file operations, loop.net client sockets against
  * real pthread echo servers (TCP on an ephemeral port + a unix path),
  * TLS client and server sockets against a baked-in self-signed
- * certificate, and loop.process aggregate child processes (capture,
- * exit codes, kill-by-signal, synchronous spawn failure).
+ * certificate, loop.process aggregate child processes (capture,
+ * exit codes, kill-by-signal, synchronous spawn failure), and the
+ * pure-Lua loop.http client (plain + TLS roundtrips, chunked framing,
+ * request wiring, url validation).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -60,6 +62,11 @@ static int setup_loop(void **state)
      * through require "loop", which glb=0 already serves */
     luaL_requiref(L, "loop", luaopen_luna_loop, 1);
     lua_pop(L, 1);
+    /* the staged module tree serves require "loop.http" */
+    assert_string_equal(eval_string(
+        "package.path = '" LUNA_TEST_MODULES_DIR "/?.lua;"
+        LUNA_TEST_MODULES_DIR "/?/init.lua;' .. package.path\n"
+        "return type(require('loop.http').get)"), "function");
     /* a previous case must not leave anything ticking */
     assert_string_equal(eval_string("return loop.run()"), "true");
     return 0;
@@ -1362,6 +1369,143 @@ static void test_tls_listen_bad_cert_throws(void **state)
 }
 #endif /* LUNA_LOOP_HAVE_OPENSSL */
 
+/* -- loop.http: the pure-Lua client, served by net.listen in-process ---
+ *
+ * The same-VM trick keeps the fixture tiny: a net.listen (or
+ * listenTls) callback plays the HTTP server for one request, the
+ * client callback captures err/status/body, then both shut down. */
+
+static void test_http_get_plain_roundtrip(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('HTTP/1.1 200 OK\\r\\nContent-Type: text/plain"
+        "\\r\\nContent-Length: 5\\r\\n\\r\\nhello',\n"
+        "        function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/x',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status)"
+        " .. ',' .. tostring(res and res.headers['content-type'])\n"
+        "        .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,200,text/plain,hello");
+}
+
+static void test_http_get_chunked_body(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('HTTP/1.1 201 Created\\r\\nTransfer-Encoding: chunked"
+        "\\r\\n\\r\\n5\\r\\nhello\\r\\n3\\r\\n wo\\r\\n2\\r\\nrl\\r\\n0\\r\\n\\r\\n',\n"
+        "        function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/c',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status)\n"
+        "        .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,201,hello worl");
+}
+
+static void test_http_post_sends_method_headers_body(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local buf = ''\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then return end\n"
+        "    buf = buf .. chunk\n"
+        "    local sp = buf:find('\\r\\n\\r\\n', 1, true)\n"
+        "    if not sp then return end\n"
+        "    local cl = tonumber(buf:match('Content%-Length: (%d+)')) or 0\n"
+        "    if #buf < sp + 3 + cl then return end\n"
+        "    local ok = buf:find('POST /p HTTP/1.1', 1, true)\n"
+        "        and buf:find('X-Test: 1', 1, true)\n"
+        "        and buf:find('data!', 1, true)\n"
+        "    c:write(ok and 'HTTP/1.1 201 Created\\r\\nContent-Length: 0"
+        "\\r\\n\\r\\n' or 'HTTP/1.1 400 Bad\\r\\nContent-Length: 0\\r\\n\\r\\n',\n"
+        "      function() c:close() end)\n"
+        "  end)\n"
+        "end)\n"
+        "http.request({url = 'http://127.0.0.1:' .. srv:port() .. '/p',\n"
+        "  method = 'POST', body = 'data!',\n"
+        "  headers = {['X-Test'] = '1'}}, function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,201");
+}
+
+static void test_http_bad_url_throws(void **state)
+{
+    (void)state;
+    /* unparseable urls and missing callbacks throw before the loop
+     * ever runs: setup errors are the caller's to see */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local a = not pcall(function() http.get('notaurl', function() end) end)\n"
+        "local b = not pcall(function() http.get('http://127.0.0.1:1/x') end)\n"
+        "return tostring(a) .. ',' .. tostring(b)"),
+        "true,true");
+}
+
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+static void test_http_get_over_tls(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\n\\r\\nhello',\n"
+        "        function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('https://127.0.0.1:' .. srv:port() .. '/x',"
+        " {ca = '%s'}, function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status)\n"
+        "        .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key, cert);
+    assert_string_equal(eval_string(code), "nil,200,hello");
+}
+#endif /* LUNA_LOOP_HAVE_OPENSSL */
+
 /* -- net: luna as the server, pthread as the client ------------------- */
 
 /* a real client in a thread: connect (waiting for the TCP port file or
@@ -1808,6 +1952,13 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),
+#endif
+        cmocka_unit_test_setup_teardown(test_http_get_plain_roundtrip, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_get_chunked_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_post_sends_method_headers_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+        cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),
 #endif
         cmocka_unit_test_setup_teardown(test_proc_run_echo_captures_stdout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_run_exit_code_and_stderr, setup_loop, teardown_loop),

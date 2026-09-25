@@ -357,6 +357,36 @@ loop.run()
 - **关 listener 不及于存量**:server:close 只停监听,已建立的连接各自继续;
 - **构建依赖**:luna 带 OpenSSL 构建时可用;不带时两个入口都报错说明如何启用,其余 loop 面不受影响。
 
+## loop.http:异步 HTTP 客户端
+
+`loop.http` 是一个纯 Lua 的 HTTP/1.1 客户端(`require "loop.http"`,与 Node 的 `require("http")` 同名),架在 `net.connect` / `connectTls` 之上:一次请求,一次聚合回调——`cb(err, res)`,其中 `res = {status, headers(键小写), body}`:
+
+```lua
+local http = require("loop.http")
+
+http.get("https://example.com/", {ca = "ca.pem"}, function(err, res)
+    assert(err == nil, err)
+    print(res.status, res.headers["content-type"])
+    print(#res.body, "bytes")
+end)
+
+loop.run()
+```
+
+| 调用 | 语义 |
+| --- | --- |
+| `http.request(url, opts?, cb)` / `http.request(opts_table, cb)` | 通用入口;opts_table 可带 `url`/`method`/`headers`/`body`/`insecure`/`ca` |
+| `http.get(url, opts?, cb)` | GET 简写 |
+| `res` | `{status = 200, reason = "OK", headers = {小写键, 多值以逗号合并}, body = 字符串}` |
+
+行为约定:
+
+- **body 分帧三路**:按 `content-length` 收满、按 `chunked` 解码(含终止块),两者皆无时读到对端关闭——每个请求都发送 `Connection: close`,响应以连接结束为界;
+- **无 body 的状态码**(1xx/204/304)直接以空 body 交付;
+- **错误是字符串**,从 `cb(err)` 出来(拒连、TLS 失败、截断的 body、坏的分帧);URL 解析失败与缺回调**同步抛出**;
+- **https 的证书校验默认开启**,`opts.insecure` / `opts.ca` 透传给 `connectTls`;
+- **边界**:本面不做重定向、超时与流式响应(大文件请直接用 net 面);IPv6 字面量主机暂不支持;与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
+
 ## loop.udp:异步数据报
 
 `loop.udp` 是循环的第四块:数据报一面:无连接、保序不做、送达不保——bind 一端常驻收包,socket 一端按包发送,同一张"回调首参"契约:

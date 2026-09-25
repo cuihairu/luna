@@ -229,9 +229,12 @@ file(COPY "${PROJECT_SOURCE_DIR}/deps/scintillua/lexers/lua.lua"
 # them so require "json"/"fs"/... resolve through the same tree user
 # packages will. The wrapper sources are declared as configure
 # dependencies: file(COPY) runs at configure time only, so edits must
-# re-configure to land in the build tree.
+# re-configure to land in the build tree. Nested files (loop/http.lua,
+# batch 33) stage into luna_modules/loop/ the same way — require
+# "loop.http" resolves through the ? -> / translation.
 file(GLOB LUNA_STDLIB_WRAPPERS CONFIGURE_DEPENDS
-        "${PROJECT_SOURCE_DIR}/lua/modules/*/init.lua")
+        "${PROJECT_SOURCE_DIR}/lua/modules/*/init.lua"
+        "${PROJECT_SOURCE_DIR}/lua/modules/*/*.lua")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         ${LUNA_STDLIB_WRAPPERS})
 file(COPY "${PROJECT_SOURCE_DIR}/lua/modules/"

@@ -377,15 +377,19 @@ loop.run()
 | --- | --- |
 | `http.request(url, opts?, cb)` / `http.request(opts_table, cb)` | 通用入口;opts_table 可带 `url`/`method`/`headers`/`body`/`insecure`/`ca` |
 | `http.get(url, opts?, cb)` | GET 简写 |
+| `opts.maxRedirects` | 跟随上限,默认 5;`0` 禁用跟随(原始 3xx 照常交付) |
+| `opts.timeoutMs` | 整个请求的时限(连接、每一跳重定向与 body 共享预算),超时 `cb("... timed out ...")` |
 | `res` | `{status = 200, reason = "OK", headers = {小写键, 多值以逗号合并}, body = 字符串}` |
 
 行为约定:
 
 - **body 分帧三路**:按 `content-length` 收满、按 `chunked` 解码(含终止块),两者皆无时读到对端关闭——每个请求都发送 `Connection: close`,响应以连接结束为界;
 - **无 body 的状态码**(1xx/204/304)直接以空 body 交付;
-- **错误是字符串**,从 `cb(err)` 出来(拒连、TLS 失败、截断的 body、坏的分帧);URL 解析失败与缺回调**同步抛出**;
+- **重定向**:301/302/303/307/308 带 `Location` 时跟随,绝对 URL、`//host/path` 与相对路径都能解析(`../` 归约);301/302/303 把非 GET/HEAD 方法折叠成 GET 并清掉 body,307/308 原样保留;跨主机跟随不做限制;预算用尽报 `too many redirects`;
+- **超时是整条请求的**:从连接前起表,重定向不清表;超时先关 socket 再交付错误,迟到的响应或已排队的连接回调不会再进回调;
+- **错误是字符串**,从 `cb(err)` 出来(拒连、TLS 失败、截断的 body、坏的分帧、超限、超时);URL 解析失败与缺回调**同步抛出**;
 - **https 的证书校验默认开启**,`opts.insecure` / `opts.ca` 透传给 `connectTls`;
-- **边界**:本面不做重定向、超时与流式响应(大文件请直接用 net 面);IPv6 字面量主机暂不支持;与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
+- **边界**:本面不做流式响应与多路复用(大文件请直接用 net 面);IPv6 字面量主机暂不支持;传入的 opts 表不会被修改(重定向折叠写在内部拷贝上);与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
 
 ## loop.udp:异步数据报
 

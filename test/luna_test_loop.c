@@ -6,7 +6,8 @@
  * certificate, loop.process aggregate child processes (capture,
  * exit codes, kill-by-signal, synchronous spawn failure), and the
  * pure-Lua loop.http client (plain + TLS roundtrips, chunked framing,
- * request wiring, url validation).
+ * request wiring, redirect chains with method folding, relative
+ * Location, the whole-request timeout, url validation).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -111,12 +112,21 @@ static void test_settimeout_fires_in_order_with_args(void **state)
 static void test_interval_runs_until_cleared(void **state)
 {
     (void)state;
+    /* count-driven, not wall-clock-driven: the interval counts itself
+     * to 3, clears, and a setTimeout(0) verifier — which can only run
+     * in a later timers phase — proves the ticks stopped. All three
+     * steps hold no matter how slowly the loop is scheduled. */
     assert_string_equal(eval_string(
         "n = 0\n"
-        "h = loop.setInterval(function() n = n + 1 end, 5)\n"
-        "loop.setTimeout(function() loop.clearInterval(h) end, 40)\n"
+        "h = loop.setInterval(function()\n"
+        "  n = n + 1\n"
+        "  if n == 3 then\n"
+        "    loop.clearInterval(h)\n"
+        "    loop.setTimeout(function() assert(n == 3) end, 0)\n"
+        "  end\n"
+        "end, 5)\n"
         "assert(loop.run())\n"
-        "return (n >= 2 and n <= 8) and 'bounded' or n"), "bounded");
+        "return (n == 3) and 'stopped' or n"), "stopped");
 }
 
 static void test_immediate_runs_within_the_run(void **state)
@@ -1462,6 +1472,126 @@ static void test_http_post_sends_method_headers_body(void **state)
         "nil,201");
 }
 
+static void test_http_follows_redirect_and_folds_post(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local buf = ''\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then return end\n"
+        "    buf = buf .. chunk\n"
+        "    if not buf:find('\\r\\n\\r\\n', 1, true) then return end\n"
+        "    local p = buf:match('^%S+ (%S+) HTTP')\n"
+        "    local m = buf:match('^(%S+) ')\n"
+        "    local body = nil\n"
+        "    if p == '/r1' then\n"
+        "      body = 'HTTP/1.1 302 Found\\r\\nLocation: /r2\\r\\n"
+        "Content-Length: 0\\r\\n\\r\\n'\n"
+        "    elseif p == '/r2' then\n"
+        "      body = 'HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\n\\r\\nfinal'\n"
+        "    elseif p == '/a' then\n"
+        "      body = 'HTTP/1.1 301 Moved\\r\\nLocation: /m\\r\\n"
+        "Content-Length: 0\\r\\n\\r\\n'\n"
+        "    elseif p == '/m' then\n"
+        "      body = 'HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\n\\r\\n' .. m\n"
+        "    end\n"
+        "    if body then c:write(body, function() c:close() end) end\n"
+        "  end)\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.get(base .. '/r1', function(e1, r1)\n"
+        "  out = out .. tostring(r1 and r1.status) .. '='\n"
+        "      .. tostring(r1 and r1.body) .. ';'\n"
+        "  http.request({url = base .. '/a', method = 'POST',\n"
+        "    body = 'x'}, function(e2, r2)\n"
+        "    out = out .. tostring(r2 and r2.body) .. ';'\n"
+        "    http.get(base .. '/r1', {maxRedirects = 0}, function(e3, r3)\n"
+        "      out = out .. tostring(r3 and r3.status) .. ','\n"
+        "          .. tostring(r3 and r3.headers.location)\n"
+        "      srv:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "200=final;GET;302,/r2");
+}
+
+static void test_http_relative_location(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local buf = ''\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then return end\n"
+        "    buf = buf .. chunk\n"
+        "    if not buf:find('\\r\\n\\r\\n', 1, true) then return end\n"
+        "    local p = buf:match('^%S+ (%S+) HTTP')\n"
+        "    if p == '/d/r1' then\n"
+        "      c:write('HTTP/1.1 302 Found\\r\\nLocation: r2x\\r\\n"
+        "Content-Length: 0\\r\\n\\r\\n', function() c:close() end)\n"
+        "    elseif p == '/d/r2x' then\n"
+        "      c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 4\\r\\n\\r\\nDEEP',\n"
+        "        function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/d/r1',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status)\n"
+        "        .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,200,DEEP");
+}
+
+static void test_http_redirect_budget_and_timeout(void **state)
+{
+    (void)state;
+    /* a redirect loop exhausts the budget with an error; a silent
+     * server fires the whole-request timeout — and the loop still
+     * drains, which proves the timer was cleared */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local buf = ''\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then c:close() return end\n"
+        "    buf = buf .. chunk\n"
+        "    if not buf:find('\\r\\n\\r\\n', 1, true) then return end\n"
+        "    local p = buf:match('^%S+ (%S+) HTTP')\n"
+        "    if p == '/loop' then\n"
+        "      c:write('HTTP/1.1 302 Loop\\r\\nLocation: /loop\\r\\n"
+        "Content-Length: 0\\r\\n\\r\\n', function() c:close() end)\n"
+        "    end\n"
+        "    -- /silent: accepted, read, never answered\n"
+        "  end)\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.get(base .. '/loop', {maxRedirects = 2}, function(e1)\n"
+        "  out = out .. tostring(e1) .. ';'\n"
+        "  http.get(base .. '/silent', {timeoutMs = 1000}, function(e2)\n"
+        "    out = out .. tostring(e2)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "loop.http: too many redirects;"
+        "loop.http: timed out after 1000ms");
+}
+
 static void test_http_bad_url_throws(void **state)
 {
     (void)state;
@@ -1956,6 +2086,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_get_plain_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_get_chunked_body, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_post_sends_method_headers_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_follows_redirect_and_folds_post, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_relative_location, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_redirect_budget_and_timeout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),

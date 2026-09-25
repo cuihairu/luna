@@ -4,18 +4,29 @@
 -- res = {status = 200, headers = {lowercase keys}, body = "..."}.
 -- Bodies arrive by content-length, chunked transfer decoding, or —
 -- when the response carries neither — by reading to EOF (every request
--- sends Connection: close, so servers end the response there). No
--- redirects, no timeouts, no streaming bodies: a later batch can add
--- those. Plain http rides net.connect, https rides net.connectTls with
+-- sends Connection: close, so servers end the response there).
+--
+-- Redirects: 301/302/303/307/308 responses carrying Location are
+-- followed, up to opts.maxRedirects hops (default 5). 301/302/303 fold
+-- non-GET/HEAD methods down to GET and drop the body; 307/308 keep the
+-- method and body. Absolute, //host/path and relative Location values
+-- all resolve. maxRedirects = 0 disables following and hands the raw
+-- 3xx through. Timeouts: opts.timeoutMs caps the whole request —
+-- connection, redirects and body alike — and fires
+-- cb("loop.http: timed out ...") while closing the socket. No
+-- streaming bodies yet: a later batch can add that.
+-- Plain http rides net.connect, https rides net.connectTls with
 -- opts.insecure / opts.ca passed through.
 --
 -- Usage:
 --   local http = require "loop.http"
 --   http.get("https://example.com/", function(err, res) ... end)
 --   http.request({url = "http://h/p", method = "POST",
---                 headers = {["X-A"] = "1"}, body = "hi"}, cb)
+--                 headers = {["X-A"] = "1"}, body = "hi",
+--                 maxRedirects = 3, timeoutMs = 5000}, cb)
 
-local net = require("loop").net
+local loop = require("loop")
+local net = loop.net
 
 local M = {}
 
@@ -47,6 +58,34 @@ local function parse_url(url)
         port = tonumber(port),
         path = path,
     }
+end
+
+-- resolve a Location header against the url that produced it:
+-- absolute urls, //host/path, root-relative paths and bare relative
+-- paths all resolve; ../ segments collapse
+local function resolve_location(base, loc)
+    if loc:match("^https?://") then
+        return parse_url(loc)
+    end
+    if loc:sub(1, 2) == "//" then
+        return parse_url((base.https and "https:" or "http:") .. loc)
+    end
+    if loc:sub(1, 1) == "/" then
+        return { https = base.https, host = base.host,
+                 port = base.port, path = loc }
+    end
+    local dir = base.path:match("^(.*/)[^/]*$") or "/"
+    local merged = dir .. loc
+    local parts = {}
+    for seg in merged:gmatch("[^/]+") do
+        if seg == ".." then
+            parts[#parts] = nil
+        elseif seg ~= "." then
+            parts[#parts + 1] = seg
+        end
+    end
+    return { https = base.https, host = base.host,
+             port = base.port, path = "/" .. table.concat(parts, "/") }
 end
 
 -- method/opts/cb overloads: request(url, cb), request(url, opts, cb),
@@ -152,151 +191,237 @@ local function parse_head(head)
     }
 end
 
--- the per-request state machine: everything the feed loop needs
+-- the redirect codes; true = fold the method to GET (and drop the
+-- body), false = keep the method and body
+local REDIRECT_METHODS = {
+    [301] = true, [302] = true, [303] = true,
+    [307] = false, [308] = false,
+}
+
+-- the per-request shell: timeout timer, redirect budget, delivery.
+-- attempt() runs one connection and recurses into itself through the
+-- redirect chain; everything below shares the single killed flag so a
+-- timeout can block any later delivery (late EOF from the closed
+-- socket, a queued connect callback) from re-entering cb
 local function run(opts, cb)
-    local u, perr = parse_url(opts.url)
-    if not u then
+    -- private shallow copy: redirect folding mutates method/body and
+    -- the caller's table must not notice
+    local mine = {}
+    for k, v in pairs(opts) do
+        mine[k] = v
+    end
+    opts = mine
+    local u0, perr = parse_url(opts.url)
+    if not u0 then
         error(perr, 3)
     end
-    local wire, method = build_request(u, opts)
 
-    local st = {
-        buf = "",
-        head = nil,      -- parsed status/headers once the blank line lands
-        body_len = nil,  -- content-length, when declared
-        chunked = false,
-        done = false,
-    }
+    local timeout_ms = tonumber(opts.timeoutMs)
+    local max_redirects = opts.maxRedirects == nil and 5
+                          or tonumber(opts.maxRedirects)
 
-    local sock
-
-    local function finish(err, res)
-        if st.done then
+    local timer
+    local active_sock
+    local killed = false
+    local function deliver(err, res)
+        if killed then
             return
         end
-        st.done = true
-        if sock then
-            sock:close()
-            sock = nil
+        if timer then
+            loop.clearTimeout(timer)
+            timer = nil
         end
+        active_sock = nil
         cb(err, res)
     end
 
-    -- called for every payload byte batch after the head has been
-    -- peeled off; decides whether the body is complete yet
-    local function try_complete()
-        local body = st.buf
-        if st.chunked then
-            local decoded, derr, done = decode_chunked(body)
-            if decoded then
+    -- the whole request lives under one timer: connection, every
+    -- redirect hop and the body share the budget
+    if timeout_ms then
+        timer = loop.setTimeout(function()
+            timer = nil
+            killed = true
+            if active_sock then
+                active_sock:close()
+                active_sock = nil
+            end
+            cb("loop.http: timed out after " .. timeout_ms .. "ms")
+        end, timeout_ms)
+    end
+
+    local function attempt(u, left)
+        local wire, method = build_request(u, opts)
+
+        local st = {
+            buf = "",
+            head = nil,      -- parsed status/headers after the blank line
+            body_len = nil,  -- content-length, when declared
+            chunked = false,
+            done = false,
+        }
+        local sock
+
+        local function finish(err, res)
+            if st.done then
+                return
+            end
+            st.done = true
+            if sock then
+                sock:close()
+                sock = nil
+            end
+            deliver(err, res)
+        end
+
+        -- called for every payload byte batch after the head has been
+        -- peeled off; decides whether the body is complete yet
+        local function try_complete()
+            local body = st.buf
+            if st.chunked then
+                local decoded, derr, done = decode_chunked(body)
+                if decoded then
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = decoded })
+                elseif derr then
+                    finish(derr)
+                end
+            elseif st.body_len then
+                if #body >= st.body_len then
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = body:sub(1, st.body_len) })
+                end
+            else
+                -- no framing: the peer's close is the end marker,
+                -- handled at EOF
+            end
+        end
+
+        local function feed(chunk)
+            if st.done then
+                return
+            end
+            if not st.head then
+                st.buf = st.buf .. chunk
+                local split = st.buf:find("\r\n\r\n", 1, true)
+                if not split then
+                    return -- still inside the head
+                end
+                local head_text = st.buf:sub(1, split + 1)
+                local res, perr = parse_head(head_text)
+                if not res then
+                    finish(perr)
+                    return
+                end
+                st.head = res
+                st.buf = st.buf:sub(split + 4)
+                local code = res.status
+                local loc = res.headers["location"]
+                if loc and REDIRECT_METHODS[code] ~= nil
+                    and max_redirects > 0 then
+                    if left <= 0 then
+                        finish("loop.http: too many redirects")
+                        return
+                    end
+                    -- the old socket is dead to us from here on: mark
+                    -- done so its late EOF/err can't reach the next hop
+                    st.done = true
+                    if sock then
+                        sock:close()
+                        sock = nil
+                    end
+                    if REDIRECT_METHODS[code]
+                        and method ~= "GET" and method ~= "HEAD" then
+                        -- write back through opts: the next hop
+                        -- rebuilds its request line from there
+                        opts.method = "GET"
+                        opts.body = nil
+                    end
+                    local nu, nerr = resolve_location(u, loc)
+                    if not nu then
+                        finish(nerr)
+                        return
+                    end
+                    attempt(nu, left - 1)
+                    return
+                end
+                local te = res.headers["transfer-encoding"] or ""
+                st.chunked = te:lower():find("chunked", 1, true) ~= nil
+                local cl = res.headers["content-length"]
+                st.body_len = cl and tonumber(cl) or nil
+                if code >= 100 and code < 200
+                    or code == 204 or code == 304 then
+                    -- no body by definition: the head is the response
+                    finish(nil, { status = st.head.status,
+                                  reason = st.head.reason,
+                                  headers = st.head.headers,
+                                  body = "" })
+                    return
+                end
+                if not st.chunked and not st.body_len then
+                    -- no framing headers: rely on the peer closing
+                    return
+                end
+            else
+                st.buf = st.buf .. chunk
+            end
+            try_complete()
+        end
+
+        local on_data
+        on_data = function(err, chunk)
+            if st.done then
+                return
+            end
+            if err then
+                finish(err)
+                return
+            end
+            if chunk then
+                feed(chunk)
+                return
+            end
+            -- EOF: only the unframed case can legitimately end here
+            if not st.head then
+                finish("loop.http: connection closed before a response")
+            elseif st.chunked or (st.body_len and #st.buf < st.body_len) then
+                finish("loop.http: connection closed mid-body")
+            else
                 finish(nil, { status = st.head.status,
                               reason = st.head.reason,
                               headers = st.head.headers,
-                              body = decoded })
-            elseif derr then
-                finish(derr)
+                              body = st.buf })
             end
-        elseif st.body_len then
-            if #body >= st.body_len then
-                finish(nil, { status = st.head.status,
-                              reason = st.head.reason,
-                              headers = st.head.headers,
-                              body = body:sub(1, st.body_len) })
-            end
-        else
-            -- no framing: the peer's close is the end marker, handled
-            -- at EOF
         end
-    end
 
-    local function feed(chunk)
-        if st.done then
-            return
-        end
-        if not st.head then
-            st.buf = st.buf .. chunk
-            local split = st.buf:find("\r\n\r\n", 1, true)
-            if not split then
-                return -- still inside the head
-            end
-            local head_text = st.buf:sub(1, split + 1)
-            local res, perr = parse_head(head_text)
-            if not res then
-                finish(perr)
+        local function connected(err, s)
+            if err then
+                finish(err)
                 return
             end
-            st.head = res
-            st.buf = st.buf:sub(split + 4)
-            local te = res.headers["transfer-encoding"] or ""
-            st.chunked = te:lower():find("chunked", 1, true) ~= nil
-            local cl = res.headers["content-length"]
-            st.body_len = cl and tonumber(cl) or nil
-            if st.head.status >= 100 and st.head.status < 200
-                or st.head.status == 204 or st.head.status == 304 then
-                -- no body by definition: the head is the whole response
-                finish(nil, { status = st.head.status,
-                              reason = st.head.reason,
-                              headers = st.head.headers,
-                              body = "" })
-                return
-            end
-            if not st.chunked and not st.body_len then
-                -- no framing headers: rely on the peer closing
-                return
-            end
+            sock = s
+            active_sock = s
+            s:read(on_data)
+            s:write(wire, function(werr)
+                if werr and not st.done then
+                    finish(werr)
+                end
+            end)
+        end
+
+        if u.https then
+            net.connectTls(u.host, u.port,
+                           { insecure = opts.insecure, ca = opts.ca },
+                           connected)
         else
-            st.buf = st.buf .. chunk
-        end
-        try_complete()
-    end
-
-    local on_data
-    on_data = function(err, chunk)
-        if st.done then
-            return
-        end
-        if err then
-            finish(err)
-            return
-        end
-        if chunk then
-            feed(chunk)
-            return
-        end
-        -- EOF: only the unframed case can legitimately end here
-        if not st.head then
-            finish("loop.http: connection closed before a response")
-        elseif st.chunked or (st.body_len and #st.buf < st.body_len) then
-            finish("loop.http: connection closed mid-body")
-        else
-            finish(nil, { status = st.head.status,
-                          reason = st.head.reason,
-                          headers = st.head.headers,
-                          body = st.buf })
+            net.connect(u.host, u.port, connected)
         end
     end
 
-    local function connected(err, s)
-        if err then
-            finish(err)
-            return
-        end
-        sock = s
-        s:read(on_data)
-        s:write(wire, function(werr)
-            if werr and not st.done then
-                finish(werr)
-            end
-        end)
-    end
-
-    if u.https then
-        net.connectTls(u.host, u.port,
-                       { insecure = opts.insecure, ca = opts.ca },
-                       connected)
-    else
-        net.connect(u.host, u.port, connected)
-    end
+    attempt(u0, max_redirects)
 end
 
 -- http.request(url|opts, opts?, cb)

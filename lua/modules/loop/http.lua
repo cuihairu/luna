@@ -1,6 +1,6 @@
--- loop.http: an async HTTP/1.1 client over loop.net / connectTls.
+-- loop.http: an async HTTP/1.1 client AND server over loop.net.
 --
--- One request, one aggregated callback: cb(err, res) with
+-- Client: one request, one aggregated callback: cb(err, res) with
 -- res = {status = 200, headers = {lowercase keys}, body = "..."}.
 -- Bodies arrive by content-length, chunked transfer decoding, or —
 -- when the response carries neither — by reading to EOF (every request
@@ -18,12 +18,21 @@
 -- Plain http rides net.connect, https rides net.connectTls with
 -- opts.insecure / opts.ca passed through.
 --
+-- Server: http.listen(host, port, handler) serves one connection per
+-- request; the handler(req, res) runs once the whole request has
+-- landed (req = {method, path, headers, body}), and res.send(
+-- status?, body?, headers?) writes the whole response and closes.
+-- A handler error becomes a 500 when nothing was sent yet.
+--
 -- Usage:
 --   local http = require "loop.http"
 --   http.get("https://example.com/", function(err, res) ... end)
 --   http.request({url = "http://h/p", method = "POST",
 --                 headers = {["X-A"] = "1"}, body = "hi",
 --                 maxRedirects = 3, timeoutMs = 5000}, cb)
+--   http.listen("127.0.0.1", 8080, function(req, res)
+--     res.send("hello " .. req.path)
+--   end)
 
 local loop = require("loop")
 local net = loop.net
@@ -436,6 +445,142 @@ function M.get(a, b, c)
     opts.method = "GET"
     opts.body = nil
     return run(opts, cb)
+end
+
+-- -- the server side ---------------------------------------------------
+--
+-- http.listen(host, port, handler) -> server (net's server: port(),
+-- address(), close(), ...). One connection per request (Connection:
+-- close both ways, like the client); the handler runs once the whole
+-- request has landed — req = {method, path(含查询串), headers(键小写),
+-- body}. Bodies arrive by content-length only (chunked request bodies
+-- are not a thing our own client sends); a request line that does not
+-- parse or a head past 64KiB gets a 400 and a close. A handler error
+-- becomes a 500 when the response has not gone out yet.
+
+local REASONS = {
+    [200] = "OK", [201] = "Created", [204] = "No Content",
+    [301] = "Moved Permanently", [302] = "Found",
+    [304] = "Not Modified", [400] = "Bad Request",
+    [403] = "Forbidden", [404] = "Not Found",
+    [500] = "Internal Server Error", [501] = "Not Implemented",
+}
+
+-- build the res object for one connection: send(status?, body?,
+-- headers?) writes the whole response and closes; idempotent
+local function make_res(sock)
+    local sent = false
+    local res = {}
+    function res.send(a, b, c)
+        if sent then
+            return
+        end
+        sent = true
+        local status, body, headers
+        if type(a) == "number" then
+            status, body, headers = a, b, c
+        else
+            status, body, headers = 200, a, b
+        end
+        body = body or ""
+        local lines = {
+            "HTTP/1.1 " .. tostring(status or 200) .. " "
+                .. (REASONS[status or 200] or ""),
+        }
+        for k, v in pairs(headers or {}) do
+            local kl = k:lower()
+            if kl ~= "content-length" and kl ~= "connection" then
+                lines[#lines + 1] = k .. ": " .. tostring(v)
+            end
+        end
+        lines[#lines + 1] = "Content-Length: " .. #body
+        lines[#lines + 1] = "Connection: close"
+        sock:write(table.concat(lines, "\r\n") .. "\r\n\r\n" .. body,
+                   function()
+                       sock:close()
+                   end)
+    end
+    return res, function()
+        sent = true
+    end
+end
+
+local function plain_status(sock, status)
+    sock:write("HTTP/1.1 " .. tostring(status) .. " "
+               .. (REASONS[status] or "") .. "\r\nContent-Length: 0\r\n"
+               .. "Connection: close\r\n\r\n",
+               function()
+                   sock:close()
+               end)
+end
+
+local function serve_conn(sock, handler)
+    local buf = ""
+    sock:read(function(err, chunk)
+        if err or not chunk then
+            sock:close() -- peer gone before a whole request landed
+            return
+        end
+        buf = buf .. chunk
+        local split = buf:find("\r\n\r\n", 1, true)
+        if not split then
+            if #buf > 65536 then
+                plain_status(sock, 400) -- head runaways get one 400
+            end
+            return
+        end
+        local head = buf:sub(1, split - 1)
+        local rest = buf:sub(split + 4)
+        local first = head:match("^([^\r\n]+)") or ""
+        local method, path = first:match("^(%S+) (%S+) HTTP/%d%.%d$")
+        if not method then
+            plain_status(sock, 400)
+            return
+        end
+        local headers = {}
+        local line = head:match("\r\n(.+)$") or "" -- past the request line
+        for h in line:gmatch("([^\r\n]+)") do
+            local k, v = h:match("^([^:]+):%s*(.*)$")
+            if k then
+                k = k:lower()
+                if headers[k] then
+                    headers[k] = headers[k] .. ", " .. v
+                else
+                    headers[k] = v
+                end
+            end
+        end
+        local cl = tonumber(headers["content-length"]) or 0
+        if #rest < cl then
+            return -- body still in flight
+        end
+        local req = {
+            method = method,
+            path = path,
+            headers = headers,
+            body = rest:sub(1, cl),
+        }
+        local res, force_sent = make_res(sock)
+        local ok, herr = pcall(handler, req, res)
+        if not ok then
+            force_sent()
+            plain_status(sock, 500) -- the handler erred with nothing sent yet
+            return
+        end
+    end)
+end
+
+-- http.listen(host, port, handler) -> server
+function M.listen(host, port, handler)
+    if type(handler) ~= "function" then
+        error("loop.http: handler required", 2)
+    end
+    return net.listen(host, port, function(cerr, sock)
+        if cerr or not sock then
+            return
+        end
+        serve_conn(sock, handler)
+    end)
 end
 
 return M

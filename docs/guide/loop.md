@@ -361,7 +361,7 @@ loop.run()
 - **关 listener 不及于存量**:server:close 只停监听,已建立的连接各自继续;
 - **构建依赖**:luna 带 OpenSSL 构建时可用;不带时两个入口都报错说明如何启用,其余 loop 面不受影响。
 
-## loop.http:异步 HTTP 客户端
+## loop.http:异步 HTTP 客户端与服务端
 
 `loop.http` 是一个纯 Lua 的 HTTP/1.1 客户端(`require "loop.http"`,与 Node 的 `require("http")` 同名),架在 `net.connect` / `connectTls` 之上:一次请求,一次聚合回调——`cb(err, res)`,其中 `res = {status, headers(键小写), body}`:
 
@@ -385,6 +385,30 @@ loop.run()
 | `opts.timeoutMs` | 整个请求的时限(连接、每一跳重定向与 body 共享预算),超时 `cb("... timed out ...")` |
 | `res` | `{status = 200, reason = "OK", headers = {小写键, 多值以逗号合并}, body = 字符串}` |
 
+服务端一面:`http.listen(host, port, handler)` 返回 net 的 server(`port()`/`address()`/`close()` 都在),handler 在**整个请求落地后**执行一次:
+
+```lua
+local http = require("loop.http")
+
+local srv = http.listen("127.0.0.1", 8080, function(req, res)
+    if req.method == "POST" then
+        res.send(201, "got " .. #req.body .. " bytes",
+                 {["X-Srv"] = "luna"})
+    else
+        res.send("hello " .. req.path)          -- 默认 200
+    end
+end)
+print("listening on", srv:port())
+
+loop.run()
+```
+
+| 服务端调用 | 语义 |
+| --- | --- |
+| `http.listen(host, port, handler)` | 起服务,返回 net server;`port 0` = 临时端口;handler 非 function 同步抛错 |
+| `req` | `{method, path(含查询串), headers(键小写、多值逗号合并), body(字符串)}` |
+| `res.send(status?, body?, headers?)` | 三种重载:`send(body)`=200 / `send(status, body)` / `send(status, body, headers)`;写完整个响应即关连接;**幂等**——再调不生效 |
+
 行为约定:
 
 - **body 分帧三路**:按 `content-length` 收满、按 `chunked` 解码(含终止块),两者皆无时读到对端关闭——每个请求都发送 `Connection: close`,响应以连接结束为界;
@@ -393,6 +417,10 @@ loop.run()
 - **超时是整条请求的**:从连接前起表,重定向不清表;超时先关 socket 再交付错误,迟到的响应或已排队的连接回调不会再进回调;
 - **错误是字符串**,从 `cb(err)` 出来(拒连、TLS 失败、截断的 body、坏的分帧、超限、超时);URL 解析失败与缺回调**同步抛出**;
 - **https 的证书校验默认开启**,`opts.insecure` / `opts.ca` 透传给 `connectTls`;
+- **服务端一连接一请求**:与自己的客户端同款 `Connection: close` 语义——响应写完即关,不做 keep-alive;
+- **服务端在请求整体落地后才调 handler**:请求体按 `content-length` 收满为准(chunked 请求体不在面内);请求行不匹配 HTTP/1.x 或头部越过 64KiB,直接回 400 并关连接;
+- **handler 抛错**:若此时响应尚未发出,实现回一个 500;已 `send` 过的连接不受影响;
+- **handler 不发 `send` 连接就挂着**:没有自动补发——忘了回就是挂到对端超时;
 - **边界**:本面不做流式响应与多路复用(大文件请直接用 net 面);IPv6 字面量主机暂不支持;传入的 opts 表不会被修改(重定向折叠写在内部拷贝上);与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。
 
 ## loop.udp:异步数据报

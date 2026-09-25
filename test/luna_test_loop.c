@@ -8,7 +8,9 @@
  * exit codes, kill-by-signal, synchronous spawn failure), and the
  * pure-Lua loop.http client (plain + TLS roundtrips, chunked framing,
  * request wiring, redirect chains with method folding, relative
- * Location, the whole-request timeout, url validation).
+ * Location, the whole-request timeout, url validation) and its server
+ * face (self-served roundtrips, handler errors as 500, malformed
+ * requests as 400).
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -1670,6 +1672,77 @@ static void test_http_redirect_budget_and_timeout(void **state)
         "loop.http: timed out after 1000ms");
 }
 
+static void test_http_server_roundtrip(void **state)
+{
+    (void)state;
+    /* the server face serves the client face in the same VM: one GET,
+     * one POST whose body aggregates by content-length, custom status
+     * and headers through res.send */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "out = 'none'\n"
+        "local step\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  if req.path == '/echo' then\n"
+        "    res.send(201, 'len=' .. #req.body .. ';' .. req.method,\n"
+        "             {['X-Srv'] = 'yes'})\n"
+        "  else\n"
+        "    res.send('hello ' .. req.path)\n"
+        "  end\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.get(base .. '/x', function(e1, r1)\n"
+        "  out = tostring(r1 and r1.status) .. '='\n"
+        "      .. tostring(r1 and r1.body) .. ';'\n"
+        "  http.request({url = base .. '/echo', method = 'POST',\n"
+        "    body = 'abcde'}, function(e2, r2)\n"
+        "    out = out .. tostring(r2 and r2.status) .. '='\n"
+        "        .. tostring(r2 and r2.body) .. ','\n"
+        "        .. tostring(r2 and r2.headers['x-srv'])\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "200=hello /x;201=len=5;POST,yes");
+}
+
+static void test_http_server_error_paths(void **state)
+{
+    (void)state;
+    /* a raising handler turns into a 500 when nothing was sent; a raw
+     * non-HTTP request gets a 400 and a close */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  if req.path == '/boom' then error('blew up') end\n"
+        "  res.send('nope')\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.get(base .. '/boom', function(e1, r1)\n"
+        "  out = tostring(e1 == nil) .. ',' .. tostring(r1 and r1.status)\n"
+        "      .. ';'\n"
+        "  net.connect('127.0.0.1', srv:port(), function(e2, s)\n"
+        "    s:read(function(e3, chunk)\n"
+        "      if chunk then\n"
+        "        out = out .. tostring(\n"
+        "            (chunk:find('400', 1, true)) ~= nil)\n"
+        "        s:close()\n"
+        "        srv:close()\n"
+        "      end\n"
+        "    end)\n"
+        "    s:write('NOT-HTTP at all\\r\\n\\r\\n', function() end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true,500;true");
+}
+
 static void test_http_bad_url_throws(void **state)
 {
     (void)state;
@@ -2245,6 +2318,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_follows_redirect_and_folds_post, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_relative_location, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_redirect_budget_and_timeout, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_roundtrip, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_error_paths, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),

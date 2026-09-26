@@ -142,10 +142,13 @@ local function dispatch(line)
         end
         local acc = {}
         capture_start(acc)
-        local okd, err = pcall(magic.dispatch, attach_session, name, arg)
+        -- dispatch never raises for a failed magic: it comes back as
+        -- (nil, message) -- surfacing that here is what makes a typo'd
+        -- or misused magic visible to the attach client at all
+        local okd, okm, merr = pcall(magic.dispatch, attach_session, name, arg)
         kernel.sink(nil)
-        if not okd then
-            return frame("ERR", tostring(err))
+        if not okd or not okm then
+            return frame("ERR", table.concat(acc) .. tostring(merr or okm))
         end
         return frame("OK", table.concat(acc))
     end
@@ -212,7 +215,10 @@ function serve.step()
             end
             break -- timeout: no complete line yet; done for this poll
         end
-        debug.sethook() -- let exec own the hooks for a moment
+        -- no debug.sethook() here: kernel.exec owns the hook slot for
+        -- the nested exec (save/restore around its own count hook), so
+        -- clearing it would strand whatever wrapper the caller had
+        -- installed -- the coverage build's line tracer, for one
         local okd, reply = pcall(dispatch, chunk)
         if not okd then
             reply = "ERR\n" .. tostring(reply) .. "\n\30\n"

@@ -1699,8 +1699,9 @@ static void server_close(struct lserver *sv)
     sv->closed = 1;
     luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->connref);
     sv->connref = LUA_NOREF;
-    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->closeref);
-    sv->closeref = LUA_NOREF;
+    /* closeref stays pinned: on_server_closed delivers it (and drops it)
+     * once uv_close completed — dropping it here would strand the
+     * callback, and selfref pins the userdata for the same window */
     uv_close((uv_handle_t *)&sv->h.tcp, on_server_closed);
 }
 
@@ -3247,8 +3248,8 @@ static void tserver_close(struct tserver *sv)
     sv->closed = 1;
     luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->connref);
     sv->connref = LUA_NOREF;
-    luaL_unref(sv->L, LUA_REGISTRYINDEX, sv->closeref);
-    sv->closeref = LUA_NOREF;
+    /* closeref stays pinned: on_tserver_closed delivers it (and drops
+     * it) once the handle is really closed */
     /* live connections keep their SSL up-reference to the context, so
      * freeing here is safe while they finish out their conversations */
     SSL_CTX_free(sv->ctx);

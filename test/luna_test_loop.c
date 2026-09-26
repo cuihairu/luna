@@ -838,19 +838,45 @@ static void test_dns_lookup_resolves_localhost(void **state)
         "return out"), "true:true");
 }
 
-static void test_dns_lookup_of_a_missing_host_yields_error(void **state)
+static void test_dns_lookup_reports_failure_through_the_callback(void **state)
 {
     (void)state;
-    /* .invalid is guaranteed never to resolve (RFC 2606): the error
-     * surfaces through the first callback argument */
+    /* A >63-char label fails while the query is being BUILT, before any
+     * packet leaves the machine. RFC 2606's .invalid was the old choice
+     * here, but DNS-capturing proxies (faux-IP mode) resolve even that
+     * — so the injection has to fail below the resolver's reach. */
     assert_string_equal(eval_string(
         "local loop = loop or require('loop')\n"
         "out = 'none'\n"
-        "loop.dns.lookup('no-such-host.invalid', function(e, addr)\n"
+        "loop.dns.lookup(string.rep('a', 70) .. '.invalid', function(e, addr)\n"
         "  out = tostring(e ~= nil) .. '|' .. tostring(addr)\n"
         "end)\n"
         "assert(loop.run())\n"
         "return out"), "true|nil");
+}
+
+/* libuv refuses an over-long hostname synchronously: lookup throws and
+ * its cleanup path unpins the callback without the loop ever turning */
+static void test_dns_lookup_of_an_overlong_host_throws(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local ok, err = pcall(loop.dns.lookup, string.rep('a', 300) .. '.invalid', function() end)\n"
+        "return tostring(ok) .. '|' .. tostring(tostring(err):find('invalid argument') ~= nil)"),
+        "false|true");
+}
+
+/* reverse only takes numeric addresses; a name throws before anything
+ * is pinned or the loop starts */
+static void test_dns_reverse_of_a_non_address_throws(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local ok, err = pcall(loop.dns.reverse, 'no-such-host.invalid', function() end)\n"
+        "return tostring(ok) .. '|' .. tostring(tostring(err):find('not a numeric address') ~= nil)"),
+        "false|true");
 }
 
 static void test_dns_reverse_maps_loopback(void **state)
@@ -2397,7 +2423,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_unref_server_runs_but_does_not_keep, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_ref_restores_keepalive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_lookup_resolves_localhost, setup_loop, teardown_loop),
-        cmocka_unit_test_setup_teardown(test_dns_lookup_of_a_missing_host_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_lookup_reports_failure_through_the_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_lookup_of_an_overlong_host_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_reverse_of_a_non_address_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_reverse_maps_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_os_basics_report_sane_values, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_os_cpus_lists_each_with_times, setup_loop, teardown_loop),

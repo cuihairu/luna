@@ -33,6 +33,7 @@
 
 # cmake
 /build/
+/build-cov/
 cmake-build-debug
 
 # gtags

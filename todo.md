@@ -44,6 +44,12 @@
       Lua 5.5 require 双返回值注记)。
 - [x] **覆盖率**:每个新特性/新分支都有对应用例(repl 21、magic 14、complete 21、
       modules 18);每组改动 `cmake --build` + `ctest` 12 组全绿后才提交。
+      实测基线(2026-09-26,`build-cov` Profiling 插桩树,gcovr):C 侧 `src/` 行覆盖
+      75.8%、函数 81.8%、分支 49%——缺口集中在 `luna_line.c`(replxx 行编辑,2%,
+      只有真 TTY 路径能覆盖,测试仅经 serve 组的 pty 触达)与 `luna_loop.c` 的
+      事件循环分支(79%);本轮新增特性全在 Lua 策略层(gcov 不可见),由上述四组
+      逐分支用例覆盖。逐分支逼近 100% 需 pty 驱动的行编辑测试与 luacov 接线,记入
+      下轮方向,不在本轮。
 
 ## 明确不做(本轮)
 

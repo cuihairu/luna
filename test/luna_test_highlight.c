@@ -274,6 +274,86 @@ static void test_session_plain_when_color_off(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 42"));
 }
 
+/* -- coverage gap group ------------------------------------------------- */
+
+static void test_set_style_overrides_a_tag(void **state)
+{
+    (void)state;
+    /* set_style is the documented extension point: it writes straight
+     * into highlight.styles */
+    if (luaL_dostring(L,
+                      "H.set_style('luna_probe_tag', 'PROBE')\n"
+                      "return H.styles['luna_probe_tag'] == 'PROBE'") != LUA_OK) {
+        fail_msg("set_style test failed: %s", lua_tostring(L, -1));
+    }
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_render_without_the_lexing_engine_stays_plain(void **state)
+{
+    (void)state;
+    /* the lexer module needs lpeg to load; without it ensure_lexer gives
+     * up once and every render keeps the identity highlighter */
+    assert_int_equal(luaL_dostring(L,
+                       "package.loaded['lpeg'] = nil\n"
+                       "package.preload['lpeg'] = nil\n"
+                       "return H.render('local x = 1', true) == 'local x = 1'"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_render_with_a_broken_engine_stays_plain(void **state)
+{
+    (void)state;
+    /* a lexer module that loads but cannot produce the 'lua' lexer also
+     * degrades to plain text */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['lexer'] = function()\n"
+                       "  return { load = function() return nil end }\n"
+                       "end\n"
+                       "return H.render('x = 1', true) == 'x = 1'"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_render_lexer_failure_falls_back_to_plain(void **state)
+{
+    (void)state;
+    /* an engine whose lex() raises is caught and render stays plain */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['lexer'] = function()\n"
+                       "  return { load = function()\n"
+                       "    return { lex = function() error('lex boom') end }\n"
+                       "  end }\n"
+                       "end\n"
+                       "return H.render('x = 1', true) == 'x = 1'"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_render_copies_the_tail_after_the_last_tag(void **state)
+{
+    (void)state;
+    /* a lex span covering only a prefix: the styled head gets its ANSI
+     * wrap and the unlexed remainder is copied through verbatim */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['lexer'] = function()\n"
+                       "  return { load = function()\n"
+                       "    return { lex = function() return { 'keyword', 3 } end }\n"
+                       "  end }\n"
+                       "end\n"
+                       "local r = H.render('local x = 1', true)\n"
+                       "return type(r) == 'string' and r:byte(1) == 27 and "
+                       "r:find('x = 1', 1, true) ~= nil"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
 /* -- runner --------------------------------------------------------------- */
 
 int main(void)
@@ -291,6 +371,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_session_colored_out_label, setup_session, teardown_highlight),
         cmocka_unit_test_setup_teardown(test_session_colored_error, setup_session, teardown_highlight),
         cmocka_unit_test_setup_teardown(test_session_plain_when_color_off, setup_session, teardown_highlight),
+        /* coverage gap tests */
+        cmocka_unit_test_setup_teardown(test_set_style_overrides_a_tag, setup_highlight, teardown_highlight),
+        cmocka_unit_test_setup_teardown(test_render_without_the_lexing_engine_stays_plain, setup_highlight, teardown_highlight),
+        cmocka_unit_test_setup_teardown(test_render_with_a_broken_engine_stays_plain, setup_highlight, teardown_highlight),
+        cmocka_unit_test_setup_teardown(test_render_lexer_failure_falls_back_to_plain, setup_highlight, teardown_highlight),
+        cmocka_unit_test_setup_teardown(test_render_copies_the_tail_after_the_last_tag, setup_highlight, teardown_highlight),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

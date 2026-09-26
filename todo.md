@@ -230,15 +230,77 @@
 - 环境记录(重演第五轮模式):负载 76 时覆盖率树 rocks 撞 420s 超时
   (0x7c=124),回落到 44 后同树全绿——负载 >40 不取 rocks 终绿的纪律继续有效。
 
+## magic / 入口 / C 侧诚实账(2026-09-26 第七轮)
+
+- [x] **magic.lua 88.74% → 100.00%**(151 行 0 缺):worker 递交的 9 个
+      "coverage gap" 测试全绿采纳——echo_result 早退、%timeit 用法错、
+      %time/%timeit 执行错、%clear 的 tty 分支(patch `k.tty` 后直调)、
+      plugins 加载器不可达/加载失败/被遮蔽、%exit 的 `os.exit` mock
+      (mock 让 `os.exit(0)` 那行真实执行而不杀进程——比"构造性不可达"
+      的旧判定干净:覆盖账上这行本就可达,只是代价是进程生命)。
+- [x] **luna.lua 80.14% → 95.27%**(29 暗行 → 7):pty 驱动真二进制的
+      交互面——`%clear` 清屏序列(注意 raw-mode pty 下提交字节是 `\r`
+      不是 `\n`,LF 会被原样塞进行编辑缓冲)、`%exit` 干净退出(os.exit
+      绕过 serve.stop,测试须自清 socket 文件)、attach 补全桥
+      (`zeb<Tab>` → `zebra_crossing`,跨进程 SIGUSR1 唤醒)、attach 目标
+      死亡/连接失败/错误帧上 stderr。
+- [x] **C 侧记账更正:main.c 真实 90.44%(136 行),此前报的 62% 是
+      双重假象**。白盒 main 测试把 src/luna_main.c 编进自己,其 gcno
+      在 gcda 缺席时会让 gcov 产全零 JSON(再拖一份暗行集进来),陈旧
+      gcda 又会被 gcov 拿去配对——两路合谋把 136 行真集撑成 198 行
+      并集。同时揭穿 luna_line.c 的假 100%:白盒 linedit 副本的计数
+      灌水,真实 85%。修法:gcovr_summary 报告前清场(删 gcov-discarded/
+      与 test 树全部 gcda/gcno),报告只信真实二进制与静态库自己的
+      计数。坑:gcovr 的 --exclude/--gcov-exclude 都挡不住"零数据
+      gcno"路径,清场是唯一可靠机制;cmake VERBATIM 直传 argv,find
+      的模式不要带 shell 引号。
+- [x] **worker 的 8 个红测试重写为真 API**(假设错但覆盖目标对):
+      introspect——signature 非函数返 nil(77)、Lua 函数 help 带
+      "defined at"(95)、doc_for 的种子路径与嵌套值反查(103/113)、
+      suggest 用错误消息精确断言双候选形式(251);highlight——
+      set_style 直写 styles(37)、lpeg 缺席时引擎加载失败(58)、
+      lexer.load 败(62)、lex 抛错回退纯文本(78)、末标签后的尾段
+      原样拷贝(97)。另有 magic 一处误导性注释修正、docs 首页 SVG
+      图标与 docs/package-lock.json 采纳;根目录孤儿 package-lock.json
+      (无 manifest 的空锁)判明为垃圾删除。
+- [x] **上轮一处记账更正**:serve.lua 上轮报的 100.00% 有虚——exotic
+      `__tostring` 测试实际走的是 kernel.exec 的 C 侧错误摊平(eval
+      分支自己构 ERR),step() 的 not-okd 兜底行从未被钉(该测试注释
+      描述的机制不成立,已修正)。新增
+      test_a_raising_completion_candidate_still_frames:补全源返回
+      `__tostring` 恒抛的候选,dispatch 的 tostring 循环(未包 pcall)
+      炸开落进外层 pcall——兜底行现在被真实覆盖,serve.lua 100.00%
+      (130/130)这次是真的。
+- [x] **实测(2026-09-26,不虚报)**:两树 `cmake --build` + ctest
+      **15 组全绿**(覆盖率树 291.7s;负载 ≤16,rocks 196s 一次过)。
+      Lua 侧总 **91.33%**(1674 行 159 缺,上轮 88.48%):magic
+      100.00%、highlight 100.00%、introspect 99.40%、complete
+      100.00%、serve 100.00%、luna.lua 95.27%。C 侧(诚实账)总
+      **86.1%**:kernel 98%(202/205)、main 90.44%(123/136)、line
+      85%(121/142)、loop 84%(1881/2220)。
+- 余量如实:introspect.lua:241(suggest 次优候选的条件行)留黑——
+  按降序到达的 pairs 顺序永远走不到,行覆盖本身顺序依赖;改为断言
+  其确定输出(best/second = 距离最小者按字母序取二),一个 flaky
+  测试比一个暗行更糟。luna.lua 余 7 行:3 行构造性不可达(chunkname
+  回退属普通构建;socket.unix 捆绑必在),4 行 attach 会话将死时的
+  竞态恢复腿(对端关闭后 send 仍可能缓冲成功,钉住须假设 socket
+  拆除顺序,断言从宽保确定性)。repl 98.16%、modules 87.39%、
+  plugins 93.18%、rocks 75.58%(网络下载分支,离线不可注入)。
+
 ## 下轮方向
 
-- **magic.lua(88.74%,17 行)与 luna.lua 入口(80.14%,29 行)**:前者缺口
-  多在 magic 注册与 echo 的边角,后者是 REPL 交互面(pty 已有驱动先例)。
-  C 侧 main.c(63%)的参数解析分支可顺带。
+- **C 侧 luna_loop.c(84%,339 行)**:第五轮失败注入后的存量长尾,
+  多为错误分支组合;可按第五轮的注入套路再收一轮。
+- **modules.lua(87.39%,14 行)与 plugins.lua(93.18%,6 行)**:清单
+  解析与发现顺序的边角,单测基建现成,成本低。
 
 ## 明确不做(上一轮)
 
+- introspect.lua:241 的行覆盖——pairs 顺序依赖,断言确定输出替代,不写
+  会 flaky 的测试;
+- luna.lua 4 行 attach 竞态恢复腿——钉住它们等于假设 socket 拆除顺序,
+  从宽断言保确定性;
+- luna_loop.c 长尾(339 行)——基建在,留给下一轮专项,不在本轮摊开;
 - 未闭合引号跨行续行的语义修补(`s = "abc` 回车后无解)——`^C` 丢弃整块已可用,改语义
   动 `kernel.check` 契约,收益低;
-- 包管理(luna.rocks)与 loop 面扩展——已有专文与测试,不在本轮范围;
 - 打 tag / 发版(硬约束禁止)。

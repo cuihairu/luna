@@ -297,6 +297,74 @@ static void test_help_global_injected_on_run(void **state)
     assert_non_null(strstr(s, "string: 'a string'"));
 }
 
+/* -- coverage gap group ------------------------------------------------- */
+
+static void test_signature_rejects_non_functions(void **state)
+{
+    (void)state;
+    /* signature(fn) returns nil for anything that is not a function */
+    if (luaL_dostring(L,
+                      "return I.signature('not a function') == nil and "
+                      "I.signature(42) == nil") != LUA_OK) {
+        fail_msg("signature non-function test failed: %s", lua_tostring(L, -1));
+    }
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_help_lua_function_shows_definition_site(void **state)
+{
+    (void)state;
+    /* functions defined in Lua carry their source location, unlike
+     * C builtins which report "builtin" */
+    if (luaL_dostring(L,
+                      "local r = I.help(function(luna_probe) end)\n"
+                      "return type(r) == 'string' and "
+                      "r:find('defined at', 1, true) ~= nil") != LUA_OK) {
+        fail_msg("help lua function test failed: %s", lua_tostring(L, -1));
+    }
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_doc_for_paths_and_values(void **state)
+{
+    (void)state;
+    /* doc_for resolves seeded dotted paths, live values by scanning _G
+     * (string.rep is found as a field of string), and returns nil for
+     * anything it cannot name */
+    if (luaL_dostring(L,
+                      "local a = I.doc_for('string.format')\n"
+                      "local b = I.doc_for(string.rep)\n"
+                      "local c = I.doc_for('no/such/doc/path')\n"
+                      "return a ~= nil and b ~= nil and c == nil") != LUA_OK) {
+        fail_msg("doc_for test failed: %s", lua_tostring(L, -1));
+    }
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_suggest_names_the_two_closest_candidates(void **state)
+{
+    (void)state;
+    /* suggest parses the global name out of the error message and
+     * returns the two closest matches by edit distance (print is always
+     * at distance 1; princ is planted at distance 1 too). The queried
+     * name itself must stay undefined — an existing global means there
+     * is nothing to suggest. The alphabetical tie-breaks make the pick
+     * deterministic, so the exact reply is assertable regardless of
+     * pairs() order */
+    if (luaL_dostring(L,
+                      "princ = function() end\n"
+                      "local r = I.suggest("
+                      "\"attempt to call a nil value (global 'prinb')\")\n"
+                      "return r == \"did you mean 'princ' or 'print'?\"") != LUA_OK) {
+        fail_msg("suggest test failed: %s", lua_tostring(L, -1));
+    }
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
 /* -- runner --------------------------------------------------------------- */
 
 int main(void)
@@ -318,6 +386,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_sugar_leading_question, setup_session, teardown_introspect),
         cmocka_unit_test_setup_teardown(test_sugar_counts_as_input, setup_session, teardown_introspect),
         cmocka_unit_test_setup_teardown(test_help_global_injected_on_run, setup_session, teardown_introspect),
+        /* coverage gap tests */
+        cmocka_unit_test_setup_teardown(test_signature_rejects_non_functions, setup_introspect, teardown_introspect),
+        cmocka_unit_test_setup_teardown(test_help_lua_function_shows_definition_site, setup_introspect, teardown_introspect),
+        cmocka_unit_test_setup_teardown(test_doc_for_paths_and_values, setup_introspect, teardown_introspect),
+        cmocka_unit_test_setup_teardown(test_suggest_names_the_two_closest_candidates, setup_introspect, teardown_introspect),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -3,6 +3,7 @@
  * The test is one Lua state acting as both target and client, stepping
  * serve.step() by hand where the kernel count hook would normally sit.
  */
+#include <fcntl.h>
 #include <poll.h>
 #include <pty.h>
 #include <setjmp.h>
@@ -214,6 +215,42 @@ static void test_stop_clears_socket_and_poll_noops(void **state)
         "assert(os.remove(S.path_for(kernel.pid())) == nil, 'socket gone')");
 }
 
+/* pty_expect with a diagnostic: on timeout, dump what actually came
+ * back so a red test says why. */
+#define PTY_EXPECT(master, buf, needle)                                    \
+    do {                                                                   \
+        if (!pty_expect((master), (buf), sizeof(buf), (needle), 10000))    \
+            fail_msg("pty_expect('%s') timed out; wire=[%s]", needle,     \
+                     (buf));                                               \
+    } while (0)
+
+/* Drain the pty master until `needle` shows up in the accumulated buf
+ * (or timeout_ms elapses). buf must start NUL-terminated; content is
+ * kept raw — callers looking for ANSI sequences need it that way.
+ * Returns 1 once the needle was seen. */
+static int pty_expect(int fd, char *buf, size_t cap, const char *needle,
+                      int timeout_ms)
+{
+    int waited = 0;
+    while (!strstr(buf, needle)) {
+        struct pollfd p = { fd, POLLIN, 0 };
+        if (poll(&p, 1, 100) > 0 && (p.revents & POLLIN)) {
+            size_t got = strlen(buf);
+            if (got + 1 >= cap)
+                break; /* full: the needle is not coming */
+            ssize_t n = read(fd, buf + got, cap - 1 - got);
+            if (n <= 0)
+                break;
+            buf[got + n] = '\0';
+            continue;
+        }
+        waited += 100;
+        if (waited >= timeout_ms)
+            break;
+    }
+    return strstr(buf, needle) != NULL;
+}
+
 /* Drain the pty master for up to timeout_ms, collecting whatever
  * arrived into buf. Returns bytes collected (NUL-terminated). */
 static int pty_collect(int fd, char *buf, size_t cap, int timeout_ms)
@@ -408,6 +445,367 @@ static void test_attach_reaches_a_busy_script(void **state)
     assert_int_equal(access(path, F_OK), -1);
     unlink(infile);
     unlink(marker);
+}
+
+/* The launcher's attach path refuses a connect it cannot make: a pid
+ * whose socket path does not exist reports and exits 1. */
+static void test_attach_reports_a_failed_connect(void **state)
+{
+    (void)state;
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s --attach 2147483647 2>&1", LUNA_BINARY);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    char out[4096];
+    size_t n = fread(out, 1, sizeof(out) - 1, p);
+    out[n] = '\0';
+    int status = pclose(p);
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 1);
+    assert_non_null(strstr(out, "cannot attach to 2147483647"));
+}
+
+/* Error frames surface on stderr, keeping the pipe a clean result
+ * stream; the client leaves through %detach and the target lives on. */
+static void test_attach_shows_error_frames_on_stderr(void **state)
+{
+    (void)state;
+    char marker[512], infile[512];
+    snprintf(marker, sizeof(marker), "%s/errframe.done", sockdir);
+    snprintf(infile, sizeof(infile), "%s/attach.errframe.in", sockdir);
+    FILE *in = fopen(infile, "w");
+    assert_non_null(in);
+    fputs("error('attach boomz')\n%detach\n", in);
+    fclose(in);
+
+    int pipes[2];
+    assert_int_equal(pipe(pipes), 0);
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        close(pipes[0]);
+        dup2(pipes[1], STDOUT_FILENO);
+        dup2(pipes[1], STDERR_FILENO);
+        close(pipes[1]);
+        char *argv[] = { LUNA_BINARY, SERVE_FIXTURES "/busy.lua", marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(pipes[1]);
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_int_equal(access(path, F_OK), 0);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "%s --attach %d < %s 2>&1", LUNA_BINARY,
+             (int)pid, infile);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    char reply[4096];
+    size_t n = fread(reply, 1, sizeof(reply) - 1, p);
+    reply[n] = '\0';
+    int status = pclose(p);
+    assert_int_equal(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 0);
+    assert_non_null(strstr(reply, "attach boomz")); /* stderr body */
+    assert_non_null(strstr(reply, "detach"));       /* the client left */
+
+    /* the target survived the erroring command and leaves by itself */
+    FILE *m = fopen(marker, "w");
+    assert_non_null(m);
+    fclose(m);
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    close(pipes[0]);
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    assert_int_equal(access(path, F_OK), -1);
+    unlink(infile);
+    unlink(marker);
+}
+
+/* The target dying mid-session must not hang the client: the next
+ * command surfaces 'target went away' (send failed) or 'no reply'
+ * (receive failed — which one depends on the kernel's close timing),
+ * and the client exits 1. A named pipe paces the input so the kill
+ * lands between two commands, deterministically. */
+static void test_attach_reports_when_the_target_dies(void **state)
+{
+    (void)state;
+    char marker[512], fifopath[512];
+    snprintf(marker, sizeof(marker), "%s/dying.done", sockdir);
+    snprintf(fifopath, sizeof(fifopath), "%s/attach.fifo", sockdir);
+    assert_int_equal(mkfifo(fifopath, 0600), 0);
+
+    int pipes[2];
+    assert_int_equal(pipe(pipes), 0);
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        close(pipes[0]);
+        dup2(pipes[1], STDOUT_FILENO);
+        dup2(pipes[1], STDERR_FILENO);
+        close(pipes[1]);
+        char *argv[] = { LUNA_BINARY, SERVE_FIXTURES "/busy.lua", marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(pipes[1]);
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_int_equal(access(path, F_OK), 0);
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "%s --attach %d < %s 2>&1", LUNA_BINARY,
+             (int)pid, fifopath);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    int wfd = open(fifopath, O_WRONLY); /* unblocks at the reader's open */
+    assert_int_not_equal(wfd, -1);
+
+    /* first command: writes the marker in the target's live state */
+    char markerline[768];
+    snprintf(markerline, sizeof(markerline),
+             "io.open('%s', 'w'):write('a'):close()\n", marker);
+    assert_int_equal(write(wfd, markerline, strlen(markerline)),
+                     (ssize_t)strlen(markerline));
+
+    /* wait until the reply made it back out (the second prompt's flush
+     * carries the first reply), so the kill lands between commands */
+    char out[8192];
+    size_t got = 0;
+    out[0] = '\0';
+    waited = 0;
+    while (waited < 10000 && !strstr(out, "nil")) {
+        struct pollfd pfd = { fileno(p), POLLIN, 0 };
+        if (poll(&pfd, 1, 100) > 0 && (pfd.revents & POLLIN)) {
+            ssize_t n = read(fileno(p), out + got, sizeof(out) - 1 - got);
+            if (n <= 0)
+                break;
+            got += (size_t)n;
+            out[got] = '\0';
+            continue;
+        }
+        waited += 100;
+    }
+    if (!strstr(out, "true"))
+        fail_msg("first reply never showed; out=[%s]", out);
+    /* the first reply (io.close returns true) */
+
+    /* kill between commands: the next one cannot complete */
+    assert_int_equal(kill(pid, SIGKILL), 0);
+    int status = 0;
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    close(pipes[0]);
+
+    const char *second = "return 2\n";
+    assert_int_equal(write(wfd, second, strlen(second)),
+                     (ssize_t)strlen(second));
+    close(wfd);
+
+    char tail[4096];
+    size_t tn = fread(tail, 1, sizeof(tail) - 1, p);
+    tail[tn] = '\0';
+    status = pclose(p);
+    assert_int_equal(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 1);
+    assert_true(strstr(tail, "went away") != NULL ||
+                strstr(tail, "no reply") != NULL);
+
+    unlink(fifopath);
+    unlink(marker);
+    unlink(path); /* SIGKILL skipped the clean shutdown */
+}
+
+/* A pty attacher runs the line editor with remote completion: TAB sends
+ * the \1 meta line to the target, the framed candidate list comes back,
+ * and the inserted tail lands in the editor. %exit detaches the CLIENT
+ * (EXIT frame) and leaves the target running. */
+static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
+{
+    (void)state;
+    char marker[512];
+    snprintf(marker, sizeof(marker), "%s/target.done", sockdir);
+
+    int tpipe[2];
+    assert_int_equal(pipe(tpipe), 0);
+    pid_t target = fork();
+    assert_int_not_equal(target, -1);
+    if (target == 0) {
+        close(tpipe[0]);
+        dup2(tpipe[1], STDOUT_FILENO);
+        dup2(tpipe[1], STDERR_FILENO);
+        close(tpipe[1]);
+        char *argv[] = { LUNA_BINARY, SERVE_FIXTURES "/attach_target.lua",
+                         marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(tpipe[1]);
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_int_equal(access(path, F_OK), 0);
+
+    int master;
+    pid_t attacher = forkpty(&master, NULL, NULL, NULL);
+    assert_int_not_equal(attacher, -1);
+    if (attacher == 0) {
+        setenv("TERM", "xterm", 1);
+        char pidstr[16];
+        snprintf(pidstr, sizeof(pidstr), "%d", (int)target);
+        char *argv[] = { LUNA_BINARY, "--attach", pidstr, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+
+    char wire[32768];
+    wire[0] = '\0';
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "attached to",
+                                10000), 1);
+    /* a prefix plus TAB completes remotely: the inserted tail shows up */
+    assert_int_equal(write(master, "zeb\t", 4), 4);
+    PTY_EXPECT(master, wire, "ra_crossing");
+    /* the completed line evaluates in the target's live state (raw
+     * mode: Enter is CR) */
+    assert_int_equal(write(master, "\r", 1), 1);
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "42", 10000), 1);
+    /* %exit detaches the client and prints the EXIT frame's body */
+    assert_int_equal(write(master, "%exit\r", 6), 6);
+    PTY_EXPECT(master, wire, "detaches the client");
+
+    int status = 0;
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(attacher, &status, WNOHANG) == attacher)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    close(master);
+
+    /* the target survived the client's %exit and leaves via marker */
+    FILE *m = fopen(marker, "w");
+    assert_non_null(m);
+    fclose(m);
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(target, &status, WNOHANG) == target)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    close(tpipe[0]);
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    assert_int_equal(access(path, F_OK), -1);
+    unlink(marker);
+}
+
+/* %clear repaints the screen from a real console: the raw escape
+ * sequence lands on the wire (that is the tty branch of the magic).
+ * ^D leaves cleanly so the console's own coverage flushes. */
+static void test_console_percent_clear_paints_the_screen(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = forkpty(&master, NULL, NULL, NULL);
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        setenv("TERM", "xterm", 1);
+        char *argv[] = { LUNA_BINARY, NULL };
+        execv(LUNA_BINARY, argv); /* inherits LUNA_SOCK_DIR */
+        _exit(127);
+    }
+
+    char wire[32768];
+    wire[0] = '\0';
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "In [1]", 10000),
+                     1);
+    assert_int_equal(write(master, "%clear\r", 7), 7);
+    PTY_EXPECT(master, wire, "\33[2J\33[H");
+
+    /* ^D: the console exits cleanly */
+    assert_int_equal(write(master, "\4", 1), 1);
+    int status = 0;
+    int waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    close(master);
+}
+
+/* %exit from the console leaves with code 0 (the magic calls os.exit
+ * directly, so this process's Lua coverage never flushes — the line is
+ * behavioral-testable, not measurable). */
+static void test_console_percent_exit_leaves_cleanly(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = forkpty(&master, NULL, NULL, NULL);
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        setenv("TERM", "xterm", 1);
+        char *argv[] = { LUNA_BINARY, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+
+    char wire[32768];
+    wire[0] = '\0';
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "In [1]", 10000),
+                     1);
+    assert_int_equal(write(master, "%exit\r", 6), 6);
+
+    int status = 0;
+    int waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    close(master);
+    /* %exit bypasses the clean shutdown (os.exit), so the console's
+     * socket file needs the manual sweep */
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
+    unlink(path);
 }
 
 /* The attach plumbing reports its failures instead of swallowing them:
@@ -605,9 +1003,10 @@ static void test_closed_clients_are_dropped(void **state)
                         "OK|2");
 }
 
-/* an error object whose __tostring always raises escapes the ERR
- * framing inside dispatch (frame() never runs); the raised string
- * lands in the outer pcall and step()'s manual ERR build ships it */
+/* an error object whose __tostring always raises: kernel.exec flattens
+ * error objects to strings in C (keeping the raised message), so the
+ * failure ships through dispatch's own ERR framing — nothing escapes to
+ * step()'s outer pcall on this path */
 static void test_exotic_error_object_still_frames(void **state)
 {
     (void)state;
@@ -617,6 +1016,29 @@ static void test_exotic_error_object_still_frames(void **state)
         "  .. '{__tostring = function() error(\"meta boom\") end}))')");
     assert_memory_equal(reply, "ERR|", 4);
     assert_non_null(strstr(reply, "meta boom"));
+    /* the state, the client and the server all survived */
+    assert_string_equal(eval_string("return exchange('return 40 + 2')"),
+                        "OK|42");
+}
+
+/* a completion source proposing a candidate whose __tostring raises:
+ * complete.line pcall's its sources, but dispatch's own tostring() over
+ * the returned candidates is not protected — the raise lands in
+ * step()'s outer pcall and the manual ERR build ships it */
+static void test_a_raising_completion_candidate_still_frames(void **state)
+{
+    (void)state;
+    run(L,
+        "require('luna.complete').add_source(function()\n"
+        "  return { setmetatable({}, {__tostring = function()\n"
+        "    error('cand boom') end}) }\n"
+        "end)\n");
+    const char *reply =
+        eval_string("return exchange('\\1complete zebra_crossing')");
+    assert_memory_equal(reply, "ERR", 3);
+    assert_non_null(strstr(reply, "cand boom"));
+    /* pop the poisoned source: later completion paths must not see it */
+    run(L, "table.remove(require('luna.complete').sources)");
     /* the state, the client and the server all survived */
     assert_string_equal(eval_string("return exchange('return 40 + 2')"),
                         "OK|42");
@@ -746,12 +1168,19 @@ int main(void)
         cmocka_unit_test(test_receive_raise_drops_client),
         cmocka_unit_test(test_closed_clients_are_dropped),
         cmocka_unit_test(test_exotic_error_object_still_frames),
+        cmocka_unit_test(test_a_raising_completion_candidate_still_frames),
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test(test_sigusr1_releases_idle_editor),
         cmocka_unit_test(test_sigusr1_then_clean_exit),
         cmocka_unit_test(test_attach_reaches_a_busy_script),
+        cmocka_unit_test(test_attach_reports_a_failed_connect),
+        cmocka_unit_test(test_attach_shows_error_frames_on_stderr),
+        cmocka_unit_test(test_attach_reports_when_the_target_dies),
+        cmocka_unit_test(test_attach_pty_completes_and_leaves_via_exit_magic),
+        cmocka_unit_test(test_console_percent_clear_paints_the_screen),
+        cmocka_unit_test(test_console_percent_exit_leaves_cleanly),
         cmocka_unit_test(test_a_broken_attach_poll_never_kills_the_chunk),
     };
     /* group-level setup: one shared state, tests build on each other

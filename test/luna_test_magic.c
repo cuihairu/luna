@@ -260,6 +260,128 @@ static void test_bare_percent_still_evaluates(void **state)
     assert_string_equal(feed("% 6"), "error");
 }
 
+/* -- coverage gap group --------------------------------------------------- */
+
+static void test_echo_result_early_return_when_no_values(void **state)
+{
+    (void)state;
+    /* echo_result returns early when the result carries no non-nil
+     * values; %time of a call returning no values still prints its
+     * timing, but no Out line is echoed. */
+    outlen = 0;
+    outbuf[0] = '\0';
+    assert_string_equal(feed("%time (function() end)()"), "ok");
+    assert_non_null(strstr(outbuf, "Wall time:"));
+    assert_null(strstr(outbuf, "Out[")); /* echo_result saw no values, returned early */
+}
+
+static void test_exit_magic_calls_os_exit(void **state)
+{
+    (void)state;
+    /* The %exit magic calls os.exit(0). In the test harness we cannot
+     * actually exit, so we mock os.exit to capture the call. */
+    outlen = 0;
+    outbuf[0] = '\0';
+    assert_int_equal(luaL_dostring(L,
+                       "local orig_exit = os.exit\n"
+                       "local captured = nil\n"
+                       "os.exit = function(code) captured = code end\n"
+                       "M.commands.exit.run(S, '')\n"
+                       "os.exit = orig_exit\n"
+                       "return captured") , LUA_OK);
+    assert_int_equal(lua_tointeger(L, -1), 0);
+    lua_pop(L, 1);
+}
+
+static void test_timeit_usage_error(void **state)
+{
+    (void)state;
+    /* %timeit with empty arg hits the usage error branch */
+    assert_string_equal(feed("%timeit"), "ok");
+    assert_non_null(strstr(outbuf, "usage: %timeit <expression>"));
+}
+
+static void test_time_execution_error(void **state)
+{
+    (void)state;
+    /* %time with code that errors — the error path in the time magic
+     * calls error(tostring(res[2])) which is a distinct branch. */
+    assert_string_equal(feed("%time error('boom-time')"), "ok");
+    assert_non_null(strstr(outbuf, "boom-time"));
+}
+
+static void test_timeit_execution_error(void **state)
+{
+    (void)state;
+    /* %timeit with code that errors — same error branch in timeit */
+    assert_string_equal(feed("%timeit error('boom-timeit')"), "ok");
+    assert_non_null(strstr(outbuf, "boom-timeit"));
+}
+
+static void test_clear_on_tty(void **state)
+{
+    (void)state;
+    /* %clear writes the ANSI clear sequence when kernel.tty() is true.
+     * The test harness runs without a TTY, so we force the branch by
+     * temporarily patching kernel.tty in the session. */
+    outlen = 0;
+    outbuf[0] = '\0';
+    assert_int_equal(luaL_dostring(L,
+                       "local k = require 'kernel'\n"
+                       "local orig = k.tty\n"
+                       "k.tty = function() return true end\n"
+                       "M.commands.clear.run(S, '')\n"
+                       "k.tty = orig") , LUA_OK);
+    assert_non_null(strstr(outbuf, "\33[2J\33[H"));
+}
+
+static void test_plugins_loader_unavailable(void **state)
+{
+    (void)state;
+    /* %plugins when require('luna.plugins') fails — simulate by breaking
+     * the preload and calling the magic directly. */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['luna.plugins'] = nil\n"
+                       "package.loaded['luna.plugins'] = nil\n"
+                       "M.commands.plugins.run(S, '')") , LUA_OK);
+    assert_non_null(strstr(outbuf, "plugins: loader unavailable"));
+}
+
+static void test_plugins_with_loaded_and_failed(void **state)
+{
+    (void)state;
+    /* Seed the plugins module with loaded and failed entries to exercise
+     * the listing loops and the failed counter. */
+    assert_int_equal(luaL_dostring(L,
+                       "local plugs = require 'luna.plugins'\n"
+                       "plugs.loaded['demo'] = { version = '1.0', description = 'demo plugin' }\n"
+                       "plugs.failed['badone'] = 'load error details'\n"
+                       "return true") , LUA_OK);
+    assert_string_equal(feed("%plugins"), "ok");
+    assert_non_null(strstr(outbuf, "loaded plugins:"));
+    assert_non_null(strstr(outbuf, "demo"));
+    assert_non_null(strstr(outbuf, "1.0"));
+    assert_non_null(strstr(outbuf, "demo plugin"));
+    assert_non_null(strstr(outbuf, "1 plugin(s) failed to load"));
+}
+
+static void test_plugins_with_shadowed(void **state)
+{
+    (void)state;
+    /* Seed overridden entries to exercise the shadowed listing and its
+     * alphabetical sort (a.name < b.name). */
+    assert_int_equal(luaL_dostring(L,
+                       "local plugs = require 'luna.plugins'\n"
+                       "plugs.overridden = { zulu = '/tmp/z', alpha = '/tmp/a' }\n"
+                       "return true") , LUA_OK);
+    assert_string_equal(feed("%plugins"), "ok");
+    assert_non_null(strstr(outbuf, "overridden by an earlier same-name plugin:"));
+    /* alpha should appear before zulu due to sort */
+    const char *local_a = strstr(outbuf, "alpha");
+    const char *local_z = strstr(outbuf, "zulu");
+    assert_true(local_a < local_z);
+}
+
 /* -- runner --------------------------------------------------------------- */
 
 int main(void)
@@ -279,6 +401,16 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_register_extends_and_dispatch, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_register_validates_arguments, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_bare_percent_still_evaluates, setup_magic, teardown_magic),
+        /* coverage gap tests */
+        cmocka_unit_test_setup_teardown(test_echo_result_early_return_when_no_values, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_timeit_usage_error, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_time_execution_error, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_timeit_execution_error, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_clear_on_tty, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_plugins_loader_unavailable, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_plugins_with_loaded_and_failed, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_plugins_with_shadowed, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_exit_magic_calls_os_exit, setup_magic, teardown_magic),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

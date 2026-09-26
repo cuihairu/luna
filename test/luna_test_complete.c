@@ -396,6 +396,81 @@ static void test_line_returns_the_span_next_to_the_candidates(void **state)
                         "0:0");
 }
 
+/* -- coverage gap group ------------------------------------------------- */
+
+static void test_add_source_rejects_non_function(void **state)
+{
+    (void)state;
+    /* add_source validates its argument and errors on non-function */
+    assert_int_equal(luaL_dostring(L,
+                       "local ok, err = pcall(C.add_source, 'not a function')\n"
+                       "return ok == false and err:find('completion source must be a function', 1, true) ~= nil"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_resolve_errors_on_non_container(void **state)
+{
+    (void)state;
+    /* complete.resolve returns (nil, err) when an intermediate base in
+     * the chain is not a table/userdata; the error message contains
+     * "not a container" */
+    assert_int_equal(luaL_dostring(L,
+                       "_G.test_num = 123\n"
+                       "local v, err = C.resolve('test_num.foo')\n"
+                       "_G.test_num = nil\n"
+                       "return v == nil and err:find('not a container', 1, true) ~= nil"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_resolve_errors_on_missing_field(void **state)
+{
+    (void)state;
+    /* complete.resolve returns (nil, err) when a field in the chain
+     * is missing; the error message contains "no such field" */
+    assert_int_equal(luaL_dostring(L,
+                       "local v, err = C.resolve('no_such_table.field')\n"
+                       "return v == nil and err:find('no such field', 1, true) ~= nil"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_require_completion_with_lfs_unavailable(void **state)
+{
+    (void)state;
+    /* When lfs is unavailable, require completion should not crash and
+     * should return only the loaded/preload candidates (no disk scan) */
+    assert_int_equal(luaL_dostring(L,
+                       "package.loaded['lfs'] = nil\n"
+                       "package.preload['lfs'] = nil\n"
+                       "local cands = C.line('require \"dep')\n"
+                       "return type(cands) == 'table'"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
+static void test_require_completion_with_lfs_dir_failure(void **state)
+{
+    (void)state;
+    /* When lfs.dir fails (permission denied), scan_dir returns nil and
+     * require completion should not crash */
+    assert_int_equal(luaL_dostring(L,
+                       "local lfs = require('lfs')\n"
+                       "local orig_dir = lfs.dir\n"
+                       "lfs.dir = function() return nil, 'permission denied' end\n"
+                       "local cands = C.line('require \"dep')\n"
+                       "lfs.dir = orig_dir\n"
+                       "return type(cands) == 'table'"),
+                     LUA_OK);
+    assert_true(lua_toboolean(L, -1));
+    lua_pop(L, 1);
+}
+
 /* -- runner ------------------------------------------------------------- */
 
 int main(void)
@@ -426,6 +501,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_span_of_a_require_target_is_the_module_prefix, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_span_of_a_line_with_nothing_word_like, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_line_returns_the_span_next_to_the_candidates, setup_complete, teardown_complete),
+        /* coverage gap tests */
+        cmocka_unit_test_setup_teardown(test_add_source_rejects_non_function, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_resolve_errors_on_non_container, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_resolve_errors_on_missing_field, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_require_completion_with_lfs_unavailable, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_require_completion_with_lfs_dir_failure, setup_complete, teardown_complete),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -39,18 +39,21 @@ local function readfile(path)
 end
 
 -- Directory of the Lua chunk that (transitively) called require.
--- Walks up the stack past require itself (a C function) to the first
--- chunk whose source is a real file ("@path"); REPL/eval chunks have
--- synthetic sources, so file-less callers resolve from the process
+-- Walks up the stack past require itself (a C function) — and past this
+-- module's own frames, whose source may be a real file path (coverage
+-- builds load '=(luna/modules)' under its '@'-name) — to the first
+-- chunk whose source is another real file ("@path"); REPL/eval chunks
+-- have synthetic sources, so file-less callers resolve from the process
 -- working directory. Relative sources (scripts launched as
 -- `luna app/main.lua`) are made absolute before returning, so the
 -- upward walk always has a root.
 local function caller_dir()
+    local self_src = debug.getinfo(caller_dir, "S").source
     local depth = 3 -- modules.searcher <- require(C) <- caller
     local info = debug.getinfo(depth, "S")
     while info and depth < 16 do
         local src = info.source or ""
-        if src:sub(1, 1) == "@" then
+        if src ~= self_src and src:sub(1, 1) == "@" then
             local dir = src:sub(2):match("^(.*)/[^/]+") or "."
             if dir:sub(1, 1) ~= "/" then
                 local okl, lfs = pcall(require, "lfs")

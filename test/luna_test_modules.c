@@ -246,8 +246,7 @@ static void test_fs_write_read_roundtrip(void **state)
         "return true"));
 }
 
-static void test_zlib_one_shot_roundtrip(void **state)
-{
+static void test_zlib_one_shot_roundtrip(void **state){
     (void)state;
     assert_true(eval_bool(
         "local zlib = require('zlib')\n"

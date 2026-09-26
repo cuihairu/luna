@@ -42,4 +42,57 @@ function fs.writeFileSync(path, data)
     return true
 end
 
+-- fs.appendFileSync(path, data) — create-or-append; true on success
+function fs.appendFileSync(path, data)
+    local fh, err = io.open(path, "a")
+    if not fh then
+        error("fs.appendFileSync: cannot open " .. path .. ": " .. tostring(err), 2)
+    end
+    fh:write(data)
+    fh:close()
+    return true
+end
+
+-- fs.readdirSync(dir) -> sorted array of entry names ("."/".."
+-- excluded, like Node)
+function fs.readdirSync(dir)
+    local iter, dirobj = lfs.dir(dir)
+    if not iter then
+        error("fs.readdirSync: cannot read " .. dir, 2)
+    end
+    local out = {}
+    for entry in iter, dirobj do
+        if entry ~= "." and entry ~= ".." then
+            out[#out + 1] = entry
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- fs.mkdirSync(path, [recursive]) — create a directory; with recursive,
+-- missing parents are created too and an existing directory is fine
+-- (Node's mkdir -p semantics). Returns true.
+function fs.mkdirSync(path, recursive)
+    if lfs.mkdir(path) then
+        return true
+    end
+    if lfs.attributes(path, "mode") == "directory" then
+        if recursive then
+            return true -- already there: recursive mkdir is idempotent
+        end
+        error("fs.mkdirSync: already exists: " .. path, 2)
+    end
+    if recursive then
+        local parent_dir = path:match("^(.*)/[^/]+")
+        if parent_dir and parent_dir ~= path then
+            fs.mkdirSync(parent_dir, true)
+            if lfs.mkdir(path) or lfs.attributes(path, "mode") == "directory" then
+                return true
+            end
+        end
+    end
+    error("fs.mkdirSync: cannot create " .. path, 2)
+end
+
 return fs

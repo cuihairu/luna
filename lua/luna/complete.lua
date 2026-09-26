@@ -2,7 +2,11 @@
 --
 -- complete.line(line) returns the insert-strings that can follow the
 -- last partial identifier on the line (readline convention: candidates
--- are the text to insert at the cursor, not full rewritten words).
+-- are the text to insert at the cursor, not full rewritten words), plus
+-- the number of trailing characters those candidates replace — the
+-- editor erases that span and inserts in its place, which is what keeps
+-- a dotted or quoted target intact ("string.su" -> "sub(" rewrites
+-- "su", never "string.su").
 --
 -- Builtin candidates come from three places: global names, Lua
 -- keywords, and — for dotted chains like "io.w" — the fields of the
@@ -28,6 +32,30 @@ local KEYWORDS = {
 -- means there is nothing word-like to complete.
 local function last_chain(line)
     return line:match("([%w_%.:]*)$")
+end
+
+-- The module prefix inside require's quotes when the line ends inside
+-- them, or nil when this is not a require target.
+local function require_prefix(line)
+    return line:match('require%s*%(%s*["\']([%w_.%-]*)$')
+        or line:match('require%s*["\']([%w_.%-]*)$')
+end
+
+-- How many trailing characters the candidates for `line` replace: the
+-- module prefix inside require's quotes when there is one, else the
+-- trailing segment of the identifier chain. 0 means "insert at the
+-- cursor, erase nothing" (e.g. right after `obj:`).
+local function replace_span(line)
+    local prefix = require_prefix(line)
+    if prefix then
+        return #prefix
+    end
+    local chain = last_chain(line)
+    if not chain or chain == "" then
+        return 0
+    end
+    local _, field = complete.split_chain(chain)
+    return #field
 end
 
 -- "io.w" -> "io", "w"   "a.b.c" -> "a.b", "c"   "obj:" -> "obj", ""
@@ -132,9 +160,10 @@ end
 
 -- The engine entry point: builtin candidates merged with every
 -- registered source (the built-in require-target source below, plus
--- plugin additions). Sources see the whole line (they may implement
--- e.g. path completion after "dofile('") and a raising source is
--- skipped, not fatal. Later candidates never duplicate earlier ones.
+-- plugin additions), plus the span those candidates replace. Sources
+-- see the whole line (they may implement e.g. path completion after
+-- "dofile('") and a raising source is skipped, not fatal. Later
+-- candidates never duplicate earlier ones.
 function complete.line(line)
     local cands = builtin(line)
     local seen = {}
@@ -152,7 +181,13 @@ function complete.line(line)
             end
         end
     end
-    return cands
+    return cands, replace_span(line)
+end
+
+-- The span `line` would replace, exposed on its own for callers that
+-- want it without the candidate list.
+function complete.replace_span(line)
+    return replace_span(line)
 end
 
 function complete.add_source(source)
@@ -218,8 +253,7 @@ local function add_matches(names, seen, entries, prefix, base)
 end
 
 local function require_source(line)
-    local prefix = line:match('require%s*%(%s*["\']([%w_.%-]*)$')
-        or line:match('require%s*["\']([%w_.%-]*)$')
+    local prefix = require_prefix(line)
     if not prefix then
         return {}
     end

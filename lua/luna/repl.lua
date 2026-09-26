@@ -206,11 +206,11 @@ function Session:completions(line)
     return complete.line(line)
 end
 
--- Interactive driver. Editing and history come with the line-editor
--- integration; for now the terminal's canonical mode reads lines.
--- argt.color turns on ANSI chrome and value highlighting; it comes from
--- kernel.colors() && --no-color in the entry, so it is false without a
--- TTY unless LUNA_COLOR forces it.
+-- Interactive driver. Editing, history recall and the line-editor
+-- completions come from the linedit bridge; piped stdin keeps the plain
+-- io.read loop. argt.color turns on ANSI chrome and value highlighting;
+-- it comes from kernel.colors() && --no-color in the entry, so it is
+-- false without a TTY unless LUNA_COLOR forces it.
 function repl.run(argt)
     argt = argt or {}
     local session = repl.new({ color = argt.color })
@@ -224,6 +224,10 @@ function repl.run(argt)
     local home = os.getenv("HOME")
     local hist_path = home and (home .. "/.luna_history") or nil
     if editor then
+        -- one color decision for the whole console: the editor must not
+        -- paint the input line when --no-color / NO_COLOR took the
+        -- session chrome down
+        linedit.set_no_color(not session.color)
         linedit.set_completion(function(line)
             return session:completions(line)
         end)
@@ -257,13 +261,19 @@ function repl.run(argt)
 
     while true do
         kernel.clear_interrupt()
-        local line
+        local line, aborted
         if editor then
-            line = linedit.read(session:prompt())
+            line, aborted = linedit.read(session:prompt())
         else
             io.write(paint(session:prompt(), COLOR_IN, session.color))
             io.stdout:flush()
             line = io.read("l")
+        end
+        if aborted then
+            -- ^C: replxx dropped the line (and echoed "^C" itself). A
+            -- pending multi-line block goes with it, so the next
+            -- complete line starts a fresh chunk.
+            session.pending = nil
         end
         if editor and line == "" then
             serve.step()

@@ -5,6 +5,7 @@
  * never take the interpreter down). The editor itself is only used on
  * a TTY — repl.run keeps its plain io.read loop for piped stdin.
  */
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -94,33 +95,49 @@ static Replxx *ensure_rx(lua_State *L)
     return g_rx;
 }
 
-/* completion callback: fn(input) -> {insert-string, ...} */
+/* completion callback: fn(input) -> {insert-string, ...} [, span]
+ *
+ * The optional second result is how many trailing characters of the
+ * input the candidates stand for (see luna.complete): candidates are
+ * insert-text, so "string.su" -> "sub(" must rewrite "su" and
+ * `require "jso` -> "json` must rewrite `jso`. replxx would otherwise
+ * erase the whole run its own word-break characters find — swallowing
+ * the `string.` and the `require "` with it — so the reported span wins
+ * whenever it is a plausible length. A callback that returns only a
+ * candidate list keeps replxx's derived context. */
 static void luna_completion_cb(const char *input, replxx_completions *cp,
                                int *context_len, void *userdata)
 {
-    (void)context_len; /* keep replxx's word-break-derived context */
     (void)userdata;
     if (!g_L || g_completion_ref < 0)
         return;
+    int base = lua_gettop(g_L);
     lua_rawgeti(g_L, LUA_REGISTRYINDEX, g_completion_ref);
     lua_pushstring(g_L, input);
-    if (lua_pcall(g_L, 1, 1, 0) != LUA_OK) {
-        lua_pop(g_L, 1); /* error message; stay quiet */
+    if (lua_pcall(g_L, 1, 2, 0) != LUA_OK) {
+        lua_settop(g_L, base); /* error message; stay quiet */
         return;
     }
-    if (!lua_istable(g_L, -1)) {
-        lua_pop(g_L, 1);
+    /* two results: the candidate table, then the span it stands for
+     * (nil when the hook only returns candidates) */
+    if (!lua_istable(g_L, base + 1)) {
+        lua_settop(g_L, base);
         return;
     }
-    size_t n = lua_rawlen(g_L, -1);
+    if (lua_isinteger(g_L, base + 2)) {
+        lua_Integer span = lua_tointeger(g_L, base + 2);
+        if (span >= 0 && span <= (lua_Integer)strlen(input))
+            *context_len = (int)span;
+    }
+    size_t n = lua_rawlen(g_L, base + 1);
     for (size_t i = 1; i <= n && i <= 1000; i++) {
-        lua_rawgeti(g_L, -1, (int)i);
+        lua_rawgeti(g_L, base + 1, (int)i);
         const char *cand = lua_tostring(g_L, -1);
         if (cand)
             replxx_add_completion(cp, cand);
         lua_pop(g_L, 1);
     }
-    lua_pop(g_L, 1);
+    lua_settop(g_L, base);
 }
 
 /* highlighter callback: fn(input) -> { [bytepos+1] = replxx color int }
@@ -172,8 +189,11 @@ static int lline_set_completion(lua_State *L)
     lua_pushvalue(L, 1);
     g_completion_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     replxx_set_completion_callback(g_rx, luna_completion_cb, NULL);
-    /* '.'/':' break chains so dotted completions replace only the
-     * trailing segment (string.fo -> <string.>|format) */
+    /* Where a candidate may not cross: whitespace, the brackets and
+     * quotes around a call or an index. Dotted chains are NOT breaks
+     * here — '.'/':' stay inside the word so replxx keeps the context
+     * whole, and the Lua side's reported span picks the segment to
+     * rewrite (string.fo -> <string.fo>|format). */
     replxx_set_word_break_characters(g_rx, " \t\r\n,:()[]{}");
     return 0;
 }
@@ -182,6 +202,7 @@ static int lline_set_completion(lua_State *L)
 static int lline_set_highlighter(lua_State *L)
 {
     if (lua_isnoneornil(L, 1)) {
+        ensure_rx(L); /* clearing before any read still needs the instance */
         g_highlight_ref = -1;
         replxx_set_highlighter_callback(g_rx, NULL, NULL);
         return 0;
@@ -194,15 +215,42 @@ static int lline_set_highlighter(lua_State *L)
     return 0;
 }
 
-/* linedit.read(prompt) -> line | nil, err */
+/* linedit.set_no_color(on) -- the editor's own SGR output follows the
+ * same decision the session makes for its chrome (--no-color /
+ * NO_COLOR), so `--no-color luna` really does leave the input line
+ * uncolored instead of only the echoed results. */
+static int lline_set_no_color(lua_State *L)
+{
+    ensure_rx(L);
+    replxx_set_no_color(g_rx, lua_toboolean(L, 1) ? 1 : 0);
+    return 0;
+}
+
+/* linedit.read(prompt) -> line | nil, err [, aborted]
+ *
+ * replxx reports a cancelled line and a real end of input the same
+ * way: input() returns NULL for both ^C (abort_line, which drops the
+ * buffer and prints "^C") and ^D on an empty line (send_eof). Only
+ * errno separates them -- abort_line() sets EAGAIN immediately before
+ * it bails and nothing else on that path touches errno -- so clear it
+ * before the call and read it straight after, letting a stale EAGAIN
+ * from an unrelated syscall not masquerade as a cancel. A cancel is
+ * NOT an end of session: the second return value tells the REPL to
+ * drop the line (and any pending block) and prompt again. */
 static int lline_read(lua_State *L)
 {
     size_t plen;
     const char *prompt = luaL_optlstring(L, 1, "", &plen);
     Replxx *rx = ensure_rx(L);
-    replxx_set_no_color(g_rx, 0);
+    errno = 0;
     const char *line = replxx_input(rx, prompt);
+    int why = errno;
     if (!line) {
+        if (why == EAGAIN) {
+            lua_pushstring(L, ""); /* discarded by replxx already */
+            lua_pushboolean(L, 1);
+            return 2;
+        }
         lua_pushnil(L);
         lua_pushstring(L, "eof");
         return 2;
@@ -249,6 +297,7 @@ static const luaL_Reg lline_funcs[] = {
     { "read", lline_read },
     { "set_completion", lline_set_completion },
     { "set_highlighter", lline_set_highlighter },
+    { "set_no_color", lline_set_no_color },
     { "history_add", lline_history_add },
     { "history_load", lline_history_load },
     { "history_save", lline_history_save },

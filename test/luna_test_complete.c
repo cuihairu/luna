@@ -315,6 +315,84 @@ static void test_complete_later_source_duplicates_dropped(void **state)
     assert_null(strstr(buf, "dup_once|dup_once")); /* deduped on merge */
 }
 
+/* -- the span the candidates replace ----------------------------------- */
+
+/* run `code` and return its single string result */
+static const char *eval_string(const char *code)
+{
+    static char buf[1024];
+    if (luaL_dostring(L, code) != LUA_OK) {
+        fail_msg("lua error: %s", lua_tostring(L, -1));
+    }
+    const char *s = lua_tostring(L, -1);
+    snprintf(buf, sizeof(buf), "%s", s ? s : "(nil)");
+    lua_pop(L, 1);
+    return buf;
+}
+
+/* How many trailing characters of `line` the candidates stand for. The
+ * line editor erases exactly that many and inserts in their place,
+ * which is what keeps "string.su" from losing its "string." and
+ * `require "jso` from losing its quote. */
+static int span_of(const char *line)
+{
+    lua_getglobal(L, "C");
+    lua_getfield(L, -1, "replace_span");
+    lua_remove(L, -2); /* plain call, not a method */
+    lua_pushstring(L, line);
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        fail_msg("replace_span failed: %s", lua_tostring(L, -1));
+    }
+    int n = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    return n;
+}
+
+static void test_span_of_a_bare_word_is_the_word(void **state)
+{
+    (void)state;
+    assert_int_equal(span_of("stri"), 4);
+    assert_int_equal(span_of("string.su"), 2);   /* only the last segment */
+    assert_int_equal(span_of("obj:"), 0);        /* insert after the colon */
+    assert_int_equal(span_of("a.b.c"), 1);       /* only "c" */
+}
+
+static void test_span_of_a_require_target_is_the_module_prefix(void **state)
+{
+    (void)state;
+    assert_int_equal(span_of("require \"jso"), 3);
+    assert_int_equal(span_of("require('sock"), 4);
+    assert_int_equal(span_of("require \"socket."), 7);
+    assert_int_equal(span_of("require \"socket.ht"), 9);
+    /* a require-looking line that is finished is not a target at all */
+    assert_int_equal(span_of("require \"json\""), 0);
+}
+
+static void test_span_of_a_line_with_nothing_word_like(void **state)
+{
+    (void)state;
+    assert_int_equal(span_of(""), 0);
+    assert_int_equal(span_of("1 + "), 0);   /* ends in an operator */
+    assert_int_equal(span_of("f("), 0);     /* ends in an open paren */
+    assert_int_equal(span_of("x = 'a b' "), 0);
+}
+
+static void test_line_returns_the_span_next_to_the_candidates(void **state)
+{
+    (void)state;
+    /* the editor reads both off one call: candidates, then the span */
+    assert_string_equal(eval_string("local c, n = C.line('string.su')"
+                                    "  return type(c) .. ':' .. n"),
+                        "table:2");
+    assert_string_equal(eval_string("local c, n = C.line('require \"dep')"
+                                    "  return #c > 0 and 'cands:' .. n"),
+                        "cands:3");
+    /* and a line with nothing word-like completes nothing, span 0 */
+    assert_string_equal(eval_string("local c, n = C.line('x = 1 + ')"
+                                    "  return #c .. ':' .. n"),
+                        "0:0");
+}
+
 /* -- runner ------------------------------------------------------------- */
 
 int main(void)
@@ -341,6 +419,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_complete_require_dotted_loaded_field, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_complete_require_no_match_is_empty, setup_complete, teardown_complete),
         cmocka_unit_test_setup_teardown(test_complete_later_source_duplicates_dropped, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_span_of_a_bare_word_is_the_word, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_span_of_a_require_target_is_the_module_prefix, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_span_of_a_line_with_nothing_word_like, setup_complete, teardown_complete),
+        cmocka_unit_test_setup_teardown(test_line_returns_the_span_next_to_the_candidates, setup_complete, teardown_complete),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

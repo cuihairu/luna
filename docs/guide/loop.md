@@ -298,6 +298,7 @@ loop.run()
 - **EOF 是 `(nil, nil)`**:对端关闭让下一次 `read` 回调拿到 `err=nil, chunk=nil`——用 `chunk == nil` 判结束,语义对齐 Node 流的 end;
 - **半关闭**:`shutdown()` 只关写侧,读侧继续——请求-应答协议用它说"我发完了";
 - **连接回调常驻**:`onConn(err, sock)` 对每个连接交付一次,引用由实现持有;accept 出错(如 fd 耗尽)也从它的 `err` 出来,不掀翻循环;
+- **回调抛错不掀翻循环,但连接归回调所有**:回调里 `error()` 只打到 stderr,时间照走(定时器继续);已经交到回调手里的 `sock` 仍由回调负责——抛错而不 `close()` 会让 `run()` 一直等下去(和 Node 未捕获异常下 socket 的归属一致);
 - **错误是字符串**:与 `loop.fs` 相同,`uv_strerror` 直出(`connection refused`、`address already in use` 等);
 - **地址面是同步取值**:`peer()`/`sockname()`/`address()` 直读内核,不在回调里;TCP 的 `family` 是 `inet`/`inet6`,pipe 是 `unix` 且无 `port`;pipe 的对端若未显式 bind 自己的路径,`peer().address` 是空串(OS 的匿名语义);已关闭的 sock 调它们会抛错;
 - **Lua 作用域提醒**:`local srv = net.listen(..., function() ... srv ... end)` 里回调摸到的 `srv` 是**全局** nil——局部变量要等声明语句结束才进入作用域,而回调写在此语句内部;回调用到的句柄请拆成 `local srv` + `srv = net.listen(...)` 两行。

@@ -414,6 +414,214 @@ static void test_attach_reaches_a_busy_script(void **state)
  * a wake at a pid that cannot exist, a mode string strtol cannot read,
  * and a chmod at a path that is not there all come back as errors that
  * name the failing call and the syscall's own reason. */
+/* start() on a live listener is idempotent, and the disabled flag
+ * short-circuits before any socket work */
+static void test_start_idempotent_and_disabled(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string("return tostring(S.start())"), "true");
+    assert_string_equal(eval_string(
+                            "S.stop()\n"
+                            "S.enabled = false\n"
+                            "local ok, err = S.start()\n"
+                            "S.enabled = true\n"
+                            "assert(S.start(), 'listener back for later tests')\n"
+                            "C = require('socket.unix')()\n"
+                            "assert(C:connect(S.path_for(kernel.pid())))\n"
+                            "C:settimeout(2)\n"
+                            "return tostring(ok) .. '|' .. tostring(err)"),
+                        "nil|serve disabled");
+}
+
+/* a regular file squatting on the socket path makes bind fail; the
+ * error comes back and the listener stays unset */
+static void test_bind_failure_reports_error(void **state)
+{
+    (void)state;
+    /* start() clears a stale socket file first, so the squat must be
+     * something os.remove cannot take: a non-empty directory */
+    const char *r = eval_string(
+        "S.stop()\n"
+        "local path = S.path_for(kernel.pid())\n"
+        "os.execute('mkdir -p \"' .. path .. '\"/jail')\n"
+        "local ok, err = S.start()\n"
+        "os.execute('rm -rf \"' .. path .. '\"')\n"
+        "assert(S.start(), 'bind works again once the squat is gone')\n"
+        "C = require('socket.unix')()\n"
+        "assert(C:connect(S.path_for(kernel.pid())))\n"
+        "C:settimeout(2)\n"
+        "return tostring(ok) .. '|' .. tostring(err)");
+    assert_memory_equal(r, "nil|", 4);
+    assert_non_null(strstr(r, "use")); /* "address already in use" */
+}
+
+/* a fresh module copy loaded while socket.unix is unresolvable must
+ * report the missing transport instead of raising */
+static void test_start_without_socket_unix(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+                            "local sun = package.loaded['socket.unix']\n"
+                            "local sup = package.preload['socket.unix']\n"
+                            "package.loaded['socket.unix'] = nil\n"
+                            "package.preload['socket.unix'] = nil\n"
+                            "package.loaded['luna.serve'] = nil\n"
+                            "local S2 = require('luna.serve')\n"
+                            "local ok, err = S2.start()\n"
+                            "package.loaded['socket.unix'] = sun\n"
+                            "package.preload['socket.unix'] = sup\n"
+                            "package.loaded['luna.serve'] = nil\n"
+                            "S = require('luna.serve')\n"
+                            "assert(S.start(), 'listener restored')\n"
+                            "C = require('socket.unix')()\n"
+                            "assert(C:connect(S.path_for(kernel.pid())))\n"
+                            "C:settimeout(2)\n"
+                            "return tostring(ok) .. '|' .. tostring(err)"),
+                        "nil|socket.unix unavailable");
+}
+
+/* completion with zero candidates frames a bare status: no body, no
+ * blank line before the terminator. (An unparseable prefix falls back
+ * to listing globals; a well-formed prefix that matches nothing is
+ * what comes back empty.) */
+static void test_frame_with_empty_body(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("return exchange('\1complete zzqqxx_nomatch')"), "OK");
+}
+
+static void test_empty_magic_is_an_error(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string("return exchange('%')"),
+                        "ERR|empty magic");
+}
+
+/* dispatch() never raises for a failed magic -- it returns (nil,
+ * message) -- so the attach client must still see the usage/unknown
+ * text as an ERR frame, not a silent bare OK */
+static void test_magic_failures_reach_the_client(void **state)
+{
+    (void)state;
+    const char *reply = eval_string("return exchange('%time')");
+    assert_memory_equal(reply, "ERR|", 4);
+    assert_non_null(strstr(reply, "usage: %time"));
+    reply = eval_string("return exchange('%nosuchmagic_xyz')");
+    assert_memory_equal(reply, "ERR|", 4);
+    assert_non_null(strstr(reply, "unknown magic: %nosuchmagic_xyz"));
+}
+
+/* with the completion engine unresolvable, the meta line degrades to
+ * a framed error; the engine comes back for later tests */
+static void test_completion_engine_unavailable(void **state)
+{
+    (void)state;
+    assert_non_null(strstr(eval_string(
+                               "local cl = package.loaded['luna.complete']\n"
+                               "local cp = package.preload['luna.complete']\n"
+                               "package.loaded['luna.complete'] = nil\n"
+                               "package.preload['luna.complete'] = nil\n"
+                               "local r = exchange('\1complete x')\n"
+                               "package.loaded['luna.complete'] = cl\n"
+                               "package.preload['luna.complete'] = cp\n"
+                               "return r"),
+                           "completion engine unavailable"));
+}
+
+static void test_magics_engine_unavailable(void **state)
+{
+    (void)state;
+    assert_non_null(strstr(eval_string(
+                               "local ml = package.loaded['luna.magic']\n"
+                               "local mp = package.preload['luna.magic']\n"
+                               "package.loaded['luna.magic'] = nil\n"
+                               "package.preload['luna.magic'] = nil\n"
+                               "local r = exchange('%whos')\n"
+                               "package.loaded['luna.magic'] = ml\n"
+                               "package.preload['luna.magic'] = mp\n"
+                               "return r"),
+                           "magics unavailable"));
+}
+
+/* "?expr" and "expr?" both describe a value; a syntax error in the
+ * sugar is framed and leaves the state untouched */
+static void test_help_sugar_paths(void **state)
+{
+    (void)state;
+    const char *reply = eval_string("return exchange('?2 + 3')");
+    assert_memory_equal(reply, "OK|", 3);
+    assert_non_null(strstr(reply, "5"));
+    reply = eval_string("return exchange('6 * 7?')");
+    assert_memory_equal(reply, "OK|", 3);
+    assert_non_null(strstr(reply, "42"));
+    reply = eval_string("return exchange('?1 +=')");
+    assert_memory_equal(reply, "ERR|", 4);
+    assert_string_equal(eval_string("return exchange('return 2 + 2')"),
+                        "OK|4");
+}
+
+/* a receive() that raises (here: a poisoned client seam) must drop the
+ * client without taking the poll — or the server — down */
+static void test_receive_raise_drops_client(void **state)
+{
+    (void)state;
+    run(L,
+        "S.client = setmetatable({}, {__index = function()\n"
+        "  error('fake receive boom')\n"
+        "end})\n"
+        "S.step()\n" /* must not raise */
+        "assert(S.client == nil, 'poisoned client dropped')\n");
+    /* a fresh client connects and gets served again */
+    run(L,
+        "C = require('socket.unix')()\n"
+        "assert(C:connect(S.path_for(kernel.pid())))\n"
+        "C:settimeout(2)\n");
+    assert_string_equal(eval_string("return exchange('return 99')"), "OK|99");
+}
+
+/* both flavors of a vanished client end in drop_client: a clean EOF
+ * before any line, and a line that dispatches into a send that can no
+ * longer land */
+static void test_closed_clients_are_dropped(void **state)
+{
+    (void)state;
+    run(L,
+        "C:close()\n" /* EOF before any line */
+        "S.step()\n"
+        "assert(S.client == nil, 'EOF client dropped')\n");
+    run(L,
+        "C = require('socket.unix')()\n"
+        "assert(C:connect(S.path_for(kernel.pid())))\n"
+        "C:send('return 1\\n')\n"
+        "C:close()\n" /* reply has nowhere to go */
+        "S.step()\n"
+        "assert(S.client == nil, 'send-failed client dropped')\n");
+    run(L,
+        "C = require('socket.unix')()\n"
+        "assert(C:connect(S.path_for(kernel.pid())))\n"
+        "C:settimeout(2)\n");
+    assert_string_equal(eval_string("return exchange('return 1 + 1')"),
+                        "OK|2");
+}
+
+/* an error object whose __tostring always raises escapes the ERR
+ * framing inside dispatch (frame() never runs); the raised string
+ * lands in the outer pcall and step()'s manual ERR build ships it */
+static void test_exotic_error_object_still_frames(void **state)
+{
+    (void)state;
+    const char *reply = eval_string(
+        "return exchange(\n"
+        "  'error(setmetatable({}, '\n"
+        "  .. '{__tostring = function() error(\"meta boom\") end}))')");
+    assert_memory_equal(reply, "ERR|", 4);
+    assert_non_null(strstr(reply, "meta boom"));
+    /* the state, the client and the server all survived */
+    assert_string_equal(eval_string("return exchange('return 40 + 2')"),
+                        "OK|42");
+}
+
 static void test_wake_and_chmod_report_errors(void **state)
 {
     (void)state;
@@ -526,6 +734,18 @@ int main(void)
         cmocka_unit_test(test_magic_runs_against_live_state),
         cmocka_unit_test(test_exit_magic_detaches_and_target_survives),
         cmocka_unit_test(test_completion_meta_line),
+        cmocka_unit_test(test_start_idempotent_and_disabled),
+        cmocka_unit_test(test_bind_failure_reports_error),
+        cmocka_unit_test(test_start_without_socket_unix),
+        cmocka_unit_test(test_frame_with_empty_body),
+        cmocka_unit_test(test_empty_magic_is_an_error),
+        cmocka_unit_test(test_magic_failures_reach_the_client),
+        cmocka_unit_test(test_completion_engine_unavailable),
+        cmocka_unit_test(test_magics_engine_unavailable),
+        cmocka_unit_test(test_help_sugar_paths),
+        cmocka_unit_test(test_receive_raise_drops_client),
+        cmocka_unit_test(test_closed_clients_are_dropped),
+        cmocka_unit_test(test_exotic_error_object_still_frames),
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),

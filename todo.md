@@ -197,10 +197,44 @@
 - 环境记录:机器负载 80+ 时(多会话并行编译),rocks 组的真实网络安装会撞测试内
   150s 超时(0x7c=124,`timeout` 杀安装子进程),与代码改动无关;负载回落后同树全绿。
 
+## serve.lua attach 捕获路径(2026-09-26 第六轮)
+
+- [x] **根因是一个真 bug,不是测试缺口**:serve.step 在嵌套 dispatch 前调
+      `debug.sethook()` 清钩子,搁浅调用方装的任何包装器——覆盖率构建的
+      luacov 行追踪器首当其冲,这正是 serve.lua 长期 39.84% 暗掉的原因(^C
+      计数钩子同样被搁浅)。kernel.exec 早已自管钩子槽(save/restore 包住
+      自己的计数钩子),该行陈旧,删除。
+- [x] **第二个同路径真 bug**:`magic.dispatch` 对失败的 magic 从不 raise——
+      以 `(nil, message)` 返回(未知 magic、`%time` 用法错等),而 serve 的
+      `pcall` 只收首参,错误文本被丢在地上,远端只见裸 `OK`。改为接收
+      `(okd, okm, merr)` 并在 `not okm` 时构 ERR 帧——typo 的 magic 现在
+      真正可见。
+- [x] **12 个新测试**(serve 组 14 → 26,全部单步确定、对调度顺序不敏感):
+      start 幂等与 disabled;bind 失败(坑:常规文件会被 start 的陈旧清理
+      `os.remove` 掉,得用非空目录占位);socket.unix 不可解析时新模块副本
+      报 "socket.unix unavailable"(同一 Lua 态内清 `package.loaded`+`preload`
+      再 require,靠 luna_chunkname 合并进同一覆盖块,无需新开 state);
+      零候选补全的空体帧(坑:unparseable 前缀回退列出全部 globals,匹配
+      不到的合法前缀才返回空);`%` 空魔法的 ERR;`%time` 用法错与未知
+      magic 的 ERR(修 #2 后可钉);补全/魔法引擎不可达(清 loaded+preload
+      注入 require 失败再还原);`?expr`/`expr?` 双糖与糖内语法错误;
+      receive 抛毒即弃客户端(可注入的 client seam);EOF 弃客户端;发完行
+      再关闭 → send 失败弃客户端;`__tostring` 恒抛的错误对象在 dispatch
+      内炸开、逃到 step 外层 pcall、手工 ERR 构帧仍出货(钉住兜底行)。
+- [x] **实测(2026-09-26,不虚报)**:两树 `cmake --build` + ctest **15 组全绿**
+      (普通树 82s;覆盖率树串行 289s)。Lua 侧:总 **88.48%**(1620/211,
+      上轮 84.25%),**serve.lua 100.00%**(130/130,0 未覆盖;39.84% 起步)。
+- 余量如实:serve.lua 已清零,无"不可注入"残留。Lua 侧剩余大头:rocks
+  75.58%(网络下载分支,离线不可注入)、luna.lua 入口 80.14%(交互面)、
+  magic 88.74%。
+- 环境记录(重演第五轮模式):负载 76 时覆盖率树 rocks 撞 420s 超时
+  (0x7c=124),回落到 44 后同树全绿——负载 >40 不取 rocks 终绿的纪律继续有效。
+
 ## 下轮方向
 
-- **serve.lua 的 attach 捕获路径**:39.84% 的缺口集中在 attach 数据汇,需要
-  对调度顺序不敏感的断言方式(轮询至静默而非定时快照)。
+- **magic.lua(88.74%,17 行)与 luna.lua 入口(80.14%,29 行)**:前者缺口
+  多在 magic 注册与 echo 的边角,后者是 REPL 交互面(pty 已有驱动先例)。
+  C 侧 main.c(63%)的参数解析分支可顺带。
 
 ## 明确不做(上一轮)
 

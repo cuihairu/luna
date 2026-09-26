@@ -10,6 +10,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h" /* generated: embedded repl + complete sources */
 
 int luaopen_lpeg(lua_State *L); /* no lpeg.h in deps/lpeg; repl needs highlight */
@@ -49,6 +50,7 @@ static int setup_session(void **state)
 
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
 
@@ -69,16 +71,16 @@ static int setup_session(void **state)
     lua_pushlstring(L, LUNA_LUA_MAGIC, sizeof(LUNA_LUA_MAGIC) - 1);
     lua_setglobal(L, "__LUNA_MAGIC_SRC");
     if (luaL_dostring(L,
-                      "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
-                      "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-                      "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))\n"
-                      "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))") != LUA_OK) {
+                      "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname('complete')))\n"
+                      "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname('introspect')))\n"
+                      "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, luna_chunkname('highlight')))\n"
+                      "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, luna_chunkname('magic')))") != LUA_OK) {
         fail_msg("cannot preload modules: %s", lua_tostring(L, -1));
     }
 
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
     lua_setglobal(L, "__LUNA_REPL_SRC");
-    const char *src = "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"
+    const char *src = "local repl = assert(load(__LUNA_REPL_SRC, luna_chunkname('repl')))()\n"
                       "S = repl.new()\n";
     assert_int_equal(luaL_dostring(L, src), LUA_OK);
 
@@ -97,6 +99,7 @@ static int setup_session(void **state)
 static int teardown_session(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     lua_close(L);
     L = NULL;
     return 0;

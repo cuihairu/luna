@@ -23,6 +23,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h"
 
 int luaopen_lpeg(lua_State *L);        /* introspect's pattern use */
@@ -64,6 +65,7 @@ static int setup_serve(void **state)
     luaL_openlibs(L);
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "socket.unix", luaopen_socket_unix, 0);
@@ -79,10 +81,10 @@ static int setup_serve(void **state)
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
     run(L,
-        "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-        "package.preload['luna.serve'] = assert(load(__LUNA_SERVE_SRC, '=(luna/serve)'))\n"
-        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))\n"
-        "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
+        "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname('introspect')))\n"
+        "package.preload['luna.serve'] = assert(load(__LUNA_SERVE_SRC, luna_chunkname('serve')))\n"
+        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, luna_chunkname('magic')))\n"
+        "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname('complete')))\n"
         "S = require('luna.serve')\n"
         "assert(S.start())\n"
         "C = require('socket.unix')()\n"
@@ -109,6 +111,7 @@ static int setup_serve(void **state)
 static int teardown_serve(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     run(L, "S.stop()");
     lua_close(L);
     L = NULL;

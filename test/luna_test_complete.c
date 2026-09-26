@@ -14,6 +14,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h" /* generated: embedded complete module */
 
 int luaopen_lfs(lua_State *L); /* directory scans for require completion */
@@ -29,6 +30,7 @@ static int setup_complete(void **state)
 
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
     lua_pop(L, 1);
 
@@ -42,7 +44,7 @@ static int setup_complete(void **state)
     /* preload the embedded completion module, then grab a handle */
     lua_pushlstring(L, LUNA_LUA_COMPLETE, sizeof(LUNA_LUA_COMPLETE) - 1);
     lua_setglobal(L, "__LUNA_COMPLETE_SRC");
-    if (luaL_dostring(L, "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))") != LUA_OK) {
+    if (luaL_dostring(L, "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname('complete')))") != LUA_OK) {
         fail_msg("cannot preload complete: %s", lua_tostring(L, -1));
     }
 
@@ -55,6 +57,7 @@ static int setup_complete(void **state)
 static int teardown_complete(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     lua_close(L);
     L = NULL;
     return 0;

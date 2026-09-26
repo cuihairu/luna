@@ -37,6 +37,7 @@
 #include "lualib.h"
 
 #include "luna_loop.h"
+#include "luna_cov.h"
 #include "luna_kernel.h"
 
 static lua_State *L;
@@ -63,6 +64,7 @@ static int setup_loop(void **state)
     L = luaL_newstate();
     assert_non_null(L);
     luaL_openlibs(L); /* the cases use assert/table/tostring */
+    luna_cov_setup(L);
     /* glb=1 only for the test harness: real scripts reach the module
      * through require "loop", which glb=0 already serves */
     luaL_requiref(L, "loop", luaopen_luna_loop, 1);
@@ -80,6 +82,7 @@ static int setup_loop(void **state)
 static int teardown_loop(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     /* drain pending closes (uv_close finishes only when the loop turns)
      * while THIS state is still alive: a closing callback touching a
      * freed VM from the next case's run() is heap corruption */

@@ -11,15 +11,25 @@ local argparse = require "argparse"
 local kernel = require "kernel"
 
 -- embedded policy modules (see cmake/luna_lua.h.in); preloaded so the
--- REPL and plugins can require them by name
-package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, "=(luna/introspect)"))
-package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, "=(luna/complete)"))
-package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, "=(luna/highlight)"))
-package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, "=(luna/magic)"))
-package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, "=(luna/modules)"))
-package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, "=(luna/plugins)"))
-package.preload["luna.rocks"] = assert(load(__LUNA_ROCKS_SRC, "=(luna/rocks)"))
-package.preload["luna.serve"] = assert(load(__LUNA_SERVE_SRC, "=(luna/serve)"))
+-- REPL and plugins can require them by name.
+-- Chunkname: coverage builds set __LUNA_COV_ROOT so names point at the
+-- real files (luacov only traces '@'-prefixed sources); otherwise the
+-- plain '=(luna/x)' marker, as always.
+local function luna_chunkname(name)
+  local root = __LUNA_COV_ROOT
+  if root then
+    return "@" .. root .. "/lua/luna/" .. name .. ".lua"
+  end
+  return "=(luna/" .. name .. ")"
+end
+package.preload["luna.introspect"] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname("introspect")))
+package.preload["luna.complete"] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname("complete")))
+package.preload["luna.highlight"] = assert(load(__LUNA_HIGHLIGHT_SRC, luna_chunkname("highlight")))
+package.preload["luna.magic"] = assert(load(__LUNA_MAGIC_SRC, luna_chunkname("magic")))
+package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, luna_chunkname("modules")))
+package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, luna_chunkname("plugins")))
+package.preload["luna.rocks"] = assert(load(__LUNA_ROCKS_SRC, luna_chunkname("rocks")))
+package.preload["luna.serve"] = assert(load(__LUNA_SERVE_SRC, luna_chunkname("serve")))
 
 -- Node-style resolution for project packages: relative requires and
 -- bare names walking up luna_modules/ directories, manifests honored.
@@ -29,7 +39,7 @@ require("luna.modules").install()
 -- scripts and the REPL can require installed rocks.
 require("luna.rocks").inject_paths()
 
-local repl = assert(load(__LUNA_REPL_SRC, "=(luna/repl)"))()
+local repl = assert(load(__LUNA_REPL_SRC, luna_chunkname("repl")))()
 
 local parser = argparse("luna", kernel.version() .. " — " ..
     _VERSION .. " interactive console and scripting runtime")

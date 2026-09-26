@@ -14,6 +14,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h" /* generated: embedded repl + introspect sources */
 
 int luaopen_lpeg(lua_State *L); /* repl requires luna.highlight -> lpeg */
@@ -46,9 +47,9 @@ static void preload_modules(void)
     lua_pushlstring(L, LUNA_LUA_HIGHLIGHT, sizeof(LUNA_LUA_HIGHLIGHT) - 1);
     lua_setglobal(L, "__LUNA_HIGHLIGHT_SRC");
     assert_int_equal(luaL_dostring(L,
-                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
-                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-                       "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))"),
+                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname('complete')))\n"
+                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname('introspect')))\n"
+                       "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, luna_chunkname('highlight')))"),
                      LUA_OK);
 }
 
@@ -60,6 +61,7 @@ static int setup_introspect(void **state)
     luaL_openlibs(L);
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
 
     /* capture output */
     lua_getglobal(L, "kernel");
@@ -76,6 +78,7 @@ static int setup_introspect(void **state)
 static int teardown_introspect(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     lua_close(L);
     L = NULL;
     return 0;
@@ -250,7 +253,7 @@ static int setup_session(void **state)
         return -1;
     /* load the embedded repl module and create a session */
     if (luaL_dostring(L,
-                      "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"
+                      "local repl = assert(load(__LUNA_REPL_SRC, luna_chunkname('repl')))()\n"
                       "S = repl.new()") != LUA_OK) {
         fail_msg("session setup failed: %s", lua_tostring(L, -1));
     }

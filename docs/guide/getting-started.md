@@ -15,6 +15,34 @@ ctest --test-dir build          # 全部测试组应全绿
 
 Windows 用 `cmake --build build --config Debug`,同上。
 
+## 覆盖率
+
+两棵树各自全绿是提交前置条件;覆盖率测量用独立的 Profiling 插桩树,同一套测试
+原样跑一遍:
+
+```bash
+cmake -S . -B build-cov -DCMAKE_BUILD_TYPE=Profiling \
+      -DCMAKE_C_FLAGS_PROFILING="-O0 -g --coverage" \
+      -DCMAKE_CXX_FLAGS_PROFILING="-O0 -g --coverage" \
+      -DCMAKE_EXE_LINKER_FLAGS_PROFILING="--coverage" \
+      -DCMAKE_SHARED_LINKER_FLAGS_PROFILING="--coverage"
+cmake --build build-cov -j
+ctest --test-dir build-cov           # 串行:统计文件的合并假定无并发写
+
+cmake --build build-cov --target gcovr-summary   # C 侧(src/)
+cmake --build build-cov --target lua_coverage    # Lua 侧(lua/)
+```
+
+- **C 侧**由 gcov/gcovr 计数;被 SIGTERM 杀掉的进程不写 `.gcda`,所以测试夹具
+  都以正常退出收尾。
+- **Lua 侧**由内置的 luacov 接线计数(仅 Profiling 树自动生效):测试与二进制
+  在 `LUNA_COVERAGE=1` 下把嵌入式策略模块按真实文件名加载,行级命中合并进
+  `build-cov/luacov.stats.out`,`lua_coverage` 目标渲染报告并把汇总表打到构建
+  输出。普通构建与交互行为不受影响(报错里的 `'=(luna/x)'` 块名原样保留)。
+- 合并 hook 的分工:每个 Lua 态只有一个 debug 钩子槽位,覆盖率接管该槽位后按
+  事件分发——行事件给 luacov 记数,count 事件转发 `kernel.count_hook()`,
+  `^C` 中断与 attach 轮询保持原有节奏。
+
 ## 三种启动方式
 
 ```bash

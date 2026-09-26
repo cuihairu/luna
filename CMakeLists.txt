@@ -158,6 +158,14 @@ configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/generated")
 
+# luacov wiring for coverage builds: the runner/reporter config plus the
+# absolute source root and the luacov tree get compiled into luna and the
+# test harnesses. Collection itself only activates when LUNA_COVERAGE is
+# set in the environment — test/CMakeLists exports it for Profiling
+# builds — so plain builds run exactly as before.
+configure_file("${PROJECT_SOURCE_DIR}/cmake/luacov.config.in"
+               "${PROJECT_BINARY_DIR}/luacov.config.lua" @ONLY)
+
 list(APPEND luna_sources
         src/luna.c
         src/luna.h
@@ -195,6 +203,34 @@ set_target_properties(lua_host PROPERTIES
         OUTPUT_NAME lua
         LINKER_LANGUAGE CXX)
 target_link_libraries(lua_host PRIVATE lualib)
+
+# C-side coverage report over the Profiling tree's .gcda (opt-in tool).
+add_custom_target(gcovr_summary
+        COMMAND gcovr -r ${PROJECT_SOURCE_DIR}
+                --object-directory ${PROJECT_BINARY_DIR}
+                --filter ${PROJECT_SOURCE_DIR}/src/ --print-summary
+        WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+        VERBATIM)
+
+# Lua-layer coverage report: merge + render the stats the ctest run left
+# in the shared stats file (only produced by Profiling builds with
+# LUNA_COVERAGE=1; an absent file makes the reporter fail loudly).
+add_custom_target(lua_coverage
+        COMMAND ${CMAKE_COMMAND} -E env
+                "LUA_PATH=${PROJECT_SOURCE_DIR}/deps/luacov/src/?.lua;;"
+                $<TARGET_FILE:lua_host>
+                ${PROJECT_SOURCE_DIR}/deps/luacov/src/bin/luacov
+                -c ${PROJECT_BINARY_DIR}/luacov.config.lua
+        COMMAND ${CMAKE_COMMAND} -E env
+                "LUA_PATH=${PROJECT_SOURCE_DIR}/deps/luacov/src/?.lua;;"
+                $<TARGET_FILE:lua_host>
+                ${PROJECT_SOURCE_DIR}/cmake/lua_cov_summary.lua
+                ${PROJECT_BINARY_DIR}/luacov.report.out
+        DEPENDS lua_host
+        WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+        VERBATIM
+        SOURCES ${PROJECT_SOURCE_DIR}/cmake/luacov.config.in
+                ${PROJECT_SOURCE_DIR}/cmake/lua_cov_summary.lua)
 # on the kernel target: that is the translation unit that publishes
 # both paths to Lua as kernel.vendor_dir / kernel.lua_host
 target_compile_definitions(luna_kernel PUBLIC
@@ -277,7 +313,10 @@ endif()
 target_compile_definitions(luna PRIVATE
         LUNA_MODULES_DIR="${LUNA_MODULES_DIR}"
         LUNA_LEXERS_DIR="${LUNA_MODULES_DIR}/lexers"
-        LUNA_SO_EXT="${CMAKE_SHARED_LIBRARY_SUFFIX}")
+        LUNA_SO_EXT="${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        LUNA_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
+        LUNA_COV_CONFIG="${PROJECT_BINARY_DIR}/luacov.config.lua"
+        LUNA_LUACOV_SRC="${PROJECT_SOURCE_DIR}/deps/luacov/src")
 if(LUNA_HAVE_OPENSSL)
     target_compile_definitions(luna PRIVATE LUNA_HAVE_OPENSSL=1)
 endif()

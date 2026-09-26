@@ -1,6 +1,19 @@
 project(luna_test LANGUAGES C CXX)
 include(FetchCMocka)
 
+# luacov wiring: Profiling builds compile the coverage paths into the
+# harnesses and export LUNA_COVERAGE=1 to every test (spawning children
+# inherit it, so the real binary instruments itself too). Any other
+# build type leaves both empty: harness glue is a compile-time no-op and
+# error messages keep their '=(luna/x)' chunknames.
+if(CMAKE_BUILD_TYPE STREQUAL "Profiling")
+    set(LUNA_COV_DEFS
+            LUNA_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+            LUNA_COV_CONFIG="${CMAKE_BINARY_DIR}/luacov.config.lua"
+            LUNA_LUACOV_SRC="${CMAKE_SOURCE_DIR}/deps/luacov/src")
+    set(LUNA_COV_TESTS "")
+endif()
+
 list(APPEND luna_test_sources
         test_main.c
 )
@@ -132,3 +145,19 @@ target_link_libraries(luna_test_rocks PRIVATE cmocka-static lualib luna_kernel)
 target_compile_definitions(luna_test_rocks PRIVATE LUNA_BIN="$<TARGET_FILE:luna>")
 add_test(NAME rocks COMMAND luna_test_rocks)
 set_tests_properties(rocks PROPERTIES TIMEOUT 300)
+
+# luacov collection (Profiling builds only): the harness glue targets
+# learn the coverage paths; every test exports LUNA_COVERAGE=1 so spawned
+# children (the real binary) instrument themselves as well.
+foreach(t luna_test_main luna_test_repl luna_test_complete luna_test_introspect
+        luna_test_highlight luna_test_magic luna_test_modules
+        luna_test_plugins luna_test_serve luna_test_loop)
+    if(LUNA_COV_DEFS)
+        target_compile_definitions(${t} PRIVATE ${LUNA_COV_DEFS})
+    endif()
+endforeach()
+if(CMAKE_BUILD_TYPE STREQUAL "Profiling")
+    set_tests_properties(luna_test repl cli complete introspect highlight magic
+            modules plugins serve loop line linedit rocks
+            PROPERTIES ENVIRONMENT "LUNA_COVERAGE=1")
+endif()

@@ -40,3 +40,6 @@
 [submodule "deps/luarocks"]
 	path = deps/luarocks
 	url = https://github.com/luarocks/luarocks.git
+[submodule "deps/luacov"]
+	path = deps/luacov
+	url = https://github.com/lunarmodules/luacov.git

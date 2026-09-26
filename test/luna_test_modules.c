@@ -14,6 +14,7 @@
 #include "lualib.h"
 
 #include "luna_lua.h" /* embedded luna.modules source */
+#include "luna_cov.h"
 
 int luaopen_lfs(lua_State *L);
 int luaopen_socket_core(lua_State *L);
@@ -61,6 +62,7 @@ static int setup_modules(void **state)
     L = luaL_newstate();
     assert_non_null(L);
     luaL_openlibs(L);
+    luna_cov_setup(L);
 
     /* stage the C backends the way luna_main does */
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
@@ -92,7 +94,7 @@ static int setup_modules(void **state)
     lua_pushlstring(L, LUNA_LUA_MODULES, sizeof(LUNA_LUA_MODULES) - 1);
     lua_setglobal(L, "__LUNA_MODULES_SRC");
     run(L,
-        "package.preload['luna.modules'] = assert(load(__LUNA_MODULES_SRC, '=(luna/modules)'))\n"
+        "package.preload['luna.modules'] = assert(load(__LUNA_MODULES_SRC, luna_chunkname('modules')))\n"
         "require('luna.modules').install()\n"
         "M = require('luna.modules')");
     return 0;
@@ -101,6 +103,7 @@ static int setup_modules(void **state)
 static int teardown_modules(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     lua_close(L);
     L = NULL;
     return 0;

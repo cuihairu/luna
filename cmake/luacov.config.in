@@ -1,0 +1,18 @@
+-- luacov configuration for luna's ctest-driven coverage runs. Shared by
+-- both sides: the runner gets it dofile'd from luna and the test
+-- harnesses (LUNA_COV_CONFIG compile definition), and the reporter reads
+-- it via `luacov -c`. Paths are absolute so any working directory works;
+-- the stats file is one shared file every process merges into.
+return {
+  statsfile = "@CMAKE_BINARY_DIR@/luacov.stats.out",
+  reportfile = "@CMAKE_BINARY_DIR@/luacov.report.out",
+  codefromstrings = false,
+  -- Lua patterns (no .lua suffix, / separators) matched against chunk
+  -- source paths: report the strategy layer only, not fixtures, the
+  -- staged third-party luna_modules tree or luacov itself.
+  include = {
+    "lua/luna",
+    "lua/modules/",
+    "luna_modules/loop/",
+  },
+}

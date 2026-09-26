@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lua.h"
@@ -196,12 +197,89 @@ static void register_c_modules(lua_State *L)
 
 static int run_chunk(lua_State *L, const char *src, const char *name)
 {
-    if (luaL_dostring(L, src) != LUA_OK) {
+    /* the name is load-time, not just for the error print: tracebacks
+     * say '=(luna)', and coverage builds pass an '@...' path so luacov
+     * can trace the entry like any other source */
+    if (luaL_loadbuffer(L, src, strlen(src), name) != LUA_OK ||
+        lua_pcall(L, 0, LUA_MULTRET, 0) != LUA_OK) {
         const char *msg = lua_tostring(L, -1);
         fprintf(stderr, "luna: %s: %s\n", name, msg ? msg : "(unknown error)");
         return 1;
     }
     return 0;
+}
+
+/* ---- coverage instrumentation (luacov) ---------------------------- */
+/* When LUNA_COVERAGE is set — coverage builds only, see
+ * test/CMakeLists.txt — collect Lua-line stats for the strategy layer:
+ * __LUNA_COV_ROOT makes the embedded sources' chunknames point at their
+ * real files (lua/luna.lua's luna_chunkname consults it, and luacov only
+ * traces '@'-prefixed sources), then luacov's runner owns the single
+ * debug-hook slot, chained with the kernel count hook (count events are
+ * forwarded to kernel.count_hook) so ^C and attach polling keep their
+ * usual cadence under the line hook. */
+
+static int coverage_on;
+
+/* the real target always gets these from CMakeLists.txt; white-box test
+ * compiles (test/luna_test_main.c includes this file) fall back to
+ * empties, which only ever make an actual coverage run complain */
+#ifndef LUNA_SOURCE_ROOT
+#define LUNA_SOURCE_ROOT ""
+#endif
+#ifndef LUNA_COV_CONFIG
+#define LUNA_COV_CONFIG ""
+#endif
+#ifndef LUNA_LUACOV_SRC
+#define LUNA_LUACOV_SRC ""
+#endif
+
+static void coverage_init(lua_State *L)
+{
+    coverage_on = getenv("LUNA_COVERAGE") != NULL;
+    if (!coverage_on)
+        return;
+    /* the paths go in as real C strings — the LUNA_* macros are C string
+     * literals, and splicing them into Lua source text would lose the
+     * quotes at concatenation (a bare path is not Lua code) */
+    lua_pushstring(L, LUNA_SOURCE_ROOT);
+    lua_setglobal(L, "__LUNA_COV_ROOT");
+    lua_pushstring(L, LUNA_COV_CONFIG);
+    lua_setglobal(L, "__LUNA_COV_CONFIG");
+    lua_getglobal(L, "package");
+    if (lua_istable(L, -1)) {
+        lua_pushliteral(L, LUNA_LUACOV_SRC "/?.lua;");
+        lua_getfield(L, -2, "path");
+        lua_concat(L, 2);
+        lua_setfield(L, -2, "path");
+    }
+    lua_pop(L, 1);
+    if (luaL_dostring(L,
+            "local ok, runner = pcall(require, 'luacov.runner')\n"
+            "if not ok then error('no luacov: ' .. tostring(runner)) end\n"
+            "runner.init(dofile(__LUNA_COV_CONFIG))\n"
+            "local covhook = runner.debug_hook\n"
+            "debug.sethook(function(ev, line)\n"
+            "  if ev == 'line' then covhook(nil, line, 3) end -- level 3: skip hook and wrapper\n"
+            "  if ev == 'count' then\n"
+            "    local k = package.loaded.kernel\n"
+            "    if k then k.count_hook() end\n"
+            "  end\n"
+            "end, 'l', 100000)\n") != LUA_OK) {
+        fprintf(stderr, "luna: coverage instrumentation unavailable: %s\n",
+                lua_tostring(L, -1) ? lua_tostring(L, -1) : "(unknown error)");
+        lua_pop(L, 1);
+        coverage_on = 0;
+    }
+}
+
+static void coverage_shutdown(lua_State *L)
+{
+    if (!coverage_on)
+        return;
+    /* merges this process's stats into the shared stats file */
+    if (luaL_dostring(L, "require('luacov.runner').shutdown()") != LUA_OK)
+        lua_pop(L, 1);
 }
 
 int main(int argc, char *argv[])
@@ -233,6 +311,11 @@ int main(int argc, char *argv[])
     register_c_modules(L);
 
     setup_module_paths(L);
+
+    /* before the base-globals snapshot: the coverage globals then join
+     * the runtime's own environment, so %reset leaves them (and the
+     * runner's stats) alone */
+    coverage_init(L);
 
     /* embedded sources for the entry chunk */
     lua_pushlstring(L, LUNA_LUA_REPL, sizeof(LUNA_LUA_REPL) - 1);
@@ -276,7 +359,11 @@ int main(int argc, char *argv[])
     push_arg_table(L, argc, argv);
 
     int rc;
-    if (run_chunk(L, LUNA_LUA_ENTRY, "=(luna)") != 0) {
+    /* the entry's own lines are traced too: name it like the file it is
+     * when coverage is on ('@'-prefixed names are what luacov traces) */
+    if (run_chunk(L, LUNA_LUA_ENTRY,
+                  coverage_on ? "@" LUNA_SOURCE_ROOT "/lua/luna.lua"
+                              : "=(luna)") != 0) {
         rc = 1;
     } else if (lua_isinteger(L, -1)) {
         rc = (int)lua_tointeger(L, -1);
@@ -284,6 +371,7 @@ int main(int argc, char *argv[])
         rc = 0;
     }
 
+    coverage_shutdown(L);
     lua_close(L);
     return rc;
 }

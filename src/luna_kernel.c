@@ -82,8 +82,9 @@ static int k_chmod(lua_State *L)
  * SIGINT has been requested, and on every second hit (~200k
  * instructions) polls the attach socket. __LUNA_SERVE_STEP is
  * installed by serve.start(); the poll runs with hooks suspended and
- * this hook is reinstated on the way out, so a long script — even a
- * loop — stays reachable from `luna --attach`. */
+ * whatever hook was installed is reinstated on the way out (ours in the
+ * usual case, a coverage build's combined hook otherwise), so a long
+ * script — even a loop — stays reachable from `luna --attach`. */
 static void luna_count_hook(lua_State *L, lua_Debug *ar)
 {
     (void)ar;
@@ -91,6 +92,9 @@ static void luna_count_hook(lua_State *L, lua_Debug *ar)
         luaL_error(L, "interrupted (SIGINT)");
     if (++luna_serve_ticks >= 2) {
         luna_serve_ticks = 0;
+        lua_Hook prev = lua_gethook(L);
+        int prev_mask = lua_gethookmask(L);
+        int prev_count = lua_gethookcount(L);
         lua_sethook(L, NULL, 0, 0); /* suspend during the nested exec */
         lua_getglobal(L, "__LUNA_SERVE_STEP");
         if (lua_isfunction(L, -1)) {
@@ -99,8 +103,19 @@ static void luna_count_hook(lua_State *L, lua_Debug *ar)
         } else {
             lua_pop(L, 1);
         }
-        lua_sethook(L, luna_count_hook, LUA_MASKCOUNT, 100000);
+        lua_sethook(L, prev, prev_mask, prev_count);
     }
+}
+
+/* kernel.count_hook(): one step of the count hook's own logic — the
+ * interrupt check plus a serve poll — as an ordinary callable. Coverage
+ * instrumentation owns the single debug-hook slot (luacov needs line
+ * events) and forwards count events here, keeping ^C and attach
+ * polling on their usual cadence; plain runs never call it. */
+static int k_count_hook(lua_State *L)
+{
+    luna_count_hook(L, NULL);
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -285,9 +300,23 @@ static int k_exec(lua_State *L)
     lua_rotate(L, 3, 1);
     int msghi = 2; /* stack index of the handler */
 
-    lua_sethook(L, luna_count_hook, LUA_MASKCOUNT, 100000);
+    /* Arm the count hook only when the debug slot is free: coverage
+     * instrumentation may have installed its own combined hook (it
+     * forwards count events to kernel.count_hook, so interrupts and
+     * serve polls keep firing); in that case leave the slot untouched
+     * across the call instead of dropping the foreign hook on the
+     * floor after the first eval. */
+    int had_hook = lua_gethookmask(L) != 0;
+    lua_Hook outer = lua_gethook(L);
+    int outer_mask = lua_gethookmask(L);
+    int outer_count = lua_gethookcount(L);
+    if (!had_hook)
+        lua_sethook(L, luna_count_hook, LUA_MASKCOUNT, 100000);
     int status = lua_pcall(L, nargs, LUA_MULTRET, msghi);
-    lua_sethook(L, NULL, 0, 0);
+    if (!had_hook)
+        lua_sethook(L, NULL, 0, 0);
+    else
+        lua_sethook(L, outer, outer_mask, outer_count);
     luna_interrupt_flag = 0; /* consumed or stale: either way, reset */
 
     if (status != LUA_OK) {
@@ -390,6 +419,7 @@ static int k_version(lua_State *L)
 
 static const luaL_Reg kernel_funcs[] = {
     { "check", k_check },
+    { "count_hook", k_count_hook },
     { "exec", k_exec },
     { "write", k_write },
     { "sink", k_sink },

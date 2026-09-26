@@ -15,6 +15,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h"
 
 int luaopen_lpeg(lua_State *L); /* highlight -> lexer -> lpeg (introspect) */
@@ -67,6 +68,7 @@ static int setup_plugins(void **state)
     luaL_openlibs(L);
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
@@ -95,10 +97,10 @@ static int setup_plugins(void **state)
     lua_pushlstring(L, LUNA_LUA_PLUGINS, sizeof(LUNA_LUA_PLUGINS) - 1);
     lua_setglobal(L, "__LUNA_PLUGINS_SRC");
     run(L,
-        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))\n"
-        "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-        "package.preload['luna.modules'] = assert(load(__LUNA_MODULES_SRC, '=(luna/modules)'))\n"
-        "package.preload['luna.plugins'] = assert(load(__LUNA_PLUGINS_SRC, '=(luna/plugins)'))\n"
+        "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, luna_chunkname('magic')))\n"
+        "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname('introspect')))\n"
+        "package.preload['luna.modules'] = assert(load(__LUNA_MODULES_SRC, luna_chunkname('modules')))\n"
+        "package.preload['luna.plugins'] = assert(load(__LUNA_PLUGINS_SRC, luna_chunkname('plugins')))\n"
         "P = require('luna.plugins')\n"
         "P.load_all()");
     return 0;
@@ -107,6 +109,7 @@ static int setup_plugins(void **state)
 static int teardown_plugins(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     unsetenv("HOME");
     unsetenv("LUNA_PLUGIN_PATH");
     lua_close(L);

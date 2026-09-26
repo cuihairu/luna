@@ -130,12 +130,48 @@
       main 的 218-219/280/284(建态失败、入口失败时的 `rc=1`、入口返回非整数——防御分支),
       以及 luna_loop 的事件循环分支(下轮方向)。
 
+## 覆盖率接线(2026-09-26 第四轮)
+
+- [x] **luacov 接入(上一轮方向第 1 条)**:submodule `deps/luacov`(v0.17.0)。
+      嵌入式源(嵌入式策略层)对 luacov 是无名 dostring,按 `codefromstrings=false`
+      直接不可见——解法三层:(1) `luna_chunkname(name)`:覆盖率构建下以
+      `'@<root>/lua/luna/<name>.lua'` 真实文件名加载,普通构建保持 `'=(luna/x)'`
+      原样(报错文本不变);`run_chunk` 同步改 `luaL_loadbuffer`,入口
+      `lua/luna.lua` 也进报告(此前整文件不可见,总数从虚高的 84.49% 落到真实的
+      **84.14%**)。(2) 每个 Lua 态只有一个 debug 钩子槽:覆盖率接管后装**合并钩子**,
+      行事件分发 `covhook(nil, line, 3)`(官方 level-3 扩展点,跳过钩子与包装层),
+      count 事件转发 `kernel.count_hook()`——`^C` 中断与 attach 轮询节奏不变。
+      (3) kernel 变成钩子无关:`__LUNA_SERVE_STEP` 轮询前保存/恢复
+      `lua_gethook/mask/count`,`kernel.run` 仅在槽位空闲时武装计数钩子,收尾恢复
+      而非清除。测试侧:`test/luna_cov.h`(`LUNA_COVERAGE=1` 环境门控,仅 Profiling
+      树导出)+ 九个 harness 接线;`lua_coverage` / `gcovr_summary` 两个 target 出
+      报告,汇总表打进构建输出;`docs/guide/getting-started.md` 补覆盖率一节。
+- [x] **顺带真修两处**(覆盖率插件暴露的潜伏 bug,非测试迁就):
+      `lua/luna/modules.lua` 的 `caller_dir` 以"第一个 `@` 源帧"定位调用方——模块
+      自身以真实路径加载时(恰是覆盖率构建)会停在自己身上,改为跳过与自己
+      `debug.getinfo(…, "S").source` 相同的帧;loop 组的 DNS 失败用例在本机
+      capture-DNS(faux-IP)环境恒假绿(`.invalid` 也能解析),换成**解析器之下的**
+      确定性注入:70 字符标签(查询构造期即败)、300 字符主机名(libuv 同步
+      `UV_EINVAL`)、非数值地址反解,三例新增/替换后 loop 组 85 例。
+- [x] **实测(2026-09-26,不虚报)**:build 与 build-cov 两树 `cmake --build` +
+      ctest **15 组全绿**(覆盖率树串行 214s,统计文件合并假定无并发写)。
+      Lua 侧(luacov):总 **84.14%**(1539/1829)——repl 98.16%、complete 97.93%、
+      introspect 95.78%、highlight 93.88%、plugins 93.18%、magic 88.74%、
+      modules 87.39%、luna.lua(入口)80.14%、http 82.67%、rocks 75.58%、
+      **serve 39.84%**。C 侧(gcovr):行 **80.8%**(2236/2769)、函数 88.9%、
+      分支 57.3%;kernel 行 98%、line 100%、loop 79%、main 63%(缺口主要是
+      覆盖率接线自身与建态失败等防御分支,见第三轮)。
+- 余量(如实):serve.lua 的 39.84% 是 attach 的捕获汇与错误分支——`--attach`
+  的双进程对拍在串行 ctest 里能到,但快照断言对调度顺序敏感,已有 3 例钉住
+  主路径;rocks 75.58% 的缺口在网络下载分支(离线环境不可注入)。剩余大头
+  仍是 **`luna_loop.c` 分支**(见下轮方向)。
+
 ## 下轮方向
 
-- **Lua 策略层覆盖率**:gcov 看不见 Lua,`repl`/`complete`/`magic`/`introspect`
-  这些全 Lua 模块要靠 luacov(或等价探针)接进 ctest 才能逼近 100%;
 - **`luna_loop.c` 分支**:事件循环分支 51%,多为 libuv 回调的错误/超时路径,
-  需要针对性的失败注入(打不开的文件、断开的连接)而非新特性。
+  需要针对性的失败注入(打不开的文件、断开的连接)而非新特性;
+- **serve.lua 的 attach 捕获路径**:39.84% 的缺口集中在 attach 数据汇,需要
+  对调度顺序不敏感的断言方式(轮询至静默而非定时快照)。
 
 ## 明确不做(上一轮)
 

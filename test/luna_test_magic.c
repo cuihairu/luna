@@ -13,6 +13,7 @@
 #include "lualib.h"
 
 #include "luna_kernel.h"
+#include "luna_cov.h"
 #include "luna_lua.h"
 
 int luaopen_lpeg(lua_State *L); /* highlight -> lexer -> lpeg */
@@ -40,6 +41,7 @@ static int setup_magic(void **state)
     luaL_openlibs(L);
     luaL_requiref(L, "kernel", luaopen_luna_kernel, 1);
     lua_pop(L, 1);
+    luna_cov_setup(L);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
 
@@ -62,13 +64,13 @@ static int setup_magic(void **state)
     lua_pushlstring(L, LUNA_LUA_PLUGINS, sizeof(LUNA_LUA_PLUGINS) - 1);
     lua_setglobal(L, "__LUNA_PLUGINS_SRC");
     assert_int_equal(luaL_dostring(L,
-                       "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, '=(luna/magic)'))\n"
-                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, '=(luna/complete)'))\n"
-                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, '=(luna/introspect)'))\n"
-                       "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, '=(luna/highlight)'))\n"
-                       "package.preload['luna.plugins'] = assert(load(__LUNA_PLUGINS_SRC, '=(luna/plugins)'))\n"
+                       "package.preload['luna.magic'] = assert(load(__LUNA_MAGIC_SRC, luna_chunkname('magic')))\n"
+                       "package.preload['luna.complete'] = assert(load(__LUNA_COMPLETE_SRC, luna_chunkname('complete')))\n"
+                       "package.preload['luna.introspect'] = assert(load(__LUNA_INTROSPECT_SRC, luna_chunkname('introspect')))\n"
+                       "package.preload['luna.highlight'] = assert(load(__LUNA_HIGHLIGHT_SRC, luna_chunkname('highlight')))\n"
+                       "package.preload['luna.plugins'] = assert(load(__LUNA_PLUGINS_SRC, luna_chunkname('plugins')))\n"
                        "M = require 'luna.magic'\n"
-                       "local repl = assert(load(__LUNA_REPL_SRC, '=(luna/repl)'))()\n"
+                       "local repl = assert(load(__LUNA_REPL_SRC, luna_chunkname('repl')))()\n"
                        "S = repl.new()\n"
                        "local base = {}\n"
                        "for k in pairs(_G) do base[k] = true end\n"
@@ -80,6 +82,7 @@ static int setup_magic(void **state)
 static int teardown_magic(void **state)
 {
     (void)state;
+    luna_cov_teardown(L);
     lua_close(L);
     L = NULL;
     return 0;

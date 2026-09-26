@@ -144,7 +144,9 @@ add_executable(luna_test_rocks luna_test_rocks.c)
 target_link_libraries(luna_test_rocks PRIVATE cmocka-static lualib luna_kernel)
 target_compile_definitions(luna_test_rocks PRIVATE LUNA_BIN="$<TARGET_FILE:luna>")
 add_test(NAME rocks COMMAND luna_test_rocks)
-set_tests_properties(rocks PROPERTIES TIMEOUT 300)
+# the group shells out to `luna install` (network); the bound has to clear
+# the Profiling tree too, where the coverage hook makes Lua ~10x slower
+set_tests_properties(rocks PROPERTIES TIMEOUT 600)
 
 # luacov collection (Profiling builds only): the harness glue targets
 # learn the coverage paths; every test exports LUNA_COVERAGE=1 so spawned

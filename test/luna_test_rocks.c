@@ -30,12 +30,17 @@ static char *read_all(const char *path);
 
 /* run `luna <args>` in the scratch dir; returns the exit status. On a
  * nonzero status the child's captured output is printed — the scratch
- * dir is also kept for post-mortem. */
+ * dir is also kept for post-mortem.
+ *
+ * The inner `timeout` is only a hang guard, not the budget: a plain
+ * build installs in ~15s, but the Profiling tree's coverage hook makes
+ * the Lua side ~10x slower, so the guard has to clear that too. The
+ * ctest TIMEOUT on this group is the outer bound. */
 static int run_luna(const char *args)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd),
-             "cd '%s' && timeout 150 '%s' %s > out.log 2>&1",
+             "cd '%s' && timeout 420 '%s' %s > out.log 2>&1",
              workdir, LUNA_BIN, args);
     int rc = system(cmd);
     if (rc == -1 || !WIFEXITED(rc)) {

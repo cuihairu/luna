@@ -163,3 +163,7 @@ if(CMAKE_BUILD_TYPE STREQUAL "Profiling")
             modules plugins serve loop line linedit rocks
             PROPERTIES ENVIRONMENT "LUNA_COVERAGE=1")
 endif()
+# NOTE: the white-box tests (main, linedit) compile src/*.c into their
+# harnesses, whose gcda/gcno would double-count those files in the C
+# coverage report. The gcovr_summary target sweeps test-tree coverage
+# artifacts before scanning — keep that sweep intact if you touch this.

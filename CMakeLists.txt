@@ -205,7 +205,19 @@ set_target_properties(lua_host PROPERTIES
 target_link_libraries(lua_host PRIVATE lualib)
 
 # C-side coverage report over the Profiling tree's .gcda (opt-in tool).
+# The white-box main test's profiles are redirected into gcov-discarded/
+# (see test/CMakeLists.txt) so the real binary stays the single source
+# of truth for src/luna_main.c. Sweeping the test tree's coverage
+# artifacts before the scan finishes the job: gcovr's filters cannot
+# keep the white-box object out (its .gcno alone makes gcov emit an
+# all-zero second line set for src/luna_main.c), and the harnesses'
+# own gcda would merge their dependency-lib counts into the report.
+# Harness binaries exist to pass/fail, not to report on src/.
 add_custom_target(gcovr_summary
+        COMMAND ${CMAKE_COMMAND} -E rm -rf
+                ${PROJECT_BINARY_DIR}/gcov-discarded
+        COMMAND find ${PROJECT_BINARY_DIR}/test -name *.gcda -delete
+        COMMAND find ${PROJECT_BINARY_DIR}/test -name *.gcno -delete
         COMMAND gcovr -r ${PROJECT_SOURCE_DIR}
                 --object-directory ${PROJECT_BINARY_DIR}
                 --filter ${PROJECT_SOURCE_DIR}/src/ --print-summary

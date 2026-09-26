@@ -79,6 +79,17 @@ if not opts.no_serve and not opts.attach then
     require("luna.serve").start()
 end
 
+-- One SIGINT convention across the one-shot launch modes: 128 + SIGINT,
+-- whatever was running when ^C landed. The message has already gone to
+-- the caller's own sink (stderr for scripts, the session emitter for
+-- -e); this only picks the status.
+local function exit_code_for(err)
+    if tostring(err):find("interrupted", 1, true) then
+        return 130
+    end
+    return 1
+end
+
 -- Run a script file: args become the chunk's `...` (standalone lua
 -- convention), arg[] is rebuilt for the duration of the run.
 local function run_script(path, script_args)
@@ -102,10 +113,7 @@ local function run_script(path, script_args)
     _G.arg = old_arg
     if not ok then
         io.stderr:write(tostring(err) .. "\n")
-        if tostring(err):find("interrupted", 1, true) then
-            return 130 -- SIGINT convention: 128 + SIGINT
-        end
-        return 1
+        return exit_code_for(err)
     end
     return 0
 end
@@ -116,13 +124,15 @@ end
 local function run_eval(code)
     local session = repl.new({ chunk_name = "eval",
         color = kernel.colors() and not opts.no_color })
-    local status = session:feed(code)
+    local status, err = session:feed(code)
     if status == "continue" then
         io.stderr:write("luna: -e code is incomplete\n")
         return 1
     end
     if status == "error" then
-        return 1
+        -- the session already reported the message; a ^C that lands
+        -- mid-chunk gets the same 130 a script run would get
+        return exit_code_for(err)
     end
     return 0
 end
@@ -242,26 +252,28 @@ local function run_console()
     return repl.run({ color = kernel.colors() and not opts.no_color })
 end
 
--- Single exit path: drop the attach socket file before the process
--- goes away (os.exit skips Lua GC, so stop() does the unlink itself).
+-- Single exit path: drop the attach socket file, then hand the status
+-- back to main(). Returning (instead of os.exit) lets the state close
+-- properly — GC finalizers run, open files get flushed by their own
+-- __gc — and lets the caller's exit code path see the result.
 local function finish(code)
     require("luna.serve").stop()
-    os.exit(code)
+    return code
 end
 
 if opts.attach then
-    finish(run_attach(opts.attach))
+    return finish(run_attach(opts.attach))
 elseif opts.eval then
-    finish(run_eval(opts.eval))
+    return finish(run_eval(opts.eval))
 elseif opts.script then
     local code = run_script(opts.script, opts.largs)
     if code ~= 0 then
-        finish(code)
+        return finish(code)
     end
     if opts.interactive then
-        finish(run_console())
+        return finish(run_console())
     end
-    finish(0)
+    return finish(0)
 else
-    finish(run_console())
+    return finish(run_console())
 end

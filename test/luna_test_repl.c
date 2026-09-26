@@ -199,6 +199,68 @@ static void test_eval_runtime_error_reported(void **state)
     assert_non_null(strstr(outbuf, "stack traceback"));
 }
 
+/* Non-string error objects: the message handler first asks the object
+ * for a __tostring, and only falls back to a canned sentence when it
+ * gets nothing usable. */
+static void test_error_object_with_tostring_is_the_message(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(
+        feed("error(setmetatable({}, {__tostring = function() "
+             "return 'object boom' end}))"),
+        "error");
+    assert_non_null(strstr(outbuf, "object boom"));
+    assert_null(strstr(outbuf, "(error object is not a string)"));
+}
+
+static void test_error_object_without_tostring_is_summarized(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("error({})"), "error");
+    assert_non_null(strstr(outbuf, "(error object is not a string)"));
+    assert_non_null(strstr(outbuf, "stack traceback"));
+}
+
+/* A line that ends on an operator continues — even when the user typed
+ * trailing spaces after it (the incompleteness heuristic trims them
+ * before looking at the tail). */
+static void test_trailing_operator_with_spaces_continues(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("1 +   "), "continue");
+    assert_string_equal(feed("2"), "ok");
+    assert_non_null(strstr(outbuf, "Out[1]: 3"));
+}
+
+/* A short string cannot span lines. Line one ends on an open quote
+ * (the <eof> match keeps it open); when line two joins the pending
+ * chunk the raw newline lands *inside* the quotes, and it is the
+ * "unfinished string" classifier — not the <eof> match — that has to
+ * catch it, or the block would be reported as a plain syntax error. */
+static void test_short_string_wont_span_lines_stays_open(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("s = \"abc"), "continue");
+    assert_string_equal(feed("def\""), "continue");
+    assert_int_equal(outlen, 0); /* nothing ran, nothing echoed */
+}
+
+/* Same for a trailing bare keyword: `not` alone leaves the expression
+ * unfinished, so the next line is appended rather than reported —
+ * `not false` evaluates as one expression across the two lines. */
+static void test_trailing_keyword_continues(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("not"), "continue");
+    assert_string_equal(feed(" false"), "ok");
+    assert_non_null(strstr(outbuf, "Out[1]: true"));
+}
+
 /* -- multiline group ------------------------------------------------- */
 
 static void test_multiline_function_continues_then_runs(void **state)
@@ -391,6 +453,11 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_eval_out_register, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_syntax_error_reported, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_runtime_error_reported, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_error_object_with_tostring_is_the_message, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_error_object_without_tostring_is_summarized, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_trailing_operator_with_spaces_continues, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_short_string_wont_span_lines_stays_open, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_trailing_keyword_continues, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_multiline_function_continues_then_runs, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_multiline_incomplete_string_waits, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_multiline_table_and_index, setup_session, teardown_session),

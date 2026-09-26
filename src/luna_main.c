@@ -103,13 +103,13 @@ static void luna_on_sigint(int sig)
     luna_kernel_request_interrupt();
 }
 
-/* SIGUSR1 wakes the attach poll: flag the kernel and nudge a blocked
- * line editor (see luna_line.c's wake channel) so the REPL loop comes
- * back around to serve.step() without waiting for user keystrokes */
+/* SIGUSR1 wakes the attach poll: nudge a blocked line editor (see
+ * luna_line.c's wake channel) so the REPL loop comes back around to
+ * serve.step() without waiting for user keystrokes. Busy scripts need
+ * no nudge — the kernel's count hook polls the socket on its own. */
 static void luna_on_sigusr1(int sig)
 {
     (void)sig;
-    luna_kernel_request_serve();
     luna_line_notify_wake();
 }
 
@@ -137,23 +137,6 @@ static void push_arg_table(lua_State *L, int argc, char **argv)
         lua_rawseti(L, -2, i);
     }
     lua_setglobal(L, "arg");
-}
-
-static int dbg_msgh(lua_State *L)
-{
-    const char *msg = lua_tostring(L, 1);
-    fprintf(stderr, "ERR: %s\n", msg ? msg : "(?)");
-    if (luaL_dostring(L,
-            "local info = debug.getinfo(2, 'l')\n"
-            "print('line:', info and info.currentline)\n"
-            "for i = 1, 10 do\n"
-            "  local n, v = debug.getlocal(2, i)\n"
-            "  if not n then break end\n"
-            "  print(string.format('local %d: %s = %s', i, n, tostring(v)))\n"
-            "end\n") != LUA_OK) {
-        fprintf(stderr, "dbg failed: %s\n", lua_tostring(L, -1));
-    }
-    return 1;
 }
 
 /* Register the stdlib backends into package.loaded (glob off) so the

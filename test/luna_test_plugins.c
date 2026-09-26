@@ -157,6 +157,10 @@ static void test_raising_plugin_is_reported_not_fatal(void **state)
         eval_string("return tostring(P.loaded['goodpack'] ~= nil)"), "true");
 }
 
+/* A manifest that does not parse is one failure reason (the parser's
+ * own words), a manifest that parses but names nothing another — both
+ * are reported under the directory that has no name to file them by,
+ * and neither stops the plugins that follow. */
 static void test_unparsable_manifest_is_reported_by_dir(void **state)
 {
     (void)state;
@@ -166,7 +170,22 @@ static void test_unparsable_manifest_is_reported_by_dir(void **state)
                     "  if k:find('badjson') then found = v end\n"
                     "end\n"
                     "return found"),
-        "name"));
+        "does not parse"));
+    /* the siblings of the broken manifests still loaded */
+    assert_string_equal(
+        eval_string("return tostring(P.loaded['good'] ~= nil)"), "true");
+}
+
+static void test_nameless_manifest_is_reported_by_dir(void **state)
+{
+    (void)state;
+    assert_non_null(strstr(
+        eval_string("local found\n"
+                    "for k, v in pairs(P.failed) do\n"
+                    "  if k:find('noname') then found = v end\n"
+                    "end\n"
+                    "return found"),
+        "no usable name"));
 }
 
 /* -- extension points group ------------------------------------------------- */
@@ -200,6 +219,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_same_name_shadows_are_overridden, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_raising_plugin_is_reported_not_fatal, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_unparsable_manifest_is_reported_by_dir, setup_plugins, teardown_plugins),
+        cmocka_unit_test_setup_teardown(test_nameless_manifest_is_reported_by_dir, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_injected_modules_resolve_via_require, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_plugin_registers_a_working_magic_command, setup_plugins, teardown_plugins),
     };

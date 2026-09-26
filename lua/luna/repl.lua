@@ -85,8 +85,9 @@ function Session:record(line)
     return self.in_n
 end
 
--- feed(line) -> "ok" | "continue" | "error" | "done"
--- nil line means EOF.
+-- feed(line) -> "ok" | "continue" | "error" [, err] | "done"
+-- nil line means EOF. The error message rides along with "error" so a
+-- caller outside the loop (-e) can tell an interrupt from a typo.
 function Session:feed(line)
     if line == nil then
         return "done"
@@ -147,7 +148,7 @@ function Session:feed(line)
 
     if status == "error" and not wrapped_ok then
         report_error(self, err)
-        return "error"
+        return "error", err
     end
 
     local src = wrapped_ok and ("return " .. chunk) or chunk
@@ -155,7 +156,7 @@ function Session:feed(line)
     local res = table.pack(kernel.exec(src, self.chunk_name .. "[" .. self.in_n .. "]"))
     if not res[1] then
         report_error(self, res[2])
-        return "error"
+        return "error", res[2]
     end
 
     local has_value = false

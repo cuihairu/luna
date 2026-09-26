@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -26,6 +27,10 @@
 
 int luaopen_lpeg(lua_State *L);        /* introspect's pattern use */
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport */
+
+#ifndef SERVE_FIXTURES
+#define SERVE_FIXTURES "fixtures"
+#endif
 
 static lua_State *L;
 static char sockdir[] = "/tmp/luna-test-serve-XXXXXX";
@@ -266,6 +271,243 @@ static void test_sigusr1_releases_idle_editor(void **state)
     unlink(path);
 }
 
+/* The same bell, followed by leaving through the front door: ^D on the
+ * idle prompt ends the session with status 0 and serve.stop() unlinks
+ * the attach socket on the way out — unlike the SIGTERM case above,
+ * the clean exit also lets the process flush its own coverage data. */
+static void test_sigusr1_then_clean_exit(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = forkpty(&master, NULL, NULL, NULL);
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        char *argv[] = { LUNA_BINARY, NULL };
+        setenv("TERM", "xterm", 1);
+        execv(LUNA_BINARY, argv); /* inherits LUNA_SOCK_DIR */
+        _exit(127);
+    }
+    char buf[4096];
+    int n = pty_collect(master, buf, sizeof(buf), 10000);
+    assert_int_not_equal(n, 0);
+    assert_non_null(strstr(buf, "In [1]"));
+
+    assert_int_equal(kill(pid, SIGUSR1), 0);
+    n = pty_collect(master, buf, sizeof(buf), 3000);
+    assert_int_not_equal(n, 0);
+    assert_non_null(strstr(buf, "\r\n")); /* synthetic Enter + repaint */
+
+    /* let the repaint settle before the key: a ^D typed while the
+     * console is still drawing is eaten by the tty line discipline */
+    usleep(300 * 1000);
+    assert_int_equal(write(master, "\x04", 1), 1);
+
+    int wstatus = 0;
+    int waited = 0;
+    while (waited < 5000) {
+        if (waitpid(pid, &wstatus, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    close(master);
+    if (waited >= 5000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &wstatus, 0);
+        fail_msg("the REPL did not leave on ^D");
+    }
+    assert_true(WIFEXITED(wstatus));
+    assert_int_equal(WEXITSTATUS(wstatus), 0);
+
+    /* the clean path removed the socket itself, no test-side unlink */
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
+    assert_int_equal(access(path, F_OK), -1);
+}
+
+/* The attach channel's reason to exist: a busy — even looping — script
+ * stays reachable from `luna --attach`. No line editor is involved, so
+ * the only poll points are the kernel's count hook (every 200k
+ * instructions) and the SIGUSR1 the client rings after each send. The
+ * target then leaves through a marker file instead of being killed,
+ * which also lets it flush its own coverage data. */
+static void test_attach_reaches_a_busy_script(void **state)
+{
+    (void)state;
+    char marker[512], infile[512];
+    snprintf(marker, sizeof(marker), "%s/busy.done", sockdir);
+    snprintf(infile, sizeof(infile), "%s/attach.in", sockdir);
+    FILE *in = fopen(infile, "w");
+    assert_non_null(in);
+    fputs("return 40 + 2\n%detach\n", in);
+    fclose(in);
+
+    int pipes[2];
+    assert_int_equal(pipe(pipes), 0);
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        close(pipes[0]);
+        dup2(pipes[1], STDOUT_FILENO);
+        dup2(pipes[1], STDERR_FILENO);
+        close(pipes[1]);
+        char *argv[] = { LUNA_BINARY, SERVE_FIXTURES "/busy.lua", marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(pipes[1]);
+
+    /* serve.start() opens the socket before the script's first
+     * instruction, so the wait is only about process startup */
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_int_equal(access(path, F_OK), 0);
+
+    /* the client runs headless (piped stdin): replies land on stdout */
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "%s --attach %d < %s 2>&1", LUNA_BINARY, (int)pid,
+             infile);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    char reply[4096];
+    size_t n = fread(reply, 1, sizeof(reply) - 1, p);
+    reply[n] = '\0';
+    int status = pclose(p);
+    assert_int_equal(WIFEXITED(status) ? WEXITSTATUS(status) : -1, 0);
+    /* the framed answer, straight after the client's own prompt */
+    assert_non_null(strstr(reply, "attach> 42"));
+
+    /* hand the script its marker: it exits on its own and takes the
+     * socket with it, no test-side unlink */
+    FILE *m = fopen(marker, "w");
+    assert_non_null(m);
+    fclose(m);
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    close(pipes[0]);
+    if (waited >= 10000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        fail_msg("the busy script never saw its marker");
+    }
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0);
+    assert_int_equal(access(path, F_OK), -1);
+    unlink(infile);
+    unlink(marker);
+}
+
+/* The attach plumbing reports its failures instead of swallowing them:
+ * a wake at a pid that cannot exist, a mode string strtol cannot read,
+ * and a chmod at a path that is not there all come back as errors that
+ * name the failing call and the syscall's own reason. */
+static void test_wake_and_chmod_report_errors(void **state)
+{
+    (void)state;
+    run(L,
+        "local ok, err = pcall(kernel.wake, 2147483647)\n"
+        "assert(not ok, 'a pid that large cannot exist')\n"
+        "assert(tostring(err):find('wake:', 1, true), err)\n"
+        "ok, err = pcall(kernel.chmod, '/nonexistent-luna-socket', 'xyz')\n"
+        "assert(not ok and tostring(err):find('chmod: bad mode', 1, true), err)\n"
+        "ok, err = pcall(kernel.chmod, '/nonexistent-luna-socket', '644')\n"
+        "assert(not ok and tostring(err):find('chmod: ', 1, true), err)\n"
+        "assert(tostring(err):find('No such file', 1, true), err)\n");
+}
+
+/* The count hook pcall's __LUNA_SERVE_STEP every ~200k instructions
+ * while a chunk runs, and a poll that raises must be swallowed — "a
+ * failing poll must not kill the chunk". The fixture installs one that
+ * always raises, then spins until its marker file appears: if the
+ * error escaped, the script would die instead of reaching "done". */
+static void test_a_broken_attach_poll_never_kills_the_chunk(void **state)
+{
+    (void)state;
+    char marker[512];
+    snprintf(marker, sizeof(marker), "%s/poll.ok", sockdir);
+
+    int pipes[2];
+    assert_int_equal(pipe(pipes), 0);
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        close(pipes[0]);
+        dup2(pipes[1], STDOUT_FILENO);
+        dup2(pipes[1], STDERR_FILENO);
+        close(pipes[1]);
+        char *argv[] = { LUNA_BINARY, "--no-serve",
+                         SERVE_FIXTURES "/badpoll.lua", marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(pipes[1]);
+
+    /* "spin" comes off stderr (unbuffered into a pipe) once the poll is
+     * installed and the loop is running; ticks fail from then on */
+    char out[4096];
+    size_t got = 0;
+    out[0] = '\0';
+    int waited = 0;
+    while (waited < 10000 && !strstr(out, "spin")) {
+        struct pollfd p = { pipes[0], POLLIN, 0 };
+        if (poll(&p, 1, 100) > 0 && (p.revents & POLLIN)) {
+            ssize_t n = read(pipes[0], out + got, sizeof(out) - 1 - got);
+            if (n <= 0)
+                break;
+            got += (size_t)n;
+            out[got] = '\0';
+            continue;
+        }
+        waited += 100;
+    }
+    assert_non_null(strstr(out, "spin"));
+
+    /* let several failing ticks go by, then release the fixture */
+    usleep(300 * 1000);
+    FILE *m = fopen(marker, "w");
+    assert_non_null(m);
+    fclose(m);
+
+    int status = 0;
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &status, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    if (waited >= 10000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        fail_msg("the fixture never saw its marker");
+    }
+    while (got < sizeof(out) - 1) {
+        struct pollfd p = { pipes[0], POLLIN, 0 };
+        if (poll(&p, 1, 200) <= 0)
+            break;
+        ssize_t n = read(pipes[0], out + got, sizeof(out) - 1 - got);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    out[got] = '\0';
+    close(pipes[0]);
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 0); /* the poll never killed it */
+    assert_non_null(strstr(out, "done"));
+    unlink(marker);
+}
+
 int main(void)
 {
     /* a closed peer must yield EPIPE from socket writes, not a
@@ -281,9 +523,13 @@ int main(void)
         cmocka_unit_test(test_magic_runs_against_live_state),
         cmocka_unit_test(test_exit_magic_detaches_and_target_survives),
         cmocka_unit_test(test_completion_meta_line),
+        cmocka_unit_test(test_wake_and_chmod_report_errors),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test(test_sigusr1_releases_idle_editor),
+        cmocka_unit_test(test_sigusr1_then_clean_exit),
+        cmocka_unit_test(test_attach_reaches_a_busy_script),
+        cmocka_unit_test(test_a_broken_attach_poll_never_kills_the_chunk),
     };
     /* group-level setup: one shared state, tests build on each other
      * (statement then expression), order as declared */

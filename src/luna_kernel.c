@@ -20,18 +20,8 @@
 
 static volatile sig_atomic_t luna_interrupt_flag = 0;
 
-/* serve flag: set by SIGUSR1 (or tests) so the REPL loop polls the
- * attach socket — the attach client sends the signal to interrupt the
- * blocked line editor and wake the poll */
-static volatile sig_atomic_t luna_serve_flag = 0;
-
-/* instruction ticks since the last attach poll (two hook hits apart) */
+/* ticks between attach polls (two count-hook hits apart) */
 static unsigned luna_serve_ticks = 0;
-
-void luna_kernel_request_serve(void)
-{
-    luna_serve_flag = 1;
-}
 
 void luna_kernel_request_interrupt(void)
 {
@@ -52,16 +42,6 @@ static int k_clear_interrupt(lua_State *L)
     (void)L;
     luna_interrupt_flag = 0;
     return 0;
-}
-
-/* kernel.serve_requested() -> bool: reads and clears the serve flag
- * (the Lua poll loop calls this before stepping the attach socket) */
-static int k_serve_requested(lua_State *L)
-{
-    (void)L;
-    lua_pushboolean(L, luna_serve_flag);
-    luna_serve_flag = 0;
-    return 1;
 }
 
 /* kernel.pid() -> integer: this process's pid (the attach socket path
@@ -414,7 +394,6 @@ static const luaL_Reg kernel_funcs[] = {
     { "write", k_write },
     { "sink", k_sink },
     { "clear_interrupt", k_clear_interrupt },
-    { "serve_requested", k_serve_requested },
     { "pid", k_pid },
     { "wake", k_wake },
     { "chmod", k_chmod },

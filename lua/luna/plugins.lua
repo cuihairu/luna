@@ -76,7 +76,13 @@ local function manifest_of(dir)
     if not ok_json then
         return nil, "json support unavailable"
     end
-    local data = json.decode(text)
+    -- dkjson answers a syntax error with nil, pos, err instead of
+    -- raising, so a malformed manifest is a *reason*, not a crash —
+    -- and the parser's own words beat a generic "no usable name"
+    local data, _, jerr = json.decode(text)
+    if type(jerr) == "string" then
+        return nil, "plugin.json does not parse: " .. jerr
+    end
     if type(data) ~= "table" or type(data.name) ~= "string" or data.name == "" then
         return nil, "plugin.json has no usable name"
     end

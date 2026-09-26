@@ -12,6 +12,10 @@
 #include <string.h>
 #include <sys/wait.h>
 
+#include <poll.h>
+#include <signal.h>
+#include <unistd.h>
+
 #include <cmocka.h>
 
 #ifndef LUNA_BIN
@@ -130,6 +134,133 @@ static void test_eval_incomplete_is_error(void **state)
     assert_non_null(strstr(outbuf, "incomplete"));
 }
 
+/* -- signals: ^C while a one-shot mode is running ---------------------- */
+
+/* Run the real binary with stdout+stderr merged into a pipe, wait until
+ * it prints `ready` (proof its SIGINT handler and the count hook are in
+ * place and the chunk is running), let it spin for `settle_ms`, deliver
+ * `sig`, then reap it. Output lands in outbuf, the exit status in
+ * last_code. The marker has to come from stderr: stdout into a pipe is
+ * block-buffered and may not flush until the process is gone. */
+static void run_luna_signalled(const char *arg1, const char *arg2,
+                               const char *ready, int settle_ms, int sig)
+{
+    int fds[2];
+    assert_int_equal(pipe(fds), 0);
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        dup2(fds[1], STDERR_FILENO);
+        close(fds[1]);
+        if (arg2)
+            execl(LUNA_BIN, LUNA_BIN, arg1, arg2, (char *)NULL);
+        else
+            execl(LUNA_BIN, LUNA_BIN, arg1, (char *)NULL);
+        _exit(127);
+    }
+    close(fds[1]);
+
+    size_t got = 0;
+    outbuf[0] = '\0';
+    int ready_seen = 0;
+    int waited = 0;
+    while (!ready_seen && waited < 10000) {
+        struct pollfd p = { fds[0], POLLIN, 0 };
+        if (poll(&p, 1, 100) > 0 && (p.revents & POLLIN)) {
+            ssize_t n = read(fds[0], outbuf + got, sizeof(outbuf) - 1 - got);
+            if (n <= 0)
+                break;
+            got += (size_t)n;
+            outbuf[got] = '\0';
+            if (strstr(outbuf, ready))
+                ready_seen = 1;
+            continue; /* drain eagerly: only idle time counts */
+        }
+        waited += 100;
+    }
+    if (!ready_seen) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        close(fds[0]);
+        fail_msg("%s never printed \"%s\"; it said: [%s]", LUNA_BIN, ready,
+                 outbuf);
+    }
+    /* optional settle: give the chunk enough instructions for the
+     * kernel's count hook to reach its two-tick attach poll before the
+     * interrupt lands */
+    if (settle_ms > 0)
+        usleep((useconds_t)settle_ms * 1000);
+    if (kill(pid, sig) != 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        close(fds[0]);
+        fail_msg("cannot deliver signal %d to %s", sig, LUNA_BIN);
+    }
+
+    int wstatus = 0;
+    waited = 0;
+    while (waited < 10000) {
+        if (waitpid(pid, &wstatus, WNOHANG) == pid)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    if (waited >= 10000) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &wstatus, 0);
+        close(fds[0]);
+        fail_msg("%s did not stop on signal %d", LUNA_BIN, sig);
+    }
+    /* the child is gone: drain whatever it printed after the marker */
+    while (got < sizeof(outbuf) - 1) {
+        struct pollfd p = { fds[0], POLLIN, 0 };
+        if (poll(&p, 1, 200) <= 0)
+            break;
+        ssize_t n = read(fds[0], outbuf + got, sizeof(outbuf) - 1 - got);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    outbuf[got] = '\0';
+    close(fds[0]);
+    last_code = WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
+}
+
+/* -e keeps the script mode convention: 128 + SIGINT, and the message
+ * from the interrupted chunk still reaches the caller. */
+static void test_eval_interrupt_exits_130(void **state)
+{
+    (void)state;
+    run_luna_signalled("-e",
+                       "io.stderr:write('spin\\n') while true do end",
+                       "spin", 0, SIGINT);
+    assert_int_equal(last_code, 130);
+    assert_non_null(strstr(outbuf, "interrupted"));
+}
+
+static void test_script_interrupt_exits_130(void **state)
+{
+    (void)state;
+    run_luna_signalled(LUNA_FIXTURES "/spin.lua", NULL, "spin", 0, SIGINT);
+    assert_int_equal(last_code, 130);
+    assert_non_null(strstr(outbuf, "interrupted"));
+}
+
+/* The count hook polls the attach socket every two ticks even when
+ * there is no socket: --no-serve never installs the poll, and a script
+ * spinning long enough to reach that branch must neither trip over the
+ * missing step nor lose the ^C. */
+static void test_interrupt_spinning_script_without_serve(void **state)
+{
+    (void)state;
+    run_luna_signalled("--no-serve", LUNA_FIXTURES "/spin.lua", "spin", 300,
+                       SIGINT);
+    assert_int_equal(last_code, 130);
+    assert_non_null(strstr(outbuf, "interrupted"));
+}
+
 /* -- interactive group -------------------------------------------------- */
 
 static void test_interactive_piped_stdin(void **state)
@@ -227,6 +358,9 @@ int main(void)
         cmocka_unit_test(test_eval_print),
         cmocka_unit_test(test_eval_error_exit_code),
         cmocka_unit_test(test_eval_incomplete_is_error),
+        cmocka_unit_test(test_eval_interrupt_exits_130),
+        cmocka_unit_test(test_script_interrupt_exits_130),
+        cmocka_unit_test(test_interrupt_spinning_script_without_serve),
         cmocka_unit_test(test_interactive_piped_stdin),
         cmocka_unit_test(test_interactive_multiline_piped),
         cmocka_unit_test(test_interactive_after_script),

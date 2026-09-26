@@ -246,7 +246,55 @@ static void test_fs_write_read_roundtrip(void **state)
         "return true"));
 }
 
-static void test_zlib_one_shot_roundtrip(void **state){
+static void test_fs_append_mkdir_roundtrip(void **state)
+{
+    (void)state;
+    assert_true(eval_bool(
+        "local fs = require('fs')\n"
+        "local base = os.tmpname()\n"
+        "os.remove(base) -- want the name, not the file\n"
+        "assert(fs.mkdirSync(base .. '/a/b', true))\n"
+        "assert(fs.isDirectory(base .. '/a/b'))\n"
+        "assert(fs.mkdirSync(base .. '/a/b', true)) -- idempotent when recursive\n"
+        "fs.writeFileSync(base .. '/a/log.txt', 'x')\n"
+        "assert(fs.appendFileSync(base .. '/a/log.txt', 'one;'))\n"
+        "assert(fs.appendFileSync(base .. '/a/log.txt', 'two'))\n"
+        "assert(fs.readFileSync(base .. '/a/log.txt') == 'xone;two')\n"
+        "os.remove(base .. '/a/log.txt')\n"
+        "fs.rmdir(base .. '/a/b')\n"
+        "fs.rmdir(base .. '/a')\n"
+        "fs.rmdir(base)\n"
+        "return true"));
+}
+
+static void test_fs_readdir_sort_and_error_paths(void **state)
+{
+    (void)state;
+    assert_true(eval_bool(
+        "local fs = require('fs')\n"
+        "local base = os.tmpname()\n"
+        "os.remove(base)\n"
+        "fs.mkdirSync(base .. '/zdir', true)\n"
+        "fs.mkdirSync(base .. '/adir', true)\n"
+        "fs.writeFileSync(base .. '/mfile', '')\n"
+        "local names = fs.readdirSync(base)\n"
+        "assert(#names == 3 and names[1] == 'adir' and names[2] == 'mfile' and names[3] == 'zdir')\n"
+        "local okr, errr = pcall(fs.readdirSync, base .. '/nope')\n"
+        "assert(not okr and tostring(errr):find('cannot open', 1, true) ~= nil)\n"
+        "local oka, erra = pcall(fs.appendFileSync, base .. '/nope/x', 'data')\n"
+        "assert(not oka and tostring(erra):find('cannot open', 1, true) ~= nil)\n"
+        "local okm, errm = pcall(fs.mkdirSync, base .. '/adir')\n"
+        "assert(not okm and tostring(errm):find('already exists', 1, true) ~= nil)\n"
+        "assert(not pcall(fs.mkdirSync, base .. '/q/r/s')) -- no parents, not recursive\n"
+        "os.remove(base .. '/mfile')\n"
+        "fs.rmdir(base .. '/adir')\n"
+        "fs.rmdir(base .. '/zdir')\n"
+        "fs.rmdir(base)\n"
+        "return true"));
+}
+
+static void test_zlib_one_shot_roundtrip(void **state)
+{
     (void)state;
     assert_true(eval_bool(
         "local zlib = require('zlib')\n"
@@ -318,6 +366,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_json_roundtrip_and_node_aliases, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_fs_reads_and_attributes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_fs_write_read_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_fs_append_mkdir_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_fs_readdir_sort_and_error_paths, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_zlib_one_shot_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_net_and_http_expose_functions, setup_modules, teardown_modules),
 #ifdef LUNA_HAVE_OPENSSL

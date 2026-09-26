@@ -54,14 +54,10 @@ function fs.appendFileSync(path, data)
 end
 
 -- fs.readdirSync(dir) -> sorted array of entry names ("."/".."
--- excluded, like Node)
+-- excluded, like Node). Unreadable dirs raise from lfs itself.
 function fs.readdirSync(dir)
-    local iter, dirobj = lfs.dir(dir)
-    if not iter then
-        error("fs.readdirSync: cannot read " .. dir, 2)
-    end
     local out = {}
-    for entry in iter, dirobj do
+    for entry in lfs.dir(dir) do
         if entry ~= "." and entry ~= ".." then
             out[#out + 1] = entry
         end

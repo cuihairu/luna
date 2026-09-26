@@ -4,41 +4,46 @@
 **文档承诺了但实现缺位**、**明显值得补**与**顺手打磨**三类,按优先级排序。
 约定:每完成一项必须带测试,`cmake --build` + `ctest` 全绿后才 commit/push;不打 tag、不发版。
 
+**状态:2026-09-26 全部完成**(逐组 commit 已推送,ctest 12 组全绿)。
+
 ## P1 会话与魔法命令(文档承诺 vs 实现缺口)
 
-- [ ] **`In[n]` 寄存器缺失**:README/docs 承诺 `In[n]`/`Out[n]` 会话,实际只有 `_G.Out`;
-      输入历史仅存于 session 内部(`session.inputs`)。补 `_G.In[n]`(与 Out 同点维护),
-      会话求值与魔法命令行都登记;`%reset` 把 Out/In 与 `_`/`__` 一并复位
-      (当前 `%reset` 漏清 `_`/`__`,残留上一次结果)。
-- [ ] **`%time`/`%timeit` 只吃表达式**:硬包装 `"return " .. arg`,语句形式
-      (`%time for i=1,1e6 do end`)报语法错——REPL 本体有 wrapped 探针,magic 没有。
-      复用同一探针:能作为表达式则照旧回显 Out,否则按语句执行、只报时间。
-- [ ] **`%plugins` 不报遮蔽**:文档说同名后者记入 `plugins.overridden`,但 `%plugins`
-      只列 loaded/failed。补 overridden 清单输出。
+- [x] **`In[n]` 寄存器缺失**:补 `_G.In[n]`(repl `Session:record`,会话求值、魔法命令与
+      `?` 糖同点维护,多行整块按整块登记);`%reset` 清 `Out`/`_`/`__`,`In` 按
+      `session.inputs` **保留重建**(输入历史是会话的,不是用户状态的——与 IPython 的
+      `%reset` 保留历史一致)。测试:repl 组 4 例。
+- [x] **`%time`/`%timeit` 只吃表达式**:复用 REPL 的 wrapped 探针(`runnable`),表达式
+      照旧回显 `Out[n]`,语句形式只报时间。测试:magic 组语句 `%time` 例。
+- [x] **`%plugins` 不报遮蔽**:补 "overridden by an earlier same-name plugin" 段
+      (名字 + 落选目录)。测试:magic 组遮蔽例。
 
 ## P2 错误提示与补全
 
-- [ ] **"did you mean" 建议**:Lua 5.5 运行时错误自带 `(global 'x')` 线索,但 REPL 原样
-      打印。错误输出前解析线索名,`rawget(_G, name)` 为空时给出编辑距离最近的 1–2 个
-      全局名候选(`luna.introspect.suggest`),打错字当场可见。
-- [ ] **Tab 补全不认 require 目标**:`complete.lua` 注释自认 path completion 是"留给插件"
-      的例子,最常用的 `require "…` 反而没人补。内置一个 source:`require "pre` /
-      `require("pre` 列出逐级上溯各层 `luna_modules/` 的包名(lfs 缺失时静默降级)与
-      `package.loaded` 已加载名;点号续配(`require "json.`)走已加载表的字段。
-- [ ] **luna_modules 包内子模块**:`require("dep.sub")`/`require("dep/sub")` 的 Node 语义
-      是解析到 `<上溯>/luna_modules/dep/{sub.lua, sub/init.lua}`;当前只试字面
-      `luna_modules/dep.sub`,项目内依赖的子模块解析不到(只有全局 staged 树碰巧命中)。
-      在 `resolve_bare` 加最长前缀包匹配:先照旧试整名,再从最长点段前缀回退找包目录,
-      余段按包内文件解析(不走包 `main`,与 Node 一致)。
+- [x] **"did you mean" 建议**:Lua 5.5 错误标注 `(global 'x')` 且 `rawget(_G, x)` 为空时,
+      `luna.introspect.suggest` 用有界编辑距离给出最近 1–2 个全局名(并列报两个,
+      字典序定序),REPL 错误输出追加 `hint: did you mean 'x'?` 行。测试:repl 组 4 例。
+- [x] **Tab 补全不认 require 目标**:内置 source——`require "pre` / `require("pre` 列
+      `package.path` 各目录的包名(含子包,`base:gsub("%.","/")`)与 `package.loaded`
+      已加载名 + preload 键;点号续配走已加载表字段;合并时全局去重
+      (`complete.line` 的 `seen`)。测试:complete 组 6 例。
+- [x] **luna_modules 包内子模块**:`resolve_bare` 加最长前缀回退(`package_subpath`):
+      每层先整名(package_entry → flat → 无),再试 `<前缀>/余段.lua` 与
+      `<前缀>/余段/init.lua`;子路径不走路由包 `main`,`return load_entry(sub)` 尾调用
+      保持 loader+path 双值(Lua 5.5 的 require 新加载返回双值)。测试:modules 组 3 例。
 
 ## P3 标准库与打磨
 
-- [ ] **fs 便捷层补齐**:`appendFileSync` / `readdirSync`(排除 `.`/`..`)/
-      `mkdirSync(recursive)`(mkdir -p 语义),Node 命名,保持薄层 + 测试 + 文档。
-- [ ] **`%hist` 打磨**:支持范围参数(`%hist 2-5`);遍历改 `ipairs` 保证顺序稳定。
-- [ ] **文档站同步**:cli-repl(In 寄存器、did-you-mean、%plugins 遮蔽行)、
-      modules(子模块解析规则、fs 新便捷层)。
-- [ ] **覆盖率**:每个新特性必须带测试(新增分支全覆盖);每组改动后 ctest 全组绿。
+- [x] **fs 便捷层补齐**:`appendFileSync`(创建即追加)/ `readdirSync`(排序、排除
+      `.`/`..`;不可读目录由 lfs 自己 raise——vendored lfs 的 dir 工厂对 opendir 失败
+      走 luaL_error,不返回 nil,故不加死守卫)/ `mkdirSync(recursive)`(mkdir -p 语义:
+      递归建父、已存在幂等、非递归撞目录报 `already exists`)。测试:modules 组 2 例
+      (roundtrip + 排序/错误路径)。
+- [x] **`%hist` 打磨**:`%hist N` / `%hist N-M` 范围参数。测试:magic 组范围例。
+- [x] **文档站同步**:cli-repl(In/Out 寄存器、打错字提示、require 补全、%time 语句、
+      %hist 范围、%plugins 遮蔽段、%reset 语义)、modules(包内子路径规则、fs 新便捷层、
+      Lua 5.5 require 双返回值注记)。
+- [x] **覆盖率**:每个新特性/新分支都有对应用例(repl 21、magic 14、complete 21、
+      modules 18);每组改动 `cmake --build` + `ctest` 12 组全绿后才提交。
 
 ## 明确不做(本轮)
 

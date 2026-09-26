@@ -69,8 +69,11 @@
       `require json`——候选是插入文本,replxx 却按自己的断词字符抹掉整段上下文。
       修复:`complete.line` 增加第二返回值 `replace_span`(Lua 侧算出该改写的尾段),
       桥把它写进 `*context_len`,仅当是整数且 `0 <= span <= strlen(input)` 才采纳,
-      否则回落 replxx 自己推导的上下文;同时把 `.`/`:` 移出断词字符集,让点号链
-      不被 replxx 拆开。
+      否则回落 replxx 自己推导的上下文。断词字符集本身不动
+      (` \t\r\n,:()[]{}`:点号与引号本就不在其中,点号链因此不被拆;
+      冒号保留,给不报 span 的源兜底出只含方法名的上下文)。
+      【审核更正 2026-09-26:原记"把 `.`/`:` 移出断词字符集"与代码不符,
+      该集合此次并未改动——起作用的是显式 span。】
 - [x] **`lline_set_highlighter(nil)` 的 NULL 解引用**:清空高亮钩子在任何 read
       之前调用时 `g_rx` 还是 NULL,`replxx_set_highlighter_callback(g_rx, …)` 会砸;
       改为先 `ensure_rx(L)`。

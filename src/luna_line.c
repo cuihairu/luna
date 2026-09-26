@@ -189,11 +189,12 @@ static int lline_set_completion(lua_State *L)
     lua_pushvalue(L, 1);
     g_completion_ref = luaL_ref(L, LUA_REGISTRYINDEX);
     replxx_set_completion_callback(g_rx, luna_completion_cb, NULL);
-    /* Where a candidate may not cross: whitespace, the brackets and
-     * quotes around a call or an index. Dotted chains are NOT breaks
-     * here — '.'/':' stay inside the word so replxx keeps the context
-     * whole, and the Lua side's reported span picks the segment to
-     * rewrite (string.fo -> <string.fo>|format). */
+    /* Where replxx's own fallback context may not cross: whitespace,
+     * the comma/colon and the brackets around a call or an index. Dots
+     * and quotes are NOT breaks — a dotted chain or a quoted require
+     * target keeps its context whole — while ':' stays a break so a
+     * source that reports no span still rewrites only the method name.
+     * When the hook does report a span (the usual case), it wins. */
     replxx_set_word_break_characters(g_rx, " \t\r\n,:()[]{}");
     return 0;
 }

@@ -169,7 +169,7 @@ static void test_complete_after_colon(void **state)
 
 static void test_complete_stdlib_field(void **state)
 {
-    (state);
+    (void)state;
     char buf[256];
     completions("string.fo", buf, sizeof(buf));
     assert_non_null(strstr(buf, "format"));

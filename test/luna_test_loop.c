@@ -1908,8 +1908,617 @@ static void test_http_bad_url_throws(void **state)
         "local http = require('loop.http')\n"
         "local a = not pcall(function() http.get('notaurl', function() end) end)\n"
         "local b = not pcall(function() http.get('http://127.0.0.1:1/x') end)\n"
-        "return tostring(a) .. ',' .. tostring(b)"),
-        "true,true");
+        "local c = not pcall(function() http.get(123, function() end) end)\n"
+        "local d = not pcall(function()"
+        " http.get('http:///nohost', function() end) end)\n"
+        "return tostring(a) .. ',' .. tostring(b) .. ','\n"
+        "    .. tostring(c) .. ',' .. tostring(d)"),
+        "true,true,true,true");
+}
+
+/* -- http corners: framing edges, redirect shapes, error surfaces ------ */
+
+static void test_http_bare_url_defaults_the_path(void **state)
+{
+    (void)state;
+    /* a url with no path asks for "/", and a non-default port joins
+     * the Host header; the whole-request timer is set and must be
+     * cleared by the clean delivery, or the loop would not drain */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      local line = chunk:match('^(%S+ %S+ %S+)')\n"
+        "      local host = chunk:match('Host: (%S+)')\n"
+        "      local body = line .. '|' .. host\n"
+        "      c:write('HTTP/1.1 200 OK\\r\\nContent-Length: ' .. #body\n"
+        "        .. '\\r\\n\\r\\n' .. body,\n"
+        "        function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "local port = srv:port()\n"
+        "http.get('http://127.0.0.1:' .. port, { timeoutMs = 5000 },\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out == ('nil,GET / HTTP/1.1|' .. '127.0.0.1:' .. port)"),
+        "true");
+}
+
+static void test_http_head_and_chunked_arrive_in_pieces(void **state)
+{
+    (void)state;
+    /* head, chunk-size line and chunk body each land in their own
+     * read: the client holds the pieces until each frame is whole */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked')\n"
+        "  loop.setTimeout(function() c:write('\\r\\n\\r\\n5') end, 20)\n"
+        "  loop.setTimeout(function() c:write('\\r\\nhe') end, 40)\n"
+        "  loop.setTimeout(function()\n"
+        "    c:write('llo\\r\\n0\\r\\n\\r\\n', function() c:close() end)\n"
+        "  end, 60)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/c',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,hello");
+}
+
+static void test_http_chunk_body_split_across_reads(void **state)
+{
+    (void)state;
+    /* the chunk-size line arrives with only part of its body: the
+     * decoder must hold the fragment and wait for the rest */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked"
+        "\\r\\n\\r\\n5\\r\\nhe')\n"
+        "  loop.setTimeout(function()\n"
+        "    c:write('llo\\r\\n0\\r\\n\\r\\n', function() c:close() end)\n"
+        "  end, 60)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/s',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,hello");
+}
+
+static void test_http_body_split_across_reads(void **state)
+{
+    (void)state;
+    /* a content-length body split behind its head: the second chunk
+     * flows through the post-head body path */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\n\\r\\na')\n"
+        "  loop.setTimeout(function()\n"
+        "    c:write('bc', function() c:close() end) end, 20)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/s',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,abc");
+}
+
+static void test_http_bad_chunk_size_is_an_error(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked"
+        "\\r\\n\\r\\nzz\\r\\n', function() c:close() end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/z',\n"
+        "  function(err)\n"
+        "    out = tostring(err)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "loop.http: bad chunk size");
+}
+
+static void test_http_malformed_head_is_an_error(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('NOT HTTP AT ALL\\r\\n\\r\\n', function() c:close() end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/m',\n"
+        "  function(err)\n"
+        "    out = tostring(err)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "loop.http: malformed response head");
+}
+
+static void test_http_duplicate_response_headers_join(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nX-Dup: a\\r\\nX-Dup: b"
+        "\\r\\nContent-Length: 0\\r\\n\\r\\n', function() c:close() end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/d',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.headers['x-dup'])\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,a, b");
+}
+
+static void test_http_redirect_location_shapes(void **state)
+{
+    (void)state;
+    /* absolute, //host/path and ../-collapsing relative Locations all
+     * resolve; one that cannot parse ends the chain with its error */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then c:close() return end\n"
+        "    local p = chunk:match('^%S+ (%S+) HTTP')\n"
+        "    local port = srv:port()\n"
+        "    local body = false\n"
+        "    if p == '/abs' then\n"
+        "      body = 'HTTP/1.1 302 Found\\r\\nLocation: http://127.0.0.1:'\n"
+        "          .. port .. '/dst\\r\\nContent-Length: 0\\r\\n\\r\\n'\n"
+        "    elseif p == '/slashes' then\n"
+        "      body = 'HTTP/1.1 302 Found\\r\\nLocation: //127.0.0.1:'\n"
+        "          .. port .. '/dst\\r\\nContent-Length: 0\\r\\n\\r\\n'\n"
+        "    elseif p == '/a/b/up' then\n"
+        "      body = 'HTTP/1.1 302 Found\\r\\nLocation: ../dst"
+        "\\r\\nContent-Length: 0\\r\\n\\r\\n'\n"
+        "    elseif p == '/a/dst' then\n"
+        "      body = 'HTTP/1.1 200 OK\\r\\nContent-Length: 4\\r\\n\\r\\nDEEP'\n"
+        "    elseif p == '/dst' then\n"
+        "      body = 'HTTP/1.1 200 OK\\r\\nContent-Length: 4\\r\\n\\r\\nHERE'\n"
+        "    elseif p == '/bad' then\n"
+        "      body = 'HTTP/1.1 302 Found\\r\\nLocation: http://"
+        "\\r\\nContent-Length: 0\\r\\n\\r\\n'\n"
+        "    end\n"
+        "    if body then c:write(body, function() c:close() end) end\n"
+        "  end)\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.get(base .. '/abs', function(e1, r1)\n"
+        "  out = out .. tostring(r1 and r1.body) .. ','\n"
+        "  http.get(base .. '/slashes', function(e2, r2)\n"
+        "    out = out .. tostring(r2 and r2.body) .. ','\n"
+        "    http.get(base .. '/a/b/up', function(e3, r3)\n"
+        "      out = out .. tostring(r3 and r3.body) .. ','\n"
+        "      http.get(base .. '/bad', function(e4)\n"
+        "        out = out .. tostring(e4 == nil and 'ERR?' or 'ERR')\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "HERE,HERE,DEEP,ERR");
+}
+
+static void test_http_204_head_is_the_whole_response(void **state)
+{
+    (void)state;
+    /* bodiless by definition: the head lands and the request is done */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 204 No Content\\r\\nX-Keep: 1\\r\\n\\r\\n',\n"
+        "    function() c:close() end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/n',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.status) .. ','\n"
+        "        .. tostring(res and res.body) .. ','\n"
+        "        .. tostring(res and res.headers['x-keep'])\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,204,,1");
+}
+
+static void test_http_onhead_may_raise(void **state)
+{
+    (void)state;
+    /* an observer that raises turns into the request's error */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok',\n"
+        "    function() c:close() end)\n"
+        "end)\n"
+        "http.request({ url = 'http://127.0.0.1:' .. srv:port() .. '/h',\n"
+        "  onHead = function() error('oh') end },\n"
+        "  function(err)\n"
+        "    out = tostring(tostring(err):find('oh', 1, true) ~= nil)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_stream_chunked_hands_one_piece(void **state)
+{
+    (void)state;
+    /* chunked + onData: the decoded body flows through the observer
+     * in one piece and res.body comes back empty */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked"
+        "\\r\\n\\r\\n3\\r\\nabc\\r\\n0\\r\\n\\r\\n',\n"
+        "    function() c:close() end)\n"
+        "end)\n"
+        "http.request({ url = 'http://127.0.0.1:' .. srv:port() .. '/k',\n"
+        "  onData = function(c) got = c end },\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(got) .. ','\n"
+        "        .. tostring(res and res.body == '')\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,abc,true");
+}
+
+static void test_http_stream_ondata_may_raise_chunked(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nTransfer-Encoding: chunked"
+        "\\r\\n\\r\\n3\\r\\nabc\\r\\n0\\r\\n\\r\\n',\n"
+        "    function() c:close() end)\n"
+        "end)\n"
+        "http.request({ url = 'http://127.0.0.1:' .. srv:port() .. '/k',\n"
+        "  onData = function() error('cbboom') end },\n"
+        "  function(err)\n"
+        "    out = tostring(tostring(err):find('cbboom', 1, true) ~= nil)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_stream_ondata_may_raise_content_length(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() end)\n"
+        "  c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\n\\r\\nhello',\n"
+        "    function() c:close() end)\n"
+        "end)\n"
+        "http.request({ url = 'http://127.0.0.1:' .. srv:port() .. '/l',\n"
+        "  onData = function() error('clboom') end },\n"
+        "  function(err)\n"
+        "    out = tostring(tostring(err):find('clboom', 1, true) ~= nil)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_unframed_eof_body(void **state)
+{
+    (void)state;
+    /* neither content-length nor chunked: the peer's close is the end
+     * marker and everything after the head is the body */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  local buf, answered = '', false\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then c:close() return end\n"
+        "    buf = buf .. chunk\n"
+        "    if answered or not buf:find('\\r\\n\\r\\n', 1, true) then return end\n"
+        "    answered = true\n"
+        "    c:write('HTTP/1.1 200 OK\\r\\nX-Raw: 1\\r\\n\\r\\nplain-eof',\n"
+        "      function() c:close() end)\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/u',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body) .. ','\n"
+        "        .. tostring(res and res.headers['x-raw'])\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,plain-eof,1");
+}
+
+static void test_http_eof_before_head(void **state)
+{
+    (void)state;
+    /* the peer takes the request, then hangs up without answering */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  local buf = ''\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then c:close() return end\n"
+        "    buf = buf .. chunk\n"
+        "    if buf:find('\\r\\n\\r\\n', 1, true) then c:close() end\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/q',\n"
+        "  function(err)\n"
+        "    out = tostring(err)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "loop.http: connection closed before a response");
+}
+
+static void test_http_eof_mid_body(void **state)
+{
+    (void)state;
+    /* a declared length the body never reaches is an error, not a
+     * short read */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  local buf, answered = '', false\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if not chunk then c:close() return end\n"
+        "    buf = buf .. chunk\n"
+        "    if answered or not buf:find('\\r\\n\\r\\n', 1, true) then return end\n"
+        "    answered = true\n"
+        "    c:write('HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nabc',\n"
+        "      function() c:close() end)\n"
+        "  end)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/t',\n"
+        "  function(err)\n"
+        "    out = tostring(err)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "loop.http: connection closed mid-body");
+}
+
+static void test_http_reset_mid_response_surfaces_an_error(void **state)
+{
+    (void)state;
+    /* the origin closes with the request still unread, so the kernel
+     * answers with RST: whichever callback it surfaces in — the read
+     * or the in-flight write — the request ends with that error */
+    assert_string_equal(eval_string(
+        "local net, http = loop.net, require('loop.http')\n"
+        "out = 'none'\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end\n"
+        "  loop.setTimeout(function() c:close() end, 100)\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/r',\n"
+        "  function(err)\n"
+        "    out = tostring(type(err) == 'string')\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_connect_refused_is_the_error(void **state)
+{
+    (void)state;
+    /* port 1 on loopback: nothing listens there, the connect fails and
+     * the failure is the request's callback error */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "out = 'none'\n"
+        "http.get('http://127.0.0.1:1/x', function(err)\n"
+        "  out = tostring(type(err) == 'string' and #err > 0)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+/* -- the server face's corners ----------------------------------------- */
+
+static void test_http_server_res_send_is_idempotent(void **state)
+{
+    (void)state;
+    /* a second send is dropped: the first response is the wire's truth */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "out = 'none'\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send('first')\n"
+        "  res.send('second')\n"
+        "end)\n"
+        "http.get('http://127.0.0.1:' .. srv:port() .. '/i',\n"
+        "  function(err, res)\n"
+        "    out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,first");
+}
+
+static void test_http_server_client_vanishes_then_recovers(void **state)
+{
+    (void)state;
+    /* a client that hangs up before its request lands is closed out
+     * quietly; the server keeps serving the next one */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send('still here')\n"
+        "end)\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  if not e then s:close() end\n"
+        "end)\n"
+        "http.get(base .. '/after', function(err, res)\n"
+        "  out = tostring(err) .. ',' .. tostring(res and res.body)\n"
+        "  srv:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "nil,still here");
+}
+
+static void test_http_server_head_runaway_gets_400(void **state)
+{
+    (void)state;
+    /* a head that never ends grows past 64KiB: one 400 and a close */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send('unreachable')\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  local got = ''\n"
+        "  s:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      got = got .. chunk\n"
+        "    else\n"
+        "      out = tostring(got:find('400', 1, true) ~= nil)\n"
+        "      s:close()\n"
+        "      srv:close()\n"
+        "    end\n"
+        "  end)\n"
+        "  s:write(('A'):rep(70000))\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_server_dup_headers_and_slow_body(void **state)
+{
+    (void)state;
+    /* repeated request headers join with a comma, and a body split
+     * behind its content-length holds the handler until it is whole */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send('OK ' .. tostring(req.headers['x-dup']) .. ' '\n"
+        "      .. tostring(req.body))\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  local got = ''\n"
+        "  s:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      got = got .. chunk\n"
+        "    else\n"
+        "      out = tostring(got:find('OK a, b abcdef', 1, true) ~= nil)\n"
+        "      s:close()\n"
+        "      srv:close()\n"
+        "    end\n"
+        "  end)\n"
+        "  s:write('POST /slow HTTP/1.1\\r\\nHost: x\\r\\nX-Dup: a\\r\\n'\n"
+        "      .. 'X-Dup: b\\r\\nContent-Length: 6\\r\\n\\r\\nabc')\n"
+        "  loop.setTimeout(function() s:write('def') end, 30)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true");
+}
+
+static void test_http_listen_requires_a_handler(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local ok, err = pcall(function() return http.listen('127.0.0.1', 0) end)\n"
+        "return tostring(not ok) .. '|' ..\n"
+        "    tostring(tostring(err):find('handler required') ~= nil)"),
+        "true|true");
 }
 
 #ifdef LUNA_LOOP_HAVE_OPENSSL
@@ -3867,6 +4476,29 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_stream_eof_mode, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_stream_onhead_once_after_redirect, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_bare_url_defaults_the_path, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_head_and_chunked_arrive_in_pieces, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_chunk_body_split_across_reads, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_body_split_across_reads, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_bad_chunk_size_is_an_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_malformed_head_is_an_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_duplicate_response_headers_join, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_redirect_location_shapes, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_204_head_is_the_whole_response, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_onhead_may_raise, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_chunked_hands_one_piece, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_ondata_may_raise_chunked, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_stream_ondata_may_raise_content_length, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_unframed_eof_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_eof_before_head, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_eof_mid_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_reset_mid_response_surfaces_an_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_connect_refused_is_the_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_res_send_is_idempotent, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_client_vanishes_then_recovers, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_head_runaway_gets_400, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_dup_headers_and_slow_body, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_listen_requires_a_handler, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),
 #endif

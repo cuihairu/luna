@@ -203,9 +203,11 @@ static int lline_set_completion(lua_State *L)
 static int lline_set_highlighter(lua_State *L)
 {
     if (lua_isnoneornil(L, 1)) {
-        ensure_rx(L); /* clearing before any read still needs the instance */
+        /* mirror the completion clear: the replxx callback stays put —
+         * its C wrapper binds even a NULL fn into a callable and would
+         * call the null pointer on the next repaint — and the bridge's
+         * own ref guard is what silences it */
         g_highlight_ref = -1;
-        replxx_set_highlighter_callback(g_rx, NULL, NULL);
         return 0;
     }
     luaL_checktype(L, 1, LUA_TFUNCTION);

@@ -329,6 +329,18 @@ static void test_color_disabled_by_env(void **state)
     assert_null(strstr(outbuf, "\x1b["));
 }
 
+static void test_runs_without_coverage_instrumentation(void **state)
+{
+    (void)state;
+    /* LUNA_COVERAGE scrubbed from the child env: coverage_init takes
+     * its early return and coverage_shutdown the symmetric one — the
+     * session runs identically uninstrumented */
+    run_luna_env("env -u LUNA_COVERAGE", "-e '40 + 2'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "Out[1]: 42"));
+    assert_null(strstr(outbuf, "coverage"));
+}
+
 /* -- help / usage -------------------------------------------------------- */
 
 static void test_help_smoke(void **state)
@@ -368,6 +380,7 @@ int main(void)
         cmocka_unit_test(test_interactive_help_injected),
         cmocka_unit_test(test_color_forced_by_env),
         cmocka_unit_test(test_color_disabled_by_env),
+        cmocka_unit_test(test_runs_without_coverage_instrumentation),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),
     };

@@ -584,6 +584,123 @@ static void test_eof_on_fresh_prompt_exits_cleanly(void **state)
     assert_int_equal(finish_repl(pid, master, NULL), 0);
 }
 
+/* -- the linedit hooks, swapped from inside the session ------------------
+ *
+ * The REPL registers its own completion/highlighter hooks at boot, but
+ * linedit's registration face is plain API: a session can point the C
+ * side at any function — one that raises, one that returns the wrong
+ * shape, none at all. The bridge must stay quiet and keep the session
+ * alive in every case. */
+
+/* whatever the hook state, a Tab must not disturb the line being typed */
+static void commit_42_after_tab(pid_t pid, int master, const char *in_prompt,
+                                const char *out_needle)
+{
+    assert_true(expect(master, in_prompt, 5000));
+    mark_step();
+    type(master, "42\t\r");
+    assert_true(expect(master, out_needle, 5000));
+}
+
+static void test_clearing_the_completion_hook_silences_tab(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "require('linedit').set_completion(nil)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    /* the C callback stays registered but its ref is gone: Tab reaches
+     * the bridge, which sees no hook and adds no candidates */
+    commit_42_after_tab(pid, master, "In [2]", "Out[1]: 42");
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_raising_completion_hook_keeps_the_session(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master,
+         "require('linedit').set_completion(function() error('kaboom') end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    /* the hook raises on every Tab; the bridge swallows it and the
+     * session evaluates on as if nothing happened */
+    commit_42_after_tab(pid, master, "In [2]", "Out[1]: 42");
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_wrong_shape_completion_hook_keeps_the_session(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* a non-table first result is no candidate list: the bridge drops
+     * it instead of walking it */
+    type(master,
+         "require('linedit').set_completion(function() return 42 end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    commit_42_after_tab(pid, master, "In [2]", "Out[1]: 42");
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_raising_highlighter_keeps_the_session(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master,
+         "require('linedit').set_highlighter(function() error('hlboom') end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    /* every keystroke repaints through the hook; the raise is caught
+     * per repaint and the line still commits */
+    mark_step();
+    type(master, "9\r");
+    assert_true(expect(master, "Out[1]: 9", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_clearing_the_highlighter_keeps_the_session(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* no argument is the same as nil: the C callback comes off and
+     * replxx repaints with its default rendering */
+    type(master, "require('linedit').set_highlighter()\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    type(master, "7\r");
+    assert_true(expect(master, "Out[1]: 7", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_history_save_to_a_bad_path_reports(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* the failure value is what the session sees; each REPL line is its
+     * own chunk so the locals must print in the same line, and printing
+     * keeps the assert off how multi-values render as Out */
+    type(master,
+         "local a, b = require('linedit').history_save('/no-such-dir-zz/h') "
+         "print('saved:', a, b)\r");
+    assert_true(expect(master, "cannot save history file", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -604,6 +721,12 @@ int main(void)
         cmocka_unit_test(test_ctrl_c_cancels_the_line_and_keeps_the_session),
         cmocka_unit_test(test_ctrl_c_in_a_continuation_drops_the_block),
         cmocka_unit_test(test_eof_on_fresh_prompt_exits_cleanly),
+        cmocka_unit_test(test_clearing_the_completion_hook_silences_tab),
+        cmocka_unit_test(test_raising_completion_hook_keeps_the_session),
+        cmocka_unit_test(test_wrong_shape_completion_hook_keeps_the_session),
+        cmocka_unit_test(test_raising_highlighter_keeps_the_session),
+        cmocka_unit_test(test_clearing_the_highlighter_keeps_the_session),
+        cmocka_unit_test(test_history_save_to_a_bad_path_reports),
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }

@@ -350,22 +350,86 @@
   见"明确不做"。bundled 的 loop/http.lua 82.67%(65 行)历轮未专项,
   计入 Lua Total。
 
+## line/main 余量 + http.lua 专项(2026-09-26 第九轮)
+
+- [x] **luna_line.c 85% → 97.14%(gcov 口径;gcovr 诚实账 97%,140 行
+      136 执行)**:6 个新 pty 测试,全部走真实 REPL 会话从会话内
+      换 hook——清 completion 后 Tab 走桥的 ref 守卫(113)、raising
+      completion 桥静默(118-119)、坏形状(非表首返回值)丢弃
+      (124-125)、raising highlighter 每次重绘被 C 侧接住(155-156)、
+      清 highlighter(205-209)、history_save 坏路径双返回值上报
+      (289-291)。会话内访问模块要用 require('linedit')(repl 里
+      不是全局)。
+- [x] **luna_main.c 89% → 90%(123/136)**:cli 新测试 env -u
+      LUNA_COVERAGE 驱动 coverage_init(241)与 coverage_shutdown
+      (279)的未插桩早退腿——子进程环境剥掉变量后照常出
+      Out[1]: 42。
+- [x] **loop/http.lua 82.67% → 96.59%(368/381,余 13 行)**:24 个
+      新专项测试,现成 modules harness。客户端面:bare URL 补根路径、
+      head/chunk-size/chunk-body 各自成片到达(块体跨界时解码器持
+      片等待,经 60ms 分片稳定驱动,不吃环回合包的运气)、CL body
+      跨读、坏 chunk size 与非 HTTP 头报错、重复头 join、五种
+      Location 形状(绝对/协议相对/上跳 ..//深层/不可解析)、204 无
+      体即完、onHead/onData 可 raise(err 经回调上报)、流式分片
+      单片交付、无框架 EOF 体、头前 EOF、体中 EOF、连接拒绝、
+      中途 RST 仍出错误。服务端面:重复 res 幂等、客户端闪断后
+      恢复、runaway 头 400、重复请求头 join + 慢体、listen 无
+      handler 报错。
+- [x] **写测试逼出 2 处真产品 bug + 1 处测试时序余量**:
+      1. `http.lua` 重定向吞错(本轮头号发现):feed 的 redirect
+         分支先置 `st.done` 再 resolve_location,Location 不可解析
+         时 finish(nerr) 撞上 finish 自己的 done 守卫被静默——
+         请求永远挂死、回调一次不响。改为先解析、失败即 finish,
+         成功才置 done/close/递归(旧套接字迟到投递保护保留);
+      2. `luna_line.c` set_highlighter(nil) 段错误:清除腿调了
+         replxx_set_highlighter_callback(g_rx, NULL, NULL),而
+         replxx 的 C 包装对 NULL fn 也无条件 bind 成可调用体,
+         下次重绘即空调用指针。改为对齐 set_completion 的形态:
+         只清 g_highlight_ref,桥自己的 ref 守卫(151)兜底;
+      3. serve attach pty 的 %exit 窗口 10s → 30s:投递靠目标端
+         busy loop 的指令计数钩子,满载并发时 10s 内指令量不足
+         (单跑绿、两树并发各挂一次的形态即此),窗口放宽为环境
+         表征,非覆盖。
+- 余量如实:line 剩 4 行全表征——54(wake-thread teardown)、62
+  (双 init 构造不可达)、64(pipe 建立失败需 fd 耗尽)、176(尾部
+  填色需 codepoint/size 不匹配);main 剩 13 行——78(openlibs 后
+  不变量)、205-207+367(嵌入入口失败,无 CLI 形态可注)、
+  269-272+282(需套件运行中变异共享 luacov.config,flake)、
+  296-297(RLIMIT_AS 调参环境依赖)、371(luna.lua 恒
+  return finish(integer),构造不可达);http.lua 剩 13 行——74
+  (https 默认端口腿)、249/293/379/460(交叠与拆除顺序 return)、
+  473+484-488(无框架流式缓冲,死防御分支)、514(写错误腿)、
+  675(accept 错误竞态)。均不为行数写 flaky 测试。
+- [x] **实测(2026-09-26,不虚报)**:两树 cmake --build + ctest
+      **15 组全绿**(serve 30s 窗口修后两树各复跑全量一次通过)。
+      C 侧(gcovr 诚实账)总 **91% → 92%**(2475/2689,函数
+      97.5%、分支 70.0%):kernel 98%、loop 91%(2015/2208 持平)、
+      line 97%、main 90%。Lua 侧总 **92.69% → 95.54%**(1839 行
+      82 缺):http.lua 96.59%,modules/plugins/magic/highlight/
+      complete/serve 100%,introspect 99.40%、repl 98.16%、
+      luna 95.27%、rocks 77.52%。
+
 ## 下轮方向
 
-- **C 侧 luna_line.c(85%,21 行)与 luna_main.c(89%,15 行)**:
-  line 的余量集中在 tty 原始模式与 resize 腿,main 的余量是 OOM 与
-  coverage 环境腿;同款"驱动到诚实极限 + 表征余量"套路。
-- **loop/http.lua(82.67%,65 行)**:bundled HTTP 模块从未专项,
-  单测基建(modules harness)现成。
+- **Lua 侧长尾**:rocks.lua 77.52%(58 行,单文件最大缺额——先做
+  非网络腿:下载分支离线不可注入维持不做,清单/解析/路径腿可试);
+  luna.lua 95.27%(7 行,attach 竞态腿维持,socket.unix 缺席腿看
+  能否离线驱动);repl.lua 98.16%(3 行)、introspect 99.40%(1 行,
+  pairs 顺序依赖,维持前判定)。
+- **C 侧维持**:loop 91% 的 193 行余量维持既有逐函数表征(见第八
+  轮);若要再进,先评估 malloc 注入基建的成本,不为行数硬写。
 
 ## 明确不做(上一轮)
 
-- luna_loop.c 剩余 194 行——OOM 腿需 malloc 注入基建,竞态/拆除顺序
-  腿断言从宽换确定性,已逐函数表征(见上),不为行覆盖数字写会
+- luna_loop.c 剩余 193 行——OOM 腿需 malloc 注入基建,竞态/拆除顺序
+  腿断言从宽换确定性,已逐函数表征(见第八轮),不为行覆盖数字写会
   flaky 的测试;
 - rocks.lua 网络下载分支(离线不可注入)、introspect.lua:241(pairs
   顺序依赖,已用确定输出断言替代)、luna.lua attach 竞态腿(均维持
   前轮判定);
+- http.lua 剩 13 行:https 默认端口腿需真实 TLS 握手、交叠/拆除顺序
+  return 断言从宽、无框架流式缓冲是死防御分支、accept 竞态不可稳
+  定注(本轮已逐腿表征);
 - 未闭合引号跨行续行的语义修补(`s = "abc` 回车后无解)——`^C` 丢弃
   整块已可用,改语义动 `kernel.check` 契约,收益低(维持前轮判定);
 - 打 tag / 发版(硬约束禁止)。

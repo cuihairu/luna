@@ -398,6 +398,11 @@ local function run(opts, cb)
                         finish("loop.http: too many redirects")
                         return
                     end
+                    local nu, nerr = resolve_location(u, loc)
+                    if not nu then
+                        finish(nerr)
+                        return
+                    end
                     -- the old socket is dead to us from here on: mark
                     -- done so its late EOF/err can't reach the next hop
                     st.done = true
@@ -411,11 +416,6 @@ local function run(opts, cb)
                         -- rebuilds its request line from there
                         opts.method = "GET"
                         opts.body = nil
-                    end
-                    local nu, nerr = resolve_location(u, loc)
-                    if not nu then
-                        finish(nerr)
-                        return
                     end
                     attempt(nu, left - 1)
                     return

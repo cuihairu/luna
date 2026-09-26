@@ -696,9 +696,15 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
      * mode: Enter is CR) */
     assert_int_equal(write(master, "\r", 1), 1);
     assert_int_equal(pty_expect(master, wire, sizeof(wire), "42", 10000), 1);
-    /* %exit detaches the client and prints the EXIT frame's body */
+    /* %exit detaches the client and prints the EXIT frame's body. The
+     * delivery rides the target's instruction-count hook, and the
+     * target is a busy poll loop: under a loaded machine its share of
+     * CPU decides when the frame lands, so this one window is generous
+     * rather than the usual 10s. */
     assert_int_equal(write(master, "%exit\r", 6), 6);
-    PTY_EXPECT(master, wire, "detaches the client");
+    assert_int_equal(
+        pty_expect(master, wire, sizeof(wire), "detaches the client", 30000),
+        1);
 
     int status = 0;
     waited = 0;

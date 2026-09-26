@@ -4,7 +4,8 @@
 **文档承诺了但实现缺位**、**明显值得补**与**顺手打磨**三类,按优先级排序。
 约定:每完成一项必须带测试,`cmake --build` + `ctest` 全绿后才 commit/push;不打 tag、不发版。
 
-**状态:2026-09-26 上一轮全部完成**(逐组 commit 已推送,ctest 14 组全绿);行编辑桥一轮见下。
+**状态:2026-09-26 行编辑桥一轮、信号/可达性一轮全部完成**(逐组 commit 已推送,ctest
+**15 组全绿**)。
 
 ## P1 会话与魔法命令(文档承诺 vs 实现缺口)
 
@@ -90,6 +91,44 @@
       桥的失败路径也各有归属:`RLIMIT_NOFILE` 收紧逼出 pipe() 失败、
       `RLIMIT_NPROC` 收紧逼出 pthread_create 失败、唤醒线程以管道 EOF 收尾。
       剩余缺口:`luna_loop.c` 分支 51%、`luna_kernel.c` 行 83%、`luna_main.c` 行 77%。
+
+## 信号语义与可达性(2026-09-26 第三轮)
+
+- [x] **一次性模式 `^C` 的退出码与脚本不一致**:`Session:feed` 两条错误路径补第二返回值
+      `err`,`luna.exit_code_for(err)` 把 `interrupted` 映射为 **130**(128+SIGINT),
+      `run_eval` 与 `run_script` 同口径;`finish(code)` 由 `os.exit` 改为**返回**码,
+      `main` 尾部 `lua_close` 后 `return rc` 正常执行(状态真正关闭,被杀进程不写
+      `.gcda` 的老毛病从根上少一半)。`docs/guide/cli-repl.md` 的 `^C` 条目补 130 约定。
+- [x] **信号与挂载路径没有用例**:cli 组加 `run_luna_signalled` 辅助(fork+exec、stderr
+      就绪标记、可选静默、超时收割)三例:`-e` 中断 130、脚本中断 130、`--no-serve` 下长转
+      脚本中断 130(钉住计数钩子每两拍轮询的 else 侧);serve 组两例:SIGUSR1 重绘后 `^D`
+      干净退出(进程与套接字都收干净)、`luna --attach` 挂上 `busy.lua` 并在其中求值
+      (`attach> 42`)。两个夹具都**自行正常退出**收尾——否则被杀进程的 gcda 直接丢失。
+- [x] **attach 失败面无人报错**:`pcall(kernel.wake, 2147483647)`、`kernel.chmod` 坏模式/
+      不存在路径,报错都带调用名与 errno 原因(kernel 61/75/77 行);`badpoll.lua` 夹具装一个
+      必然抛错的 `__LUNA_SERVE_STEP`,计数钩子的 pcall 必须吞掉(98 行),chunk 活到 `done`。
+- [x] **错误对象与续行启发式**:repl 组 4 例——`error(setmetatable({}, {__tostring=…}))`
+      直接以 `__tostring` 为消息、`error({})` 落到 `(error object is not a string)` + traceback
+      (msghandler 248-250 行);`1 +   `(尾随空白)、`not`(裸关键字)、跨行短字符串(原始
+      换行落在引号内,走 `unfinished string` 分支而非 `<eof>`,kernel 186/197/229 行)都续行。
+      语义未改(见"明确不做":引号跨行仍无解),只是把现状钉住。
+- [x] **死代码**:`dbg_msgh`;`luna_serve_flag` + `luna_kernel_request_serve()` +
+      `k_serve_requested` 一整条无消费者的链;SIGUSR1 处理只留 `luna_line_notify_wake()`。
+- [x] **入口失败无人测**:新增 **main 组**(白盒 `#include "luna_main.c"`,`main` 改名,与
+      linedit 组同法):`run_chunk` 报 `luna: =(luna): <msg>` 并返回 1、`setup_module_paths`
+      遇到没有 `package` 表的状态走守卫。CLI 任何模式都到不了这里(每个模式各自受保护),
+      只能白盒驱动。
+- [x] **插件清单的失败原因**:dkjson 的 `json.decode` 失败是**返回** `nil, pos, err`(不抛),
+      `manifest_of` 接住它,坏 JSON 报 `plugin.json does not parse: <原因>`,清单真缺名字才报
+      `has no usable name`;新增 `noname` 夹具,两例各钉一条,坏清单不中断启动。
+- [x] **覆盖率**:`cmake --build` + `ctest` **15 组全绿**(build 与 build-cov 插桩树各跑一遍)。
+      实测(2026-09-26,gcovr;统计口径不含同日并行接入的 luacov 插桩段):C 侧 `src/` 行
+      **82%**、分支 **57%**(上轮 80.6% / 55.2%);**`luna_kernel.c` 行 98%**(189/192)、
+      分支 80%;**`luna_main.c` 行 96%**(103/107,main 组补上最后可达的 4 行);
+      `luna_loop.c` 行 79% / 分支 51%;**`luna_line.c` 仍 100%**。余量:kernel 的
+      188/274/296(全空白却解析失败、load 报错无消息、msghandler 返回非串——按构造不可达),
+      main 的 218-219/280/284(建态失败、入口失败时的 `rc=1`、入口返回非整数——防御分支),
+      以及 luna_loop 的事件循环分支(下轮方向)。
 
 ## 下轮方向
 

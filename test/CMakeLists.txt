@@ -16,6 +16,21 @@ add_executable(luna_test_repl luna_test_repl.c)
 target_link_libraries(luna_test_repl PRIVATE cmocka-static lualib lpeg luna_kernel)
 add_test(NAME repl COMMAND luna_test_repl)
 
+# Launcher internals: the last-resort reporter for a failing embedded
+# entry chunk, reached white-box (no CLI mode can produce it) — same
+# include-the-TU trick as the linedit test
+add_executable(luna_test_main luna_test_main.c)
+target_include_directories(luna_test_main PRIVATE "${CMAKE_SOURCE_DIR}/src")
+target_link_libraries(luna_test_main PRIVATE
+        cmocka-static lualib lpeg luna_line luna_kernel luna_loop
+        lfs luasocket lua_zlib)
+if(LUNA_HAVE_OPENSSL)
+    target_link_libraries(luna_test_main PRIVATE luaossl)
+    target_compile_definitions(luna_test_main PRIVATE LUNA_HAVE_OPENSSL=1)
+endif()
+set_target_properties(luna_test_main PROPERTIES LINKER_LANGUAGE CXX)
+add_test(NAME main COMMAND luna_test_main)
+
 # CLI: script / eval / interactive launch modes through the real binary
 add_executable(luna_test_cli luna_test_cli.c)
 target_link_libraries(luna_test_cli PRIVATE cmocka-static lualib luna_kernel)

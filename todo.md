@@ -166,10 +166,39 @@
   主路径;rocks 75.58% 的缺口在网络下载分支(离线环境不可注入)。剩余大头
   仍是 **`luna_loop.c` 分支**(见下轮方向)。
 
+## luna_loop.c 失败注入(2026-09-26 第五轮)
+
+- [x] **接管并行 worker 的内核修复**:上一轮 server 组测试暴露的缺陷被并行 worker
+      会话定位并修复——`server_close`/`tserver_close` 在 `uv_close` 之前就 unref
+      `closeref`,关闭回调被搁浅(注册了也永不交付)。修复:closeref 保持 pin 到句柄
+      真正关闭,由 `on_server_closed`/`on_tserver_closed` 交付并释放(NOREF 有守卫,
+      selfref 全程钉住 userdata)。两个新测试钉住契约:`server:close(cb)` 抛错被吃、
+      TLS 服务器的 onConn/close-cb 抛错被吃。
+- [x] **失败注入 27 例**(loop 组 85 → 112,普通树与覆盖率树同套用例):fs 全操作
+      错误链(11 个操作的回调首参携带失败)、readFile 读目录(EISDIR,开成功读失败
+      的中链)、fifo 的 stat.type='other'、回调抛错全家(定时器/fs/fs.watch/signal/
+      sock/dns/process,字符串与表两种错误对象)、`loop.run('bogus')` 模式校验、
+      句柄 tostring 全覆盖(timer/immediate/fswatch/sigwatch/udpsock/server/tsock)、
+      非数值主机与端口越界的 listen/udp.bind 拒绝、IPv6 回环往返(family='inet6')、
+      connect 后 run 前的 sock:read 报错、EOF 后再读(立即补发 EOF)、close 后的
+      write(回调静默不交付)、`sock:shutdown` 半关、被占路径的 listenPipe、
+      TLS 握手对纯 TCP 服务器失败、TLS 服务器丢弃纯客户端后继续服务正常 TLS 客户端、
+      kill-after-exit 抛错。worker 另修 fs.watch 测试的固定 300ms 竞速(改为事件驱动
+      判定 + 保底计时器),watch/signal 双事件断言改序无关。
+- [x] **实测(2026-09-26,不虚报)**:两树 `cmake --build` + ctest 全绿(普通树 15 组
+      ×8 轮;覆盖率树串行——见环境记录)。C 侧(gcovr):行 **85.0%**(2349/2765)、
+      函数 **91.4%**(223/244)、分支 **63.6%**(743/1168;上轮 57.3%)。
+      **`luna_loop.c` 行 84%**(1880/2220,上轮 79%),kernel 98%、line 100%。
+      Lua 侧复测 **84.25%**(1541/1829;上轮 84.14%,本轮无 Lua 层改动,波动来自
+      rocks 组本轮完整跑完)。
+- 余量如实:loop 剩余缺口集中在分配失败守卫(OOM/ENOMEM)、TLS pend-flush 内部支路
+  (Lua 面握手前拿不到 sock,pending 写不可达)、uv 同步失败支路(需内核级条件)——
+  按构造不可注入,不虚补。
+- 环境记录:机器负载 80+ 时(多会话并行编译),rocks 组的真实网络安装会撞测试内
+  150s 超时(0x7c=124,`timeout` 杀安装子进程),与代码改动无关;负载回落后同树全绿。
+
 ## 下轮方向
 
-- **`luna_loop.c` 分支**:事件循环分支 51%,多为 libuv 回调的错误/超时路径,
-  需要针对性的失败注入(打不开的文件、断开的连接)而非新特性;
 - **serve.lua 的 attach 捕获路径**:39.84% 的缺口集中在 attach 数据汇,需要
   对调度顺序不敏感的断言方式(轮询至静默而非定时快照)。
 

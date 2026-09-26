@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -61,6 +62,10 @@ static const char *eval_string(const char *code)
 static int setup_loop(void **state)
 {
     (void)state;
+    /* the binary ignores SIGPIPE (see luna_main.c) so a write to a dead
+     * peer surfaces as EPIPE; the harness bypasses main(), so it adopts
+     * that protection itself — the tls cases write to a closed conn */
+    signal(SIGPIPE, SIG_IGN);
     L = luaL_newstate();
     assert_non_null(L);
     luaL_openlibs(L); /* the cases use assert/table/tostring */
@@ -628,23 +633,22 @@ static void test_udp_send_without_callback_drains(void **state)
 static void test_fs_watch_reports_events(void **state)
 {
     (void)state;
-    /* a file written from an immediate lands in the watched directory:
+    /* A file written from an immediate lands in the watched directory:
      * the callback sees its name plus a rename/change event, and the
-     * watch keeps the loop alive until close */
+     * watch keeps the loop alive until close.
+     *
+     * The verdict is computed by the event itself, not by a fixed
+     * deadline — a 300ms window loses the race on a loaded box (the
+     * inotify event is what arrives late, not the write). The timer is
+     * only the bail-out that keeps a lost event a failure instead of a
+     * hang, and it is cleared the moment the watch has its say. */
     (void)system("rm -rf /tmp/luna-loop-fs-watch && mkdir -p /tmp/luna-loop-fs-watch");
     assert_string_equal(eval_string(
         "local fs = loop.fs\n"
         "out = 'none'\n"
         "local got = {}\n"
-        "local w\n"
-        "w = fs.watch('/tmp/luna-loop-fs-watch', function(e, name, ev)\n"
-        "  if e then out = 'ERR:' .. e return end\n"
-        "  got[#got + 1] = tostring(name) .. '|' .. ev\n"
-        "end)\n"
-        "loop.setImmediate(function()\n"
-        "  fs.writeFile('/tmp/luna-loop-fs-watch/note.txt', 'x', function() end)\n"
-        "end)\n"
-        "loop.setTimeout(function()\n"
+        "local bail\n"
+        "local function judge()\n"
         "  local ok = #got >= 1\n"
         "  for _, s in ipairs(got) do\n"
         "    local n, ev = s:match('^(.*)|(.*)$')\n"
@@ -652,9 +656,23 @@ static void test_fs_watch_reports_events(void **state)
         "      ok = false\n"
         "    end\n"
         "  end\n"
-        "  out = tostring(ok)\n"
+        "  return tostring(ok)\n"
+        "end\n"
+        "local w\n"
+        "local function finish(v)\n"
+        "  out = v\n"
         "  w:close()\n"
-        "end, 300)\n"
+        "  loop.clearTimeout(bail)\n"
+        "end\n"
+        "w = fs.watch('/tmp/luna-loop-fs-watch', function(e, name, ev)\n"
+        "  if e then finish('ERR:' .. e) return end\n"
+        "  got[#got + 1] = tostring(name) .. '|' .. ev\n"
+        "  if name == 'note.txt' then finish(judge()) end\n"
+        "end)\n"
+        "bail = loop.setTimeout(function() finish(judge()) end, 2000)\n"
+        "loop.setImmediate(function()\n"
+        "  fs.writeFile('/tmp/luna-loop-fs-watch/note.txt', 'x', function() end)\n"
+        "end)\n"
         "assert(loop.run())\n"
         "return out"), "true");
 }
@@ -2384,6 +2402,619 @@ static void test_proc_spawn_stdio_become_nil_after_exit(void **state)
         "true|nil");
 }
 
+/* -- failure injections: the libuv callback error/edge paths ---------- */
+
+static void test_run_rejects_an_unknown_mode(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local ok, err = pcall(loop.run, 'bogus')\n"
+        "return tostring(ok) .. '|' .. tostring(tostring(err):find('bad run mode') ~= nil)"),
+        "false|true");
+}
+
+static void test_timer_handles_report_tostring(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local t = loop.setTimeout(function() end, 10)\n"
+        "local i = loop.setImmediate(function() end)\n"
+        "local a = tostring(t):find('loop%.timer') ~= nil\n"
+        "local b = tostring(i):find('loop%.immediate') ~= nil\n"
+        "loop.clearTimeout(t)\n"
+        "assert(loop.run())  -- drain the closing handles\n"
+        "return tostring(a) .. ',' .. tostring(b)"),
+        "true,true");
+}
+
+static void test_throwing_timer_callback_does_not_stop_time(void **state)
+{
+    (void)state;
+    /* the first callback throws, a later one still fires: the error is
+     * reported to stderr and the run carries on */
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.setTimeout(function() error('timer boom') end, 1)\n"
+        "loop.setTimeout(function() out = 'survived' end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "survived");
+}
+
+static void test_fs_errors_report_through_the_callback(void **state)
+{
+    (void)state;
+    /* one error injection per untested op: every cb's first argument
+     * must carry the failure instead of throwing */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "log = {}\n"
+        "fs.writeFile('/no-such-dir/lx', 'y', function(e)\n"
+        "  log[1] = e ~= nil\n"
+        "  fs.appendFile('/no-such-dir/lx', 'y', function(e)\n"
+        "    log[2] = e ~= nil\n"
+        "    fs.readdir('/no-such-dir', function(e)\n"
+        "      log[3] = e ~= nil\n"
+        "      fs.mkdir('/tmp', function(e)          -- already there\n"
+        "        log[4] = e ~= nil\n"
+        "        fs.rmdir('/no-such-dir', function(e)\n"
+        "          log[5] = e ~= nil\n"
+        "          fs.unlink('/no-such-dir/lx', function(e)\n"
+        "            log[6] = e ~= nil\n"
+        "            fs.rename('/no-such-dir/a', '/no-such-dir/b', function(e)\n"
+        "              log[7] = e ~= nil\n"
+        "              fs.copyFile('/no-such-dir/a', '/tmp/luna-loop-cp', function(e)\n"
+        "                log[8] = e ~= nil\n"
+        "                fs.realpath('/no-such-dir/a', function(e)\n"
+        "                  log[9] = e ~= nil\n"
+        "                  fs.lstat('/no-such-dir/a', function(e)\n"
+        "                    log[10] = e ~= nil\n"
+        "                    fs.truncate('/no-such-dir/a', function(e)\n"
+        "                      log[11] = e ~= nil\n"
+        "                    end)\n"
+        "                  end)\n"
+        "                end)\n"
+        "              end)\n"
+        "            end)\n"
+        "          end)\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return #log == 11 and 'all-errored' or table.concat(log, ',')"),
+        "all-errored");
+}
+
+static void test_fs_read_of_a_directory_fails_mid_chain(void **state)
+{
+    (void)state;
+    /* the open succeeds, the read does not (EISDIR): exercises the
+     * read-error leg of the readFile chain, not just open errors */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.readFile('/tmp', function(e, data)\n"
+        "  out = tostring(e ~= nil) .. '|' .. tostring(data)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true|nil");
+}
+
+static void test_fs_stat_reports_other_for_a_fifo(void **state)
+{
+    (void)state;
+    const char *fifo = "/tmp/luna-loop-fifo";
+    assert_int_equal(mkfifo(fifo, 0600), 0);
+    char code[256];
+    snprintf(code, sizeof code,
+        "loop.fs.stat('%s', function(e, st)\n"
+        "  out = tostring(e) .. '|' .. tostring(st and st.type)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", fifo);
+    assert_string_equal(eval_string(code), "nil|other");
+    unlink(fifo);
+}
+
+static void test_throwing_fs_callback_does_not_stop_time(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.fs.readFile('/no-such-file', function() error('fs boom') end)\n"
+        "loop.setTimeout(function() out = 'survived' end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "survived");
+}
+
+static void test_throwing_fs_watch_callback_keeps_loop_alive(void **state)
+{
+    (void)state;
+    /* the watcher throws on its first event and closes itself inside
+     * the callback: run() returns normally, so the throw was eaten */
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "io.open('/tmp/luna-loop-watch-t.txt', 'w'):close()\n"
+        "local w\n"
+        "w = loop.fs.watch('/tmp/luna-loop-watch-t.txt', function()\n"
+        "  out = 'thrown'\n"
+        "  w:close()\n"
+        "  error('watcher boom')\n"
+        "end)\n"
+        "loop.fs.appendFile('/tmp/luna-loop-watch-t.txt', 'x', function() end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "thrown");
+}
+
+static void test_throwing_signal_callback_keeps_loop_alive(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "local w\n"
+        "w = loop.signal(loop.sig.USR2, function(num)\n"
+        "  out = 'thrown'\n"
+        "  w:close()\n"
+        "  error('signal boom')\n"
+        "end)\n"
+        "return 'armed'"),
+        "armed");
+    kill(getpid(), SIGUSR2);
+    assert_string_equal(eval_string(
+        "assert(loop.run())\n"
+        "return out"),
+        "thrown");
+}
+
+static void test_watchers_report_tostring(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "io.open('/tmp/luna-loop-watch-t.txt', 'w'):close()\n"
+        "local forms = {}\n"
+        "local w = loop.fs.watch('/tmp/luna-loop-watch-t.txt', function() end)\n"
+        "forms[1] = tostring(tostring(w):find('loop%.fswatch') ~= nil)\n"
+        "w:close()\n"
+        "local s = loop.signal(loop.sig.USR2, function() end)\n"
+        "forms[2] = tostring(tostring(s):find('loop%.sigwatch') ~= nil)\n"
+        "s:close()\n"
+        "local u = loop.udp.socket()\n"
+        "forms[3] = tostring(tostring(u):find('loop%.udpsock') ~= nil)\n"
+        "u:close()\n"
+        "assert(loop.run())  -- drain the closing handles\n"
+        "return table.concat(forms, ',')"),
+        "true,true,true");
+}
+
+static void test_sock_read_before_connect_throws(void **state)
+{
+    (void)state;
+    /* read() right after connect(), before the loop has run: the
+     * socket is neither connected nor closed yet */
+    int listener = tcp_listen_loopback();
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local sock\n"
+        "sock = net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  sock:close()\n"
+        "end)\n"
+        "local ok, err = pcall(sock.read, sock, function() end)\n"
+        "out = tostring(ok) .. '|' .. tostring(tostring(err):find('not connected') ~= nil)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "false|true");
+    close(listener);
+}
+
+static void test_sock_read_after_eof_delivers_eof_again(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  sock:write('ping', function()\n"
+        "    sock:read(function(_, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      sock:read(function(_, eof)\n"
+        "        log[2] = tostring(eof)\n"
+        "        sock:read(function(e2, eof2)  -- already at EOF\n"
+        "          log[3] = tostring(e2) .. '/' .. tostring(eof2)\n"
+        "          sock:close()\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", tcp_port_of(listener));
+    /* the second read() after EOF hands back the EOF signal at once */
+    assert_string_equal(eval_string(code), "ping,nil,nil/nil");
+    pthread_join(th, NULL);
+}
+
+static void test_write_after_close_is_silently_dropped(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  sock:write('x', function(e2) out = 'cb:' .. tostring(e2) end)\n"
+        "  sock:close()  -- the write never reports back\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "none");
+    pthread_join(th, NULL);
+}
+
+static void test_end_closes_only_the_write_half(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  sock:write('ping', function()\n"
+        "    sock:read(function(_, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      sock:shutdown(function(e2)\n"
+        "        log[2] = tostring(e2)\n"
+        "        sock:read(function(_, eof)  -- server's close: EOF\n"
+        "          log[3] = tostring(eof)\n"
+        "          sock:close()\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "ping,nil,nil");
+    pthread_join(th, NULL);
+}
+
+static void test_net_listen_pipe_on_taken_path_fails(void **state)
+{
+    (void)state;
+    const char *path = "/tmp/luna-loop-taken.sock";
+    unlink(path);
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", path);
+    assert_int_equal(bind(fd, (struct sockaddr *)&sa, sizeof sa), 0);
+    assert_int_equal(listen(fd, 1), 0);
+
+    char code[320];
+    snprintf(code, sizeof code,
+        "local ok, err = pcall(loop.net.listenPipe, '%s', function() end)\n"
+        "return tostring(ok) .. '|' .. tostring(tostring(err):find('listen failed') ~= nil)",
+        path);
+    assert_string_equal(eval_string(code), "false|true");
+    close(fd);
+    unlink(path);
+    assert_string_equal(eval_string("assert(loop.run()) return 'drained'"),
+                        "drained");
+}
+
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+static void test_tls_handshake_fails_against_a_plain_server(void **state)
+{
+    (void)state;
+    /* the echo server answers the ClientHello with the same bytes:
+     * no TLS record stream can come of that, so the handshake fails
+     * into cb(err) with no sock */
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[384];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "  function(e, sock)\n"
+        "    out = tostring(sock == nil)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "true");
+    pthread_join(th, NULL);
+}
+
+static void test_tls_server_drops_a_plain_client_and_keeps_serving(void **state)
+{
+    (void)state;
+    tls_cert_file();
+    tls_key_file();
+    char code[1400];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "local srv\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then log[1] = 'conn:' .. e return end\n"
+        "  c:read(function(_, chunk)\n"
+        "    if chunk then\n"
+        "      log[1] = 'served'\n"
+        "      c:write('pong:' .. chunk, function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, raw)\n"
+        "  if e then log[2] = 'plain:' .. tostring(e) return end\n"
+        "  raw:write('not-a-clienthello', function()\n"
+        "    raw:read(function(_, chunk)  -- dropped: never a chunk\n"
+        "      log[2] = 'plain:' .. tostring(chunk)\n"
+        "      raw:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {ca = '%s'}, function(e, s)\n"
+        "  if e then log[3] = 'tls:' .. e return end\n"
+        "  s:write('ping', function()\n"
+        "    s:read(function(_, chunk)\n"
+        "      log[3] = tostring(chunk)\n"
+        "      s:read(function(_, eof)\n"
+        "        log[4] = tostring(eof)\n"
+        "        s:close()\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')",
+        tls_cert_file(), tls_key_file(), tls_cert_file());
+    assert_string_equal(eval_string(code), "served,plain:nil,pong:ping,nil");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+#endif
+
+static void test_table_error_objects_are_also_swallowed(void **state)
+{
+    (void)state;
+    /* error(obj) instead of error(str): the reporter must fall back to
+     * lua_typename, and the run must still carry on */
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.setTimeout(function() error({code = 7}) end, 1)\n"
+        "loop.fs.readFile('/no-such-file', function() error({code = 8}) end)\n"
+        "loop.setTimeout(function() out = 'survived' end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "survived");
+}
+
+static void test_watch_and_signal_callbacks_swallow_table_errors(void **state)
+{
+    (void)state;
+    /* delivery ORDER between the fs and the signal watcher is not part
+     * of the contract (it flips under load) — collect, sort, compare */
+    assert_string_equal(eval_string(
+        "hits = {}\n"
+        "io.open('/tmp/luna-loop-watch-t.txt', 'w'):close()\n"
+        "local w\n"
+        "w = loop.fs.watch('/tmp/luna-loop-watch-t.txt', function()\n"
+        "  hits[#hits + 1] = 'watch'\n"
+        "  w:close()\n"
+        "  error({code = 9})\n"
+        "end)\n"
+        "loop.fs.appendFile('/tmp/luna-loop-watch-t.txt', 'x', function() end)\n"
+        "local s\n"
+        "s = loop.signal(loop.sig.USR2, function()\n"
+        "  hits[#hits + 1] = 'sig'\n"
+        "  s:close()\n"
+        "  error({code = 10})\n"
+        "end)\n"
+        "return 'armed'"),
+        "armed");
+    kill(getpid(), SIGUSR2);
+    assert_string_equal(eval_string(
+        "assert(loop.run())\n"
+        "table.sort(hits)\n"
+        "return table.concat(hits, '+')"),
+        "sig+watch");
+}
+
+static void test_listen_rejects_bad_hosts_and_ports(void **state)
+{
+    (void)state;
+    /* a >63-char label fails while the DNS query is built, so the host
+     * leg is deterministic even behind a capturing resolver (see
+     * test_dns_lookup_reports_failure_through_the_callback) */
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "local bad = string.rep('a', 70) .. '.invalid'\n"
+        "local a = pcall(net.listen, bad, 0, function() end)\n"
+        "local b = pcall(net.listen, '127.0.0.1', 99999, function() end)\n"
+        "local c = pcall(loop.udp.bind, bad, 0, function() end)\n"
+        "return tostring(a) .. tostring(b) .. tostring(c)"),
+        "falsefalsefalse");
+}
+
+static void test_server_tostring_and_throwing_close_cb(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listen('127.0.0.1', 0, function() end)\n"
+        "local form = tostring(tostring(srv):find('loop%.server') ~= nil)\n"
+        "srv:close(function() out = 'close-cb-threw' error('boom') end)\n"
+        "assert(loop.run())  -- drain the close\n"
+        "return form .. '|' .. out"),
+        "true|close-cb-threw");
+}
+
+static void test_ipv6_loopback_roundtrip_reports_inet6(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "log = {}\n"
+        "local srv\n"
+        "srv = net.listen('::1', 0, function(e, c)\n"
+        "  if e then log[1] = 'conn:' .. e return end\n"
+        "  c:read(function(_, chunk)\n"
+        "    if chunk then c:write(chunk, function() c:close() end) end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connect('::1', srv:port(), function(e, s)\n"
+        "  if e then log[1] = 'err:' .. e return end\n"
+        "  s:write('v6', function()\n"
+        "    s:read(function(_, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      log[2] = srv:address().family\n"
+        "      s:close()\n"
+        "      srv:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')"),
+        "v6,inet6");
+}
+
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+static void test_tls_onconn_and_close_cb_errors_are_swallowed(void **state)
+{
+    (void)state;
+    tls_cert_file();
+    tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        /* the client callback can land before the server's onConn (the
+         * tls client finishes its handshake first), so collect flags
+         * and order the report afterwards */
+        "local seen = {}\n"
+        "local srv\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then seen.onconn = 'err' return end\n"
+        "  seen.onconn = tostring(tostring(c):find('tsock') ~= nil)\n"
+        "  c:close()  -- the accepted conn is the callback's to close\n"
+        "  error('onconn boom')\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if not s then seen.client = 'err' srv:close() return end\n"
+        "    seen.client = tostring(tostring(s):find('tsock') ~= nil)\n"
+        "    s:write('x', function()\n"
+        "      s:close()\n"
+        "      srv:close(function() seen.closed = 'yes' error('cb boom') end)\n"
+        "    end)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return table.concat({tostring(seen.onconn), tostring(seen.client),"
+        " tostring(seen.closed)}, '/')\n",
+        tls_cert_file(), tls_key_file());
+    assert_string_equal(eval_string(code), "true/true/yes");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+#endif
+
+static void test_proc_kill_after_exit_throws(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local p = process.spawn('echo', {'x'}, function() end)\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "assert(loop.run())\n"
+        "local ok, err = pcall(function() return p:kill() end)\n"
+        "return tostring(ok) .. '|' .. tostring(tostring(err):find('already exited') ~= nil)"),
+        "false|true");
+}
+
+static void test_sock_throwing_callbacks_are_reported(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  sock:read(function(_, chunk)\n"
+        "    out = 'threw'\n"
+        "    sock:close()\n"
+        "    error('read boom')\n"
+        "  end)\n"
+        "  sock:write('ping')\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    /* the throw lands in the reporter; the run still drains */
+    assert_string_equal(eval_string(code), "threw");
+    pthread_join(th, NULL);
+}
+
+static void test_dns_throwing_callback_is_reported(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.dns.lookup('127.0.0.1', function() error('dns boom') end)\n"
+        "loop.setTimeout(function() out = 'survived' end, 200)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "survived");
+}
+
+static void test_process_exit_callback_may_throw(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = 'none'\n"
+        "local p = process.spawn('echo', {'x'}, function()\n"
+        "  out = 'threw'\n"
+        "  error('exit boom')\n"
+        "end)\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "loop.setTimeout(function() out = out .. '+drained' end, 300)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "threw+drained");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -2476,6 +3107,35 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_proc_spawn_stderr_is_separate, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_spawn_exit_fires_without_readers, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_spawn_stdio_become_nil_after_exit, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_run_rejects_an_unknown_mode, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_timer_handles_report_tostring, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_throwing_timer_callback_does_not_stop_time, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_errors_report_through_the_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_read_of_a_directory_fails_mid_chain, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_stat_reports_other_for_a_fifo, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_throwing_fs_callback_does_not_stop_time, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_throwing_fs_watch_callback_keeps_loop_alive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_throwing_signal_callback_keeps_loop_alive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_watchers_report_tostring, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sock_read_before_connect_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sock_read_after_eof_delivers_eof_again, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_write_after_close_is_silently_dropped, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_end_closes_only_the_write_half, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_listen_pipe_on_taken_path_fails, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_table_error_objects_are_also_swallowed, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_watch_and_signal_callbacks_swallow_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_listen_rejects_bad_hosts_and_ports, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_server_tostring_and_throwing_close_cb, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_ipv6_loopback_roundtrip_reports_inet6, setup_loop, teardown_loop),
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+        cmocka_unit_test_setup_teardown(test_tls_handshake_fails_against_a_plain_server, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_server_drops_a_plain_client_and_keeps_serving, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_onconn_and_close_cb_errors_are_swallowed, setup_loop, teardown_loop),
+#endif
+        cmocka_unit_test_setup_teardown(test_proc_kill_after_exit_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sock_throwing_callbacks_are_reported, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_throwing_callback_is_reported, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_exit_callback_may_throw, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

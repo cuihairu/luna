@@ -5,7 +5,9 @@
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <cmocka.h>
 
@@ -352,6 +354,98 @@ static void test_crypto_fails_with_guidance(void **state)
 }
 #endif
 
+/* -- round-8 corner sweep: manifest "main" extension variants, the
+ * relative init.lua convention, idempotent install, and the
+ * working-directory roots -- */
+
+static void test_install_twice_reports_already_there(void **state)
+{
+    (void)state;
+    /* the searcher is in place: a second install says so */
+    assert_false(eval_bool("return M.install()"));
+}
+
+static void test_relative_init_convention_and_miss(void **state)
+{
+    (void)state;
+    /* "./reldir" has no reldir.lua: the init.lua convention answers */
+    assert_string_equal(
+        eval_string("local _, path = M.resolve_relative('./reldir', '"
+                    FIXTURES "/myapp')\n"
+                    "return tostring(path):match('reldir/init%.lua$')"
+                    "~= nil and 'init' or 'no'"),
+        "init");
+    /* nothing at all: nil lets the searcher chain carry on */
+    assert_false(eval_bool(
+        "return M.resolve_relative('./no-such-rel-zz', '" FIXTURES
+        "/myapp') ~= nil"));
+}
+
+static void test_unloadable_entry_and_empty_name_fall_through(void **state)
+{
+    (void)state;
+    /* a manifest main that cannot even be compiled: load_entry hands
+     * back nil and the bare walk comes up empty instead of erroring */
+    assert_false(eval_bool(
+        "return M.resolve_bare('mainbad', '" FIXTURES "/myapp') ~= nil"));
+    /* an empty module name: the searcher declines it outright */
+    assert_false(eval_bool("return M.searcher('') ~= nil"));
+}
+
+static void test_manifest_main_without_lua_suffix_variants(void **state)
+{
+    (void)state;
+    /* "main": "lib" — lib.lua exists and wins */
+    assert_true(eval_bool(
+        "local loader, path = M.resolve_bare('mainfile', '" FIXTURES
+        "/myapp')\n"
+        "return path ~= nil and path:find('mainfile/lib%.lua$') ~= nil"));
+    /* "main": "sub" — no sub.lua, so sub/init.lua answers */
+    assert_true(eval_bool(
+        "local loader, path = M.resolve_bare('maindir', '" FIXTURES
+        "/myapp')\n"
+        "return path ~= nil and path:find('maindir/sub/init%.lua$') ~= nil"));
+    /* a manifest without a usable main and no init.lua: the package
+     * entry is nil and the bare walk carries on (and comes up empty) */
+    assert_false(eval_bool(
+        "return M.resolve_bare('mainvoid', '" FIXTURES "/myapp') ~= nil"));
+}
+
+static void test_relative_source_caller_absolutizes_via_lfs(void **state)
+{
+    (void)state;
+    /* loading by a RELATIVE path gives the chunk source
+     * '@relapp/main.lua'; caller_dir absolutizes it through lfs and
+     * the bare lookup finds flatmod one level up */
+    char cwd[512];
+    assert_non_null(getcwd(cwd, sizeof cwd));
+    assert_int_equal(chdir(FIXTURES), 0);
+    if (luaL_loadfilex(L, "myapp/relapp/main.lua", NULL) != LUA_OK ||
+        lua_pcall(L, 0, 1, 0) != LUA_OK) {
+        chdir(cwd);
+        fail_msg("relapp chunk failed: %s", lua_tostring(L, -1));
+    }
+    const char *r = lua_tostring(L, -1);
+    assert_string_equal(r ? r : "", "flat-ok");
+    lua_pop(L, 1);
+    assert_int_equal(chdir(cwd), 0);
+}
+
+static void test_start_dir_falls_back_without_lfs(void **state)
+{
+    (void)state;
+    /* with lfs out of the picture, a file-less caller's upward walk
+     * roots at "." and the require reports the usual not-found */
+    assert_true(eval_bool(
+        "local saved = package.loaded.lfs\n"
+        "package.loaded.lfs = nil\n"
+        "package.preload.lfs = function() error('stub: lfs away') end\n"
+        "local ok, err = pcall(require, 'no-such-mod-zz')\n"
+        "package.preload.lfs = nil\n"
+        "package.loaded.lfs = saved\n"
+        "return ok == false and tostring(err):find('no-such-mod-zz', 1, true) ~= nil"));
+}
+
 /* -- runner ---------------------------------------------------------------- */
 
 int main(void)
@@ -379,6 +473,12 @@ int main(void)
 #else
         cmocka_unit_test_setup_teardown(test_crypto_fails_with_guidance, setup_modules, teardown_modules),
 #endif
+        cmocka_unit_test_setup_teardown(test_install_twice_reports_already_there, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_relative_init_convention_and_miss, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_unloadable_entry_and_empty_name_fall_through, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_manifest_main_without_lua_suffix_variants, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_relative_source_caller_absolutizes_via_lfs, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_start_dir_falls_back_without_lfs, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

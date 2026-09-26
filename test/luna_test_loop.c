@@ -3015,6 +3015,778 @@ static void test_process_exit_callback_may_throw(void **state)
         "threw+drained");
 }
 
+/* -- round-8 dark-line sweep: whole-branch legs the suite never drove -- */
+
+/* accepts and immediately closes: hands the client an EOF with no
+ * payload, for the no-reader and close-before-EOF paths */
+static void *closer_main(void *arg)
+{
+    int listener = (int)(intptr_t)arg;
+    int c = accept(listener, NULL, NULL);
+    close(c);
+    close(listener);
+    return NULL;
+}
+
+/* dual-stack loopback listener (V6ONLY off, bound in6addr_any):
+ * 'localhost' may resolve to ::1 or 127.0.0.1 first, and both land
+ * here — a specific ::1 bind would refuse the v4-mapped family */
+static int tcp6_listen_loopback(void)
+{
+    int fd = socket(AF_INET6, SOCK_STREAM, 0);
+    struct sockaddr_in6 addr;
+    int off = 0;
+    assert_int_equal(setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY,
+                                &off, sizeof off), 0);
+    memset(&addr, 0, sizeof addr);
+    addr.sin6_family = AF_INET6;
+    addr.sin6_addr = in6addr_any;
+    addr.sin6_port = 0;
+    assert_int_equal(bind(fd, (struct sockaddr *)&addr, sizeof addr), 0);
+    assert_int_equal(listen(fd, 1), 0);
+    return fd;
+}
+
+static void test_loop_now_is_monotonic_milliseconds(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local t1 = loop.now()\n"
+        "local t2\n"
+        "loop.setTimeout(function() t2 = loop.now() end, 20)\n"
+        "assert(loop.run())\n"
+        "return tostring(type(t1) == 'number' and t2 >= t1)"), "true");
+}
+
+static void test_signal_start_failure_cleans_up_and_throws(void **state)
+{
+    (void)state;
+    /* SIGKILL cannot have a handler: uv_signal_start fails, the
+     * half-built watcher tears itself down, and the loop still drains
+     * with nothing scheduled */
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local ok, err = pcall(loop.signal, 9, function() end)\n"
+        "local drained = loop.run()\n"
+        "return tostring(ok) .. '|' ..\n"
+        "       tostring((tostring(err):find('start failed')) ~= nil) .. '|' ..\n"
+        "       tostring(drained)"), "false|true|true");
+}
+
+static void test_closed_watchers_tostring_and_double_close(void **state)
+{
+    (void)state;
+    (void)system("rm -rf /tmp/luna-loop-tostring && mkdir -p /tmp/luna-loop-tostring");
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local w = loop.fs.watch('/tmp/luna-loop-tostring', function() end)\n"
+        "local f1 = tostring(w):find('open') ~= nil\n"
+        "w:close() w:close()\n"
+        "local f2 = tostring(w):find('closed') ~= nil\n"
+        "local sig = loop.signal(15, function() end)\n"
+        "local g1 = tostring(sig):find('open') ~= nil\n"
+        "sig:close() sig:close()\n"
+        "local g2 = tostring(sig):find('closed') ~= nil\n"
+        "local u = loop.udp.socket()\n"
+        "local h1 = tostring(u):find('open') ~= nil\n"
+        "u:close() u:close()\n"
+        "local h2 = tostring(u):find('closed') ~= nil\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(f1) .. tostring(f2) .. tostring(g1) ..\n"
+        "        tostring(g2) .. tostring(h1) .. tostring(h2)\n"
+        "end, 20)\n"
+        "assert(loop.run())\n"
+        "return out"), "truetruetruetruetruetrue");
+}
+
+static void test_unref_ref_roundtrips_on_open_handles(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local u = loop.udp.bind('127.0.0.1', 0, function() end)\n"
+        "local w = loop.fs.watch('/tmp/luna-loop-tostring', function() end)\n"
+        "local sig = loop.signal(15, function() end)\n"
+        "local srv = loop.net.listen('127.0.0.1', 0, function() end)\n"
+        "u:unref() u:ref()\n"
+        "w:unref() w:ref()\n"
+        "sig:unref() sig:ref()\n"
+        "srv:unref() srv:ref()\n"
+        "u:close() w:close() sig:close() srv:close()\n"
+        "loop.setTimeout(function() out = 'ok' end, 20)\n"
+        "assert(loop.run())\n"
+        "return out"), "ok");
+}
+
+static void test_unref_ref_on_a_live_process(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = 'none'\n"
+        "local p = process.spawn('echo', {'x'}, function() out = 'exit' end)\n"
+        "p:unref() p:ref()\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "assert(loop.run())\n"
+        "return out"), "exit");
+}
+
+static void test_process_tostring_reports_state(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = 'none'\n"
+        "local p = process.spawn('echo', {'x'}, function() end)\n"
+        "local running = tostring(p):find('running') ~= nil\n"
+        "local pid = tostring(p):find('pid %d+') ~= nil\n"
+        "p:stdin():close()\n"
+        "p:stdout():close()\n"
+        "p:stderr():close()\n"
+        "assert(loop.run())\n"
+        "local done = tostring(p):find('done') ~= nil\n"
+        "return tostring(running) .. '|' .. tostring(pid) .. '|' ..\n"
+        "       tostring(done)"), "true|true|true");
+}
+
+static void test_process_spawn_missing_binary_throws_and_drains(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "local ok, err = pcall(process.spawn, '/nonexistent-luna-zz',\n"
+        "  {}, function() end)\n"
+        "local drained = loop.run()\n"
+        "return tostring(ok) .. '|' ..\n"
+        "       tostring((tostring(err):find('spawn failed')) ~= nil) .. '|' ..\n"
+        "       tostring(drained)"), "false|true|true");
+}
+
+static void test_process_run_large_stdout_grows_the_capture(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = 'none'\n"
+        "process.run('sh', {'-c', 'head -c 100000 /dev/zero'},\n"
+        "  function(e, r)\n"
+        "    if e then out = 'ERR:' .. e return end\n"
+        "    out = tostring(r.status) .. '|' .. tostring(#r.stdout)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"), "0|100000");
+}
+
+static void test_udp_corners_throw_before_any_loop_turn(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local snd = udp.socket()\n"
+        "local p1 = select(2, pcall(function() return snd:port() end))\n"
+        "local p2 = select(2, pcall(function() return snd:sockname() end))\n"
+        "local p3 = select(2, pcall(snd.send, snd, 'x', 'localhost', 99))\n"
+        "snd:close() snd:close()\n"
+        "local closed = tostring(snd):find('closed') ~= nil\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring((tostring(p1):find('getsockname')) ~= nil) .. '|' ..\n"
+        "        tostring((tostring(p2):find('getsockname')) ~= nil) .. '|' ..\n"
+        "        tostring((tostring(p3):find('numeric')) ~= nil) .. '|' ..\n"
+        "        tostring(closed)\n"
+        "end, 20)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|true|true|true");
+}
+
+static void test_udp_v6_roundtrip_reports_v6_names(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('::1', 0, function(e, data, ri)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  out = tostring(data) .. '|' .. ri.addr .. '|' ..\n"
+        "        tostring(r:port() > 0) .. '|' .. r:sockname().address\n"
+        "  snd:close() r:close()\n"
+        "end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('v6', '::1', r:port(), function(e2) assert(e2 == nil, e2) end)\n"
+        "assert(loop.run())\n"
+        "return out"), "v6|::1|true|::1");
+}
+
+static void test_udp_zero_length_datagram_delivers_empty_string(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function(e, data, ri)\n"
+        "  if e then out = 'ERR:' .. e return end\n"
+        "  out = tostring(data) .. '|' .. tostring(ri.port > 0)\n"
+        "  snd:close() r:close()\n"
+        "end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('', '127.0.0.1', r:port())\n"
+        "assert(loop.run())\n"
+        "return out"), "|true");
+}
+
+static void test_udp_send_completion_after_close_is_silent(void **state)
+{
+    (void)state;
+    /* the send callback is dropped un-commissioned when the socket
+     * closes while the datagram is still in flight; the datagram
+     * itself vanishes into the dead port */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local snd = udp.socket()\n"
+        "local r = udp.bind('127.0.0.1', 0, function() end)\n"
+        "local port = r:port()\n"
+        "r:close()               -- the target port dies first\n"
+        "snd:send('x', '127.0.0.1', port, function()\n"
+        "  out = 'sent-cb-ran'\n"
+        "end)\n"
+        "snd:close()\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'silent' end\n"
+        "end, 60)\n"
+        "assert(loop.run())\n"
+        "return out"), "silent");
+}
+
+static void test_udp_send_callback_may_raise(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function() end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', r:port(), function()\n"
+        "  out = 'threw'\n"
+        "  snd:close() r:close()\n"
+        "  error('send boom')\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' end\n"
+        "end, 300)\n"
+        "assert(loop.run())\n"
+        "return out"), "threw");
+}
+
+static void test_udp_bind_callback_may_raise(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function()\n"
+        "  out = 'threw'\n"
+        "  snd:close() r:close()\n"
+        "  error('recv boom')\n"
+        "end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', r:port())\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' end\n"
+        "end, 300)\n"
+        "assert(loop.run())\n"
+        "return out"), "threw");
+}
+
+static void test_net_shutdown_semantics_on_a_live_socket(void **state)
+{
+    (void)state;
+    /* one connection proves the whole shutdown surface: the half-close
+     * delivers cb(nil), a write after it throws, a second shutdown
+     * throws, and a cb-less shutdown still runs the machinery */
+    int lsn1 = tcp_listen_loopback();
+    int lsn2 = tcp_listen_loopback();
+    int lsn3 = tcp_listen_loopback();
+    pthread_t th1, th2, th3;
+    assert_int_equal(pthread_create(&th1, NULL, echo_main,
+                                    (void *)(intptr_t)lsn1), 0);
+    assert_int_equal(pthread_create(&th2, NULL, closer_main,
+                                    (void *)(intptr_t)lsn2), 0);
+    assert_int_equal(pthread_create(&th3, NULL, echo_main,
+                                    (void *)(intptr_t)lsn3), 0);
+    char code[1536];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = {}\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out[1] = 'conn:' .. e return end\n"
+        "  s:shutdown(function(e2) out[1] = 'shut:' .. tostring(e2) end)\n"
+        "  local okw, errw = pcall(s.write, s, 'late')\n"
+        "  out[2] = tostring(okw) .. '|' ..\n"
+        "           tostring((tostring(errw):find('write failed')) ~= nil)\n"
+        "  local oke, erre = pcall(s.shutdown, s)\n"
+        "  out[3] = tostring(oke) .. '|' ..\n"
+        "           tostring((tostring(erre):find('end failed')) ~= nil)\n"
+        "  s:read(function() s:close() end)\n"
+        "end)\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out[4] = 'conn:' .. e return end\n"
+        "  s:shutdown()               -- cb-less: machinery, no callback\n"
+        "  s:read(function() end)     -- the peer's EOF\n"
+        "  s:close() s:close()       -- double close is a no-op\n"
+        "  out[4] = 'closed-twice'\n"
+        "end)\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out[5] = 'conn:' .. e return end\n"
+        "  s:shutdown(function() out[5] = 'never' end)\n"
+        "  s:close()                  -- close before the FIN flushes\n"
+        "  out[5] = 'shut-then-close'\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(out, ',', 1, 5)",
+        tcp_port_of(lsn1), tcp_port_of(lsn2), tcp_port_of(lsn3));
+    assert_string_equal(eval_string(code),
+                        "shut:nil,false|true,false|true,closed-twice,shut-then-close");
+    pthread_join(th1, NULL);
+    pthread_join(th2, NULL);
+    pthread_join(th3, NULL);
+}
+
+static void test_net_connect_hostname_via_resolver(void **state)
+{
+    (void)state;
+    /* 'localhost' may resolve to ::1 or 127.0.0.1 first; the dual-stack
+     * listener accepts either, so the getaddrinfo path is deterministic */
+    int listener = tcp6_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[384];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "net.connect('localhost', %d, function(e, s)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  s:write('resolved', function()\n"
+        "    s:read(function(_, chunk)\n"
+        "      out = tostring(chunk)\n"
+        "      s:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "resolved");
+    pthread_join(th, NULL);
+}
+
+static void test_net_connect_closed_before_it_completes(void **state)
+{
+    (void)state;
+    /* closing the sock while the dial is still in flight must keep the
+     * callback silent — for both the resolver path and the direct dial */
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    close(fd);
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local fired = false\n"
+        "local a = net.connect('127.0.0.1', 1, function() fired = true end)\n"
+        "a:close()\n"
+        "local b = net.connect('localhost', 1, function() fired = true end)\n"
+        "b:close()\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(fired == false) .. '|drained'\n"
+        "end, 80)\n"
+        "assert(loop.run())\n"
+        "return out"), "true|drained");
+}
+
+static void test_net_eof_paths_without_readers(void **state)
+{
+    (void)state;
+    int lsn1 = tcp_listen_loopback();
+    int lsn2 = tcp_listen_loopback();
+    pthread_t th1, th2;
+    assert_int_equal(pthread_create(&th1, NULL, closer_main,
+                                    (void *)(intptr_t)lsn1), 0);
+    assert_int_equal(pthread_create(&th2, NULL, closer_main,
+                                    (void *)(intptr_t)lsn2), 0);
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local a\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  a = s   -- no read callback: the EOF lands unobserved\n"
+        "end)\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out = 'conn2:' .. e return end\n"
+        "  s:close()   -- close before the peer's FIN arrives\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  if a then a:close() end   -- the peer already EOF'd us\n"
+        "  out = 'eof-quiet'\n"
+        "end, 80)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(lsn1), tcp_port_of(lsn2));
+    assert_string_equal(eval_string(code), "eof-quiet");
+    pthread_join(th1, NULL);
+    pthread_join(th2, NULL);
+}
+
+static void test_server_conn_callback_may_raise(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  c:close()\n"
+        "  error('accept boom')\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  if e then out = 'dial:' .. e return end\n"
+        "  s:close()\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  srv:close() srv:close()   -- double close is a no-op\n"
+        "  if out == 'none' then out = 'survived' end\n"
+        "end, 80)\n"
+        "assert(loop.run())\n"
+        "return out"), "survived");
+}
+
+static void test_fs_write_enospc_reports_through_the_callback(void **state)
+{
+    (void)state;
+    /* /dev/full accepts opens and fails every write with ENOSPC: the
+     * failure rides back through cb(err), not a throw */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "local n = 0\n"
+        "local function done(e)\n"
+        "  n = n + 1\n"
+        "  if e == nil or (tostring(e):find('space') == nil and\n"
+        "                  tostring(e):find('ENOSPC') == nil) then\n"
+        "    out = 'WRONG:' .. tostring(e)\n"
+        "    return\n"
+        "  end\n"
+        "  if n == 2 then out = 'enospc-x2' end\n"
+        "end\n"
+        "fs.writeFile('/dev/full', 'x', done)\n"
+        "fs.appendFile('/dev/full', 'y', done)\n"
+        "assert(loop.run())\n"
+        "return out"), "enospc-x2");
+}
+
+static void test_broken_attach_step_never_stops_time(void **state)
+{
+    (void)state;
+    /* __LUNA_SERVE_STEP exists but is broken: the prepare hook reports
+     * and moves on, and the run still drains to a natural return */
+    assert_string_equal(eval_string(
+        "__LUNA_SERVE_STEP = function() error('attach boom') end\n"
+        "out = 'none'\n"
+        "loop.setTimeout(function() out = 'survived' end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"), "survived");
+}
+
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+
+/* -- round-8 TLS sweep: the tsock/tserver legs the suite never drove -- */
+
+static void test_tls_listener_coordinates_then_closed_throws(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if c then c:close() end\n"
+        "end)\n"
+        "local form1 = tostring(srv):find('tserver') ~= nil\n"
+        "local port = srv:port()\n"
+        "local addr = srv:address()\n"
+        "srv:close(function() end)\n"
+        "srv:close(function() end)   -- second pin releases the first\n"
+        "local ok1, e1 = pcall(function() return srv:port() end)\n"
+        "local ok2, e2 = pcall(function() return srv:address() end)\n"
+        "local form2 = tostring(srv):find('closed') ~= nil\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(form1) .. '|' .. tostring(port > 0) .. '|' ..\n"
+        "        addr.address .. '|' .. addr.family .. '|' ..\n"
+        "        tostring((tostring(e1):find('closed')) ~= nil) .. '|' ..\n"
+        "        tostring((tostring(e2):find('closed')) ~= nil) .. '|' ..\n"
+        "        tostring(form2)\n"
+        "end, 20)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    assert_string_equal(eval_string(code),
+                        "true|true|127.0.0.1|inet|true|true|true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_listen_rejects_bad_hosts_and_taken_ports(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local ok1, e1 = pcall(net.listenTls, 'bogus-host-zz', 0,\n"
+        "  {cert = '%s', key = '%s'}, function() end)\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'}, function(e, c)\n"
+        "    if c then c:close() end\n"
+        "  end)\n"
+        "local ok2, e2 = pcall(net.listenTls, '127.0.0.1', srv:port(),\n"
+        "  {cert = '%s', key = '%s'}, function() end)\n"
+        "srv:close()\n"
+        "loop.setTimeout(function()\n"
+        "  out = tostring(ok1 == false) .. '|' ..\n"
+        "        tostring((tostring(e1):find('bind')) ~= nil) .. '|' ..\n"
+        "        tostring(ok2 == false) .. '|' ..\n"
+        "        tostring((tostring(e2):find('listen failed')) ~= nil)\n"
+        "end, 20)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key, cert, key, cert, key);
+    assert_string_equal(eval_string(code), "true|true|true|true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_client_rejects_a_broken_ca_file(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "local ok, err = pcall(net.connectTls, '127.0.0.1', 443,\n"
+        "  {ca = '/nonexistent-luna-zz.pem'}, function() end)\n"
+        "local drained = loop.run()\n"
+        "return tostring(ok) .. '|' ..\n"
+        "       tostring((tostring(err):find('CA file')) ~= nil) .. '|' ..\n"
+        "       tostring(drained)"), "false|true|true");
+}
+
+static void test_tls_client_dials_by_hostname(void **state)
+{
+    (void)state;
+    /* the dial goes through the async resolver ('localhost'); insecure
+     * keeps the handshake deterministic — the baked-in cert carries an
+     * IP SAN, not a localhost DNS name */
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1152];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then log[1] = 'conn:' .. e return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('pong:' .. chunk, function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connectTls('localhost', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then log[1] = 'connect:' .. e return end\n"
+        "    s:write('ping', function(e3)\n"
+        "      if e3 then log[1] = 'write:' .. e3 return end\n"
+        "      s:read(function(e4, chunk)\n"
+        "        log[1] = tostring(chunk)\n"
+        "        s:read(function(e5, eof)\n"
+        "          log[2] = tostring(eof)\n"
+        "          s:close()\n"
+        "          srv:close()\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key);
+    assert_string_equal(eval_string(code), "pong:ping,nil");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_client_closed_before_resolution_answers(void **state)
+{
+    (void)state;
+    /* closing while the resolver is still working answers the connect
+     * callback with 'closed before handshake' at once, then the late
+     * resolution lands on the closed tsock and is dropped quietly
+     * (the half-built sock finishes inline — no poll existed) */
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local t = net.connectTls('localhost', 443, function(e)\n"
+        "  out = tostring(e)\n"
+        "end)\n"
+        "t:close()\n"
+        "assert(out:find('closed before handshake') ~= nil)\n"
+        "loop.setTimeout(function() out = out .. '|drained' end, 60)\n"
+        "assert(loop.run())\n"
+        "return out"), "tls: closed before handshake|drained");
+}
+
+static void test_tls_read_swap_and_tostring(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1408];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('pong:' .. chunk, function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then log[1] = 'connect:' .. e return end\n"
+        "    local f1 = tostring(s):find('tsock') ~= nil\n"
+        "    s:read(function() end)\n"
+        "    s:read(function(e2, chunk)   -- swap: the first cb is dropped\n"
+        "      log[1] = tostring(chunk)\n"
+        "      s:write('ack', function()\n"
+        "        local f2 = tostring(s):find('open') ~= nil\n"
+        "        s:close()\n"
+        "        local f3 = tostring(s):find('closed') ~= nil\n"
+        "        log[2] = tostring(f1) .. tostring(f2) .. tostring(f3)\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "    s:write('ping')   -- both readers are on already\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  if #log < 2 then log = {'bail'} end\n"
+        "  srv:close()\n"
+        "end, 1000)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key);
+    assert_string_equal(eval_string(code), "pong:ping,truetruetrue");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_write_callback_may_raise(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function() c:close() end)\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out = 'connect:' .. e return end\n"
+        "    s:write('x', function()\n"
+        "      out = 'threw'\n"
+        "      s:close()\n"
+        "      srv:close()\n"
+        "      error('tls write boom')\n"
+        "    end)\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' end\n"
+        "  srv:close()\n"
+        "end, 500)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    assert_string_equal(eval_string(code), "threw");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_big_write_pends_then_flushes(void **state)
+{
+    (void)state;
+    /* a payload far past the sender's socket buffer: the first write
+     * pends (SSL_write went partial), a second write throws 'in
+     * flight'; the server drains continuously and hears EOF once the
+     * fully-flushed client closes — then a close-with-callback hears
+     * the close. (Closing mid-transfer would RST the peer and the
+     * flush error is timing-dependent, so the server reads to EOF.) */
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1408];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end\n"
+        "  local function arm()   -- reads are one-shot: re-arm each chunk\n"
+        "    c:read(function(_, chunk)\n"
+        "      if chunk then arm() else c:close() srv:close() end\n"
+        "    end)\n"
+        "  end\n"
+        "  arm()\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then log[1] = 'connect:' .. e return end\n"
+        "    s:write(string.rep('x', 64000000), function(e2)\n"
+        "      log[1] = tostring(e2)\n"
+        "      s:close(function(e3) log[3] = tostring(e3) end)\n"
+        "    end)\n"
+        "    -- the first write pends (64MB outruns any socket buffer);\n"
+        "    -- on a freak kernel that takes it whole, the sock is closed\n"
+        "    -- by the callback already — either way write #2 is refused\n"
+        "    local ok, err = pcall(s.write, s, 'second')\n"
+        "    log[2] = tostring(ok) .. '|' ..\n"
+        "            tostring((tostring(err):find('in flight') or\n"
+        "                      tostring(err):find('closed')) ~= nil)\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  log[7] = 'bail'\n"
+        "  srv:close()\n"
+        "end, 8000)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key);
+    assert_string_equal(eval_string(code), "nil,false|true,nil");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+#endif  /* LUNA_LOOP_HAVE_OPENSSL */
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -3136,6 +3908,35 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_sock_throwing_callbacks_are_reported, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_throwing_callback_is_reported, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_process_exit_callback_may_throw, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_loop_now_is_monotonic_milliseconds, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_signal_start_failure_cleans_up_and_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_closed_watchers_tostring_and_double_close, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_ref_roundtrips_on_open_handles, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_ref_on_a_live_process, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_tostring_reports_state, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_spawn_missing_binary_throws_and_drains, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_run_large_stdout_grows_the_capture, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_corners_throw_before_any_loop_turn, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_v6_roundtrip_reports_v6_names, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_zero_length_datagram_delivers_empty_string, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_completion_after_close_is_silent, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_callback_may_raise, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_bind_callback_may_raise, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_shutdown_semantics_on_a_live_socket, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_connect_hostname_via_resolver, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_connect_closed_before_it_completes, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_eof_paths_without_readers, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_server_conn_callback_may_raise, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_write_enospc_reports_through_the_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_broken_attach_step_never_stops_time, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listener_coordinates_then_closed_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_rejects_bad_hosts_and_taken_ports, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_client_rejects_a_broken_ca_file, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_client_dials_by_hostname, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_client_closed_before_resolution_answers, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_read_swap_and_tostring, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_callback_may_raise, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_big_write_pends_then_flushes, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

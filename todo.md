@@ -287,20 +287,85 @@
   拆除顺序,断言从宽保确定性)。repl 98.16%、modules 87.39%、
   plugins 93.18%、rocks 75.58%(网络下载分支,离线不可注入)。
 
+## loop 长尾 / modules·plugins 边角(2026-09-26 第八轮)
+
+- [x] **luna_loop.c 84.48% → 91.16%**(gcov 口径;gcovr 诚实账 91%,
+      2208 行 2014 执行):29 个新 C 测试——21 个常规面 + 8 个 TLS 面,
+      全部真 socket/真 libuv 事件循环。常规面:loop.now 单调毫秒、
+      signal start 失败清理后抛错、关闭后 watcher 的 tostring/二次
+      close、unref/ref 往返(含活进程)、进程 tostring 状态、spawn
+      缺失二进制抛错并排水、大 stdout 增长捕获、UDP 边角先于循环
+      抛错/v6 往返/零长数据报/close 后送达静默/收发回调可抛、
+      shutdown 只关写半、按主机名经解析器 connect、完成前关闭、
+      无读者的 EOF 路径、server conn 回调可抛、fs.write ENOSPC 经
+      回调上报、坏 attach step 不停时钟。TLS 面:监听坐标与关闭后
+      操作抛错、坏 host/被占端口拒绝、坏 CA 文件、按主机名拨号
+      (insecure——证书 SAN 是 IP 非 localhost DNS)、解析完成前关闭
+      ("tls: closed before handshake" 投到 connectref)、读写回调
+      中途换法/tostring、写回调抛错不炸循环、64MB 大写强制
+      pend→flush(本机内核同步吞 32MB,64MB 才出真部分写;flush
+      CPU-bound ~1.5s,bail 定时器 8s 且落 log[7],防中途改写诊断)。
+- [x] **modules.lua 87.39% → 100.00%(111/111)、plugins.lua
+      93.18% → 100.00%(88/88)**:9 个新测试。modules——install
+      重复报 already-there、相对目录 init.lua 约定与 miss、不可加载
+      入口与空名落穿(native searcher 会接住 require(''),须直调
+      M.searcher 断言)、清单 main 的四种拼写(不带后缀→补 .lua、
+      目录→sub/init.lua、缺失→nil、坏块→报错)、lfs 在场时相对
+      caller 按源路径绝对化、lfs 缺席时 start-dir 回退照常找名。
+      plugins——"main" 不带 .lua 可加载且编译失败的入口按插件目录
+      入 failed、无 plugin.json 的目录是独立失败原因、lfs/json 双缺
+      时 discover 降级(stub-reload 出新模块实例,"json support
+      unavailable" 入 failed)。
+- [x] **写测试逼出 5 处真产品 bug + 1 处死代码**(过程即审计,均在
+      src/luna_loop.c):
+      1. `net.end()` 二次调用失败会剥掉首次 shutdown 的待完成回调
+         引用——endref 改为 shutdown 成功才提交;
+      2. `net.connectTls` 返回的是回调不是 sock(tsock_new 的
+         luaL_ref 弹出 userdata,栈顶只剩回调)——rawgeti 取回;
+      3. TLS 部分写只持余量又按余量重试,双违 OpenSSL 契约:未完成
+         的写必须同 (buf,len) 重试(违者 bad write retry),且按余量
+         长度读会越过分配(堆越读)——改为整包持有、原长重试;
+      4. 缺 SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER(缓冲自 Lua 串搬进
+         malloc)与 SSL_MODE_AUTO_RETRY(TLS 1.3 会话票让无读回调的
+         写永远 WANT_READ 卡死)——两个 mode 补齐;
+      5. tls_pump 重入:读回调在投递栈内再 :read() 无限递归炸
+         "C stack overflow"——pumping 守卫 + pump_body 拆分;
+      6. tserver_deliver_conn 死代码删除(14 行零调用者)。
+- [x] **attach_target.lua 孤儿保护**:60s os.clock() 死线 +
+      os.exit(1)——上轮两个各烧 1h14m 的挂死 fixture 进程即此漏出。
+- [x] **实测(2026-09-26,不虚报)**:两树 `cmake --build` + ctest
+      **15 组全绿**。Lua 侧总 **92.69%**(1699 行 134 缺,上轮
+      91.33%):modules、plugins 加入 magic/highlight/complete/serve
+      的 100% 行列,introspect 99.40%、repl 98.16%、luna 95.27%、
+      rocks 77.52%。C 侧(gcovr 诚实账)总 **91%**(2457/2691,函数
+      97.5%、分支 68.9%):kernel 98%、loop 91%(2208 行,上轮
+      84%)、line 85%、main 89%(121/136——比上轮账面少 2 行:main.c 本轮
+      零改动,差额落在随运行窗口波动的腿上(coverage 环境腿/REPL
+      退出码腿),以本轮可复现的全量 ctest 新账为准)。
+- 余量如实:loop 剩 194 行是明账——OOM 腿(tsock_new、connect/listen
+  的 tls 新建、luaL_newstate)、同步 getaddrinfo/socket/connect 系统
+  调用失败腿、l_tsock_write 零进展 WANT_* 腿、on_tserver_event 竞态
+  accept 腿、os.* getter 系统调用失败抛错、UDP ICMP 腿、proc/fs/
+  fs-watch 竞态腿;要么需 malloc 注入基建,要么断言依赖拆除顺序,
+  见"明确不做"。bundled 的 loop/http.lua 82.67%(65 行)历轮未专项,
+  计入 Lua Total。
+
 ## 下轮方向
 
-- **C 侧 luna_loop.c(84%,339 行)**:第五轮失败注入后的存量长尾,
-  多为错误分支组合;可按第五轮的注入套路再收一轮。
-- **modules.lua(87.39%,14 行)与 plugins.lua(93.18%,6 行)**:清单
-  解析与发现顺序的边角,单测基建现成,成本低。
+- **C 侧 luna_line.c(85%,21 行)与 luna_main.c(89%,15 行)**:
+  line 的余量集中在 tty 原始模式与 resize 腿,main 的余量是 OOM 与
+  coverage 环境腿;同款"驱动到诚实极限 + 表征余量"套路。
+- **loop/http.lua(82.67%,65 行)**:bundled HTTP 模块从未专项,
+  单测基建(modules harness)现成。
 
 ## 明确不做(上一轮)
 
-- introspect.lua:241 的行覆盖——pairs 顺序依赖,断言确定输出替代,不写
-  会 flaky 的测试;
-- luna.lua 4 行 attach 竞态恢复腿——钉住它们等于假设 socket 拆除顺序,
-  从宽断言保确定性;
-- luna_loop.c 长尾(339 行)——基建在,留给下一轮专项,不在本轮摊开;
-- 未闭合引号跨行续行的语义修补(`s = "abc` 回车后无解)——`^C` 丢弃整块已可用,改语义
-  动 `kernel.check` 契约,收益低;
+- luna_loop.c 剩余 194 行——OOM 腿需 malloc 注入基建,竞态/拆除顺序
+  腿断言从宽换确定性,已逐函数表征(见上),不为行覆盖数字写会
+  flaky 的测试;
+- rocks.lua 网络下载分支(离线不可注入)、introspect.lua:241(pairs
+  顺序依赖,已用确定输出断言替代)、luna.lua attach 竞态腿(均维持
+  前轮判定);
+- 未闭合引号跨行续行的语义修补(`s = "abc` 回车后无解)——`^C` 丢弃
+  整块已可用,改语义动 `kernel.check` 契约,收益低(维持前轮判定);
 - 打 tag / 发版(硬约束禁止)。

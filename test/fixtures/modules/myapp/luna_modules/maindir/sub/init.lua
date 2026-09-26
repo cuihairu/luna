@@ -1,0 +1,1 @@
+return 'maindir-sub-init'

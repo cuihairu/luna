@@ -212,6 +212,71 @@ static void test_plugin_registers_a_working_magic_command(void **state)
     assert_non_null(strstr(outbuf, "plug ran: hello"));
 }
 
+/* -- round-8 corner sweep: bare "main" spelling, unloadable entries,
+ * manifest-less directories, and discovery with lfs/json out -- */
+
+static void test_plugin_main_without_lua_suffix_loads(void **state)
+{
+    (void)state;
+    /* "main": "plug" gains the .lua suffix at entry_of */
+    assert_string_equal(
+        eval_string("return tostring(P.loaded['mainbare'] ~= nil)"), "true");
+    /* "main": "broken.lua" — the entry cannot even be compiled: the
+     * load error lands in failed under the plugin's directory */
+    assert_non_null(strstr(
+        eval_string("local found\n"
+                    "for k, v in pairs(P.failed) do\n"
+                    "  if k:find('mainbroken') then found = v end\n"
+                    "end\n"
+                    "return found"),
+        "mainbroken/broken.lua"));
+}
+
+static void test_plugin_dir_without_manifest_is_reported(void **state)
+{
+    (void)state;
+    /* a directory with no plugin.json at all is a failure reason of
+     * its own, never a crash */
+    assert_non_null(strstr(
+        eval_string("local found\n"
+                    "for k, v in pairs(P.failed) do\n"
+                    "  if k:find('/bare') then found = v end\n"
+                    "end\n"
+                    "return found"),
+        "no plugin.json"));
+}
+
+static void test_discover_degrades_without_lfs_and_json(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local saved_plugins = package.loaded['luna.plugins']\n"
+        "local saved_lfs = package.loaded.lfs\n"
+        "package.loaded['luna.plugins'] = nil\n"
+        "package.loaded.lfs = nil\n"
+        "package.preload.lfs = function() error('stub: lfs away') end\n"
+        "local P2 = require('luna.plugins')\n"
+        "local n = 0\n"
+        "for _ in pairs(P2.discover()) do n = n + 1 end\n"
+        "package.preload.lfs = nil\n"
+        "package.loaded.lfs = saved_lfs\n"
+        "local saved_json = package.loaded.dkjson\n"
+        "package.loaded.dkjson = nil\n"
+        "package.preload.dkjson = function() error('stub: json away') end\n"
+        "package.loaded['luna.plugins'] = nil\n"
+        "local P3 = require('luna.plugins')\n"
+        "P3.discover()\n"
+        "local cnt = 0\n"
+        "for _, v in pairs(P3.failed) do\n"
+        "  if v:find('json support unavailable', 1, true) then cnt = cnt + 1 end\n"
+        "end\n"
+        "package.preload.dkjson = nil\n"
+        "package.loaded.dkjson = saved_json\n"
+        "package.loaded['luna.plugins'] = saved_plugins\n"
+        "return tostring(n == 0) .. '/' .. tostring(cnt > 0) .. '/' ..\n"
+        "       tostring(P2 ~= P3) .. '/' .. tostring(P2 ~= P)"), "true/true/true/true");
+}
+
 /* -- runner ------------------------------------------------------------------ */
 
 int main(void)
@@ -225,6 +290,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_nameless_manifest_is_reported_by_dir, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_injected_modules_resolve_via_require, setup_plugins, teardown_plugins),
         cmocka_unit_test_setup_teardown(test_plugin_registers_a_working_magic_command, setup_plugins, teardown_plugins),
+        cmocka_unit_test_setup_teardown(test_plugin_main_without_lua_suffix_loads, setup_plugins, teardown_plugins),
+        cmocka_unit_test_setup_teardown(test_plugin_dir_without_manifest_is_reported, setup_plugins, teardown_plugins),
+        cmocka_unit_test_setup_teardown(test_discover_degrades_without_lfs_and_json, setup_plugins, teardown_plugins),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

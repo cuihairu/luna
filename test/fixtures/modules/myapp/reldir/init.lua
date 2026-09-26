@@ -1,0 +1,1 @@
+return 'reldir-init'

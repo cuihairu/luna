@@ -1543,14 +1543,16 @@ static int l_sock_end(lua_State *L)
         luaL_checktype(L, 2, LUA_TFUNCTION);
     }
     luaL_argcheck(L, s->connected && !s->closed, 1, "socket not connected");
-    s->endref = with_cb ? pin_cb(L, 2) : LUA_NOREF;
+    int endref = with_cb ? pin_cb(L, 2) : LUA_NOREF;
     s->shut.data = s;
     int rc = uv_shutdown(&s->shut, (uv_stream_t *)&s->h.tcp, on_shutdown);
     if (rc != 0) {
-        luaL_unref(L, LUA_REGISTRYINDEX, s->endref);
-        s->endref = LUA_NOREF;
+        luaL_unref(L, LUA_REGISTRYINDEX, endref);
         return luaL_error(L, "loop.net: end failed: %s", uv_strerror(rc));
     }
+    /* commit only on success: a failed (second) shutdown must not
+     * strip the pending first one's callback */
+    s->endref = endref;
     return 0;
 }
 
@@ -2616,6 +2618,8 @@ struct tsock {
     int tcp_connected;   /* the connect() probe has seen WRITABLE */
     int handshaked;
     int got_eof;
+    int pumping;         /* re-entrancy guard: cb re-armed read inside a
+                          * delivery — the running pump keeps draining */
     int is_server;       /* accepted by listenTls: SSL_accept, quiet fail */
     lua_State *L;
     int selfref;         /* registry -> userdata, dropped on close */
@@ -2628,7 +2632,7 @@ struct tsock {
     int fd;
     char host[256];      /* SNI + hostname check, copied out of Lua */
     char *pend;          /* pending write payload, owned until flushed */
-    size_t pend_len, pend_off;
+    size_t pend_len;
     uv_getaddrinfo_t ai; /* only during name resolution */
 };
 
@@ -2669,6 +2673,13 @@ static struct tsock *tsock_new(lua_State *L, int fd, SSL_CTX *ctx,
 
     t->ctx = NULL;
     t->ssl = SSL_new(ctx);
+    /* the write path buffers the payload at the first partial write and
+     * retries from the copy: tell OpenSSL the buffer may move (contents
+     * stay identical, so the retry contract holds). AUTO_RETRY keeps
+     * TLS 1.3 post-handshake messages from stalling a WRITE with
+     * WANT_READ when the app registered no read callback. */
+    SSL_set_mode(t->ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
+                             | SSL_MODE_AUTO_RETRY);
     if (!t->ssl) {
         tsock_close(t);
         return NULL;
@@ -2788,7 +2799,22 @@ static void tls_fail(struct tsock *t, const char *err)
 /* the whole state machine: handshake, then flush pending writes, then
  * drain reads — each stage may stop at WANT_READ/WANT_WRITE and wait
  * for the next poll event */
+static void tls_pump_body(struct tsock *t);
+
 static void tls_pump(struct tsock *t)
+{
+    if (t->pumping) {
+        /* a delivered callback re-armed its read (or wrote): the pump
+         * on the stack already loops over the fresh refs — recursing
+         * here would only burn C stack */
+        return;
+    }
+    t->pumping = 1;
+    tls_pump_body(t);
+    t->pumping = 0;
+}
+
+static void tls_pump_body(struct tsock *t)
 {
     char buf[16384];
 
@@ -2809,22 +2835,20 @@ static void tls_pump(struct tsock *t)
     }
 
     if (t->pend) {
-        int r = SSL_write(t->ssl, t->pend + t->pend_off,
-                          (int)(t->pend_len - t->pend_off));
-        if (r > 0) {
-            t->pend_off += (size_t)r;
-            if (t->pend_off == t->pend_len) {
-                free(t->pend);
-                t->pend = NULL;
-                tsock_deliver(t, &t->writeref, NULL, NULL, 0);
-            }
-        } else {
+        /* OpenSSL's retry contract: until a partial write completes,
+         * every SSL_write must pass the SAME (buf, len) — it remembers
+         * how far the earlier call got, so this restarts full-length */
+        int r = SSL_write(t->ssl, t->pend, (int)t->pend_len);
+        if (r == (int)t->pend_len) {
+            free(t->pend);
+            t->pend = NULL;
+            tsock_deliver(t, &t->writeref, NULL, NULL, 0);
+        } else if (r < 0) {
             int e = SSL_get_error(t->ssl, r);
-            if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+            if (e != SSL_ERROR_WANT_READ && e != SSL_ERROR_WANT_WRITE) {
+                tls_fail(t, NULL);
                 return;
             }
-            tls_fail(t, NULL);
-            return;
         }
     }
 
@@ -2973,6 +2997,10 @@ static int l_net_connect_tls(lua_State *L)
     snprintf(t->host, sizeof(t->host), "%s", host);
     lua_pushvalue(L, cb_idx);
     t->connectref = luaL_ref(L, LUA_REGISTRYINDEX);
+    /* tsock_new pinned the userdata into the registry (luaL_ref pops),
+     * so the stack top is still the callback — fetch the sock back or
+     * the caller's `local s = net.connectTls(...)` binds the callback */
+    lua_rawgeti(L, LUA_REGISTRYINDEX, t->selfref);
 
     if (!insecure) {
         SSL_set1_host(t->ssl, t->host); /* hostname checked at verify */
@@ -3064,7 +3092,6 @@ static int l_tsock_write(lua_State *L)
         }
         memcpy(t->pend, data, len);
         t->pend_len = len;
-        t->pend_off = 0;
         return 0;
     }
     int r = SSL_write(t->ssl, data, (int)len);
@@ -3079,15 +3106,15 @@ static int l_tsock_write(lua_State *L)
             return 0;
         }
     }
-    /* partial or blocked: copy what is left into the pending slot */
-    int off = r > 0 ? r : 0;
+    /* partial or blocked: hold the WHOLE payload — the flush retries
+     * with the original (buf, len), so a shifted window would read
+     * past this allocation and trip OpenSSL's bad-write-retry check */
     t->pend = malloc(len ? len : 1);
     if (!t->pend) {
         return luaL_error(L, "loop.net: out of memory");
     }
-    memcpy(t->pend, data + off, len - (size_t)off);
+    memcpy(t->pend, data, len);
     t->pend_len = len;
-    t->pend_off = (size_t)off;
     tls_update_events(t);
     return 0;
 }
@@ -3262,27 +3289,6 @@ static void tserver_close(struct tserver *sv)
         uv_close((uv_handle_t *)&sv->h, on_tserver_closed);
     } else {
         on_tserver_closed((uv_handle_t *)&sv->h);
-    }
-}
-
-/* deliver a handshaken connection to the retained onConn callback */
-static void tserver_deliver_conn(struct tserver *sv, struct tsock *t)
-{
-    lua_State *L = sv->L;
-    if (sv->connref == LUA_NOREF) {
-        if (t) {
-            tsock_close(t); /* nobody is listening for peers */
-        }
-        return;
-    }
-    lua_rawgeti(L, LUA_REGISTRYINDEX, sv->connref);
-    lua_pushnil(L);
-    lua_rawgeti(L, LUA_REGISTRYINDEX, t->selfref);
-    if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-        const char *msg = lua_tostring(L, -1);
-        fprintf(stderr, "loop: tls callback error: %s\n",
-                msg ? msg : lua_typename(L, lua_type(L, -1)));
-        lua_pop(L, 1);
     }
 }
 

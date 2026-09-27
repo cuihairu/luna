@@ -25,8 +25,14 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <pthread.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -59,6 +65,119 @@ static const char *eval_string(const char *code)
     return buf;
 }
 
+/* -- resource-limit injection for the out-of-memory and EMFILE legs ----
+ * The malloc-failure branches in loop.net/fs/process are unreachable by
+ * any other stable means. t_lowermem reads our own VmSize and lowers
+ * RLIMIT_AS to "as-is + headroom", so the NEXT big allocation (a 1 GiB
+ * payload or the 2 GiB read buffer a sparse file asks for) returns NULL
+ * while the small machinery (userdata, refs, structs, the uv thread
+ * pool's existing work) keeps working. t_deny_fds lowers RLIMIT_NOFILE
+ * to "fds in use + slack", so the next socket()/open() past the budget
+ * fails EMFILE. Both are always restored in the same test, and the
+ * restore is idempotent so a leg that lands inside a loop.run() can
+ * hand the limit back from its callback. */
+static struct rlimit saved_as, saved_nofile;
+static int as_saved, nofile_saved;
+
+static long vm_size_kb(void)
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f) {
+        return -1;
+    }
+    char line[256];
+    long vm = -1;
+    while (fgets(line, sizeof line, f)) {
+        if (strncmp(line, "VmSize:", 7) == 0) {
+            sscanf(line + 7, "%ld", &vm);
+            break;
+        }
+    }
+    fclose(f);
+    return vm;
+}
+
+static int t_lowermem(lua_State *l)
+{
+    long vm = vm_size_kb();
+    struct rlimit r;
+    if (vm < 0 || getrlimit(RLIMIT_AS, &r) != 0) {
+        lua_pushboolean(l, 0);
+        return 1;
+    }
+    saved_as = r;
+    as_saved = 1;
+    /* 128 MiB of room past where we stand: plenty for the loop's own
+     * small allocs, far short of the 1 GiB+ payloads the legs aim at */
+    r.rlim_cur = (rlim_t)vm * 1024u + 128u * 1024u * 1024u;
+    if (r.rlim_cur > r.rlim_max) {
+        r.rlim_cur = r.rlim_max;
+    }
+    lua_pushboolean(l, setrlimit(RLIMIT_AS, &r) == 0);
+    return 1;
+}
+
+static int t_restoremem(lua_State *l)
+{
+    if (as_saved) {
+        setrlimit(RLIMIT_AS, &saved_as);
+    }
+    lua_pushboolean(l, 1);
+    return 1;
+}
+
+static int fd_in_use(void)
+{
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) {
+        return -1;
+    }
+    int n = 0;
+    while (readdir(d) != NULL) {
+        n++;
+    }
+    closedir(d);
+    /* while listing: '.' + '..' + one entry per live fd INCLUDING the
+     * dirfd itself — so the true count after closedir is n - 3 */
+    return n - 3;
+}
+
+static int t_deny_fds(lua_State *l)
+{
+    lua_Integer slack = luaL_checkinteger(l, 1);
+    int used = fd_in_use();
+    struct rlimit r;
+    if (used < 0 || getrlimit(RLIMIT_NOFILE, &r) != 0) {
+        lua_pushboolean(l, 0);
+        return 1;
+    }
+    saved_nofile = r;
+    nofile_saved = 1;
+    r.rlim_cur = (rlim_t)(used + (int)slack);
+    if (r.rlim_cur > r.rlim_max) {
+        r.rlim_cur = r.rlim_max;
+    }
+    lua_pushboolean(l, setrlimit(RLIMIT_NOFILE, &r) == 0);
+    return 1;
+}
+
+static int t_allow_fds(lua_State *l)
+{
+    if (nofile_saved) {
+        setrlimit(RLIMIT_NOFILE, &saved_nofile);
+    }
+    lua_pushboolean(l, 1);
+    return 1;
+}
+
+static void expose_rlimit_helpers(void)
+{
+    lua_register(L, "t_lowermem", t_lowermem);
+    lua_register(L, "t_restoremem", t_restoremem);
+    lua_register(L, "t_deny_fds", t_deny_fds);
+    lua_register(L, "t_allow_fds", t_allow_fds);
+}
+
 static int setup_loop(void **state)
 {
     (void)state;
@@ -79,6 +198,7 @@ static int setup_loop(void **state)
         "package.path = '" LUNA_TEST_MODULES_DIR "/?.lua;"
         LUNA_TEST_MODULES_DIR "/?/init.lua;' .. package.path\n"
         "return type(require('loop.http').get)"), "function");
+    expose_rlimit_helpers();
     /* a previous case must not leave anything ticking */
     assert_string_equal(eval_string("return loop.run()"), "true");
     return 0;
@@ -87,16 +207,44 @@ static int setup_loop(void **state)
 static int teardown_loop(void **state)
 {
     (void)state;
+    /* a failing rlimit-window test longjmps past its own restore:
+     * hand both limits back here so no later case inherits a closed
+     * address space (unchecked mallocs there corrupt the heap) */
+    if (as_saved) {
+        setrlimit(RLIMIT_AS, &saved_as);
+        as_saved = 0;
+    }
+    if (nofile_saved) {
+        setrlimit(RLIMIT_NOFILE, &saved_nofile);
+        nofile_saved = 0;
+    }
     luna_cov_teardown(L);
     /* drain pending closes (uv_close finishes only when the loop turns)
      * while THIS state is still alive: a closing callback touching a
-     * freed VM from the next case's run() is heap corruption */
-    lua_getglobal(L, "loop");
-    lua_getfield(L, -1, "run");
-    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+     * freed VM from the next case's run() is heap corruption. The drain
+     * is bounded: a case that dies leaving an OPEN handle (the error
+     * leg of a connect that forgot its listener close) would block an
+     * unguarded run() forever. The cap rides __LUNA_SERVE_STEP — the
+     * prepare hook luna_loop runs per iteration — so a clean teardown
+     * pays nothing (run() returns on its own) while a leak gets 2s +
+     * one 100ms flush turn before uv_stop. */
+    if (luaL_dostring(L,
+            "local function guard(ms)\n"
+            "  local t0 = loop.now()\n"
+            "  __LUNA_SERVE_STEP = function()\n"
+            "    if loop.now() - t0 > ms then\n"
+            "      __LUNA_SERVE_STEP = nil\n"
+            "      loop.stop()\n"
+            "    end\n"
+            "  end\n"
+            "  loop.run()\n"
+            "  __LUNA_SERVE_STEP = nil\n"
+            "end\n"
+            "guard(2000)\n"
+            "guard(100)\n") != LUA_OK) {
+        fprintf(stderr, "teardown: %s\n", lua_tostring(L, -1));
         lua_pop(L, 1);
     }
-    lua_pop(L, 1);
     lua_close(L);
     L = NULL;
     return 0;
@@ -888,6 +1036,49 @@ static void test_dns_lookup_of_an_overlong_host_throws(void **state)
         "false|true");
 }
 
+/* connect()'s sibling leg: the same synchronous resolver rejection
+ * arrives through the connect CALLBACK (the sock is closed on the
+ * spot), not as a throw — dns.lookup has no callback to hand it to,
+ * connect does, and the leg must not double-free the resolver */
+static void test_connect_of_an_overlong_host_reports_through_callback(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.net.connect(string.rep('a', 300) .. '.invalid', 80,\n"
+        "  function(e, s)\n"
+        "    out = e ~= nil and 'err' or 'noerr'\n"
+        "    if s then s:close() end\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"), "err");
+}
+
+/* uv_fileno answers EBADF for closed handles rather than asserting,
+ * so port()/address() on a server whose close has COMPLETED (one
+ * settled loop turn later) report through the getsockname error arms
+ * instead of lying about a dead socket's address */
+static void test_closed_server_accessors_report_getsockname_failure(void **state)
+{
+    (void)state;
+    unlink("/tmp/luna-loop-acc.sock");
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local tcp = net.listen('127.0.0.1', 0, function() end)\n"
+        "local pipe = net.listenPipe('/tmp/luna-loop-acc.sock', function() end)\n"
+        "tcp:close() pipe:close()\n"
+        "loop.setTimeout(function()\n"
+        "  local ok1 = pcall(tcp.port, tcp)\n"
+        "  local ok2 = pcall(tcp.address, tcp)\n"
+        "  local ok3 = pcall(pipe.address, pipe)\n"
+        "  out = tostring(ok1) .. '|' .. tostring(ok2) .. '|' .. tostring(ok3)\n"
+        "end, 50)\n"
+        "assert(loop.run())\n"
+        "return out"), "false|false|false");
+    unlink("/tmp/luna-loop-acc.sock");
+}
+
 /* reverse only takes numeric addresses; a name throws before anything
  * is pinned or the loop starts */
 static void test_dns_reverse_of_a_non_address_throws(void **state)
@@ -1015,18 +1206,87 @@ static void test_ref_restores_keepalive(void **state)
         "return out"), "fired");
 }
 
+/* accept with the transient-error armor the suite needs: it delivers
+ * its own signals, and under load a blocking accept can return EAGAIN
+ * (spurious wake / an aborted queued connection — Linux hands pending
+ * network errors out of accept, man 2 accept says to treat them like
+ * EAGAIN) or a transient resource error. Any of these must not take
+ * the listener down while the client's connect is still on its way:
+ * a dead listener is what turns this into a client-side "connection
+ * refused". Bounded by wall clock, not spin count, so a signal storm
+ * cannot burn the budget. */
+static int accept_transient(int listener)
+{
+    time_t deadline = time(NULL) + 10;
+    for (;;) {
+        int c = accept(listener, NULL, NULL);
+        if (c >= 0) {
+            return c;
+        }
+        if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK &&
+            errno != ECONNABORTED && errno != EMFILE && errno != ENFILE &&
+            errno != ENOMEM && errno != ENOBUFS) {
+            return -1;
+        }
+        if (errno == EMFILE || errno == ENFILE || errno == ENOMEM ||
+            errno == ENOBUFS) {
+            usleep(1000);   /* resource pressure: let it drain, don't spin */
+        }
+        if (time(NULL) >= deadline) {
+            return -1;
+        }
+    }
+}
+
 /* -- net: a one-shot echo server on a real socket --------------------- */
+/* build the 1 GiB payload as the global 'big' from C, before a test
+ * spawns its listener thread. Inside the chunk the build sat between
+ * the thread spawn and the connect — under ASan string.rep of 1 GiB
+ * costs ~24 s, so the client reached the wire after the helper's
+ * bounded accept had given up, and the leg reported "connection
+ * refused" (a dead listener, self-inflicted). The chunk reads the
+ * global back when its callback fires, so seeding early is ordering-
+ * safe. */
+static void seed_big_global(void)
+{
+    lua_getglobal(L, "string");
+    lua_getfield(L, -1, "rep");
+    lua_remove(L, -2);
+    lua_pushliteral(L, "A");
+    lua_pushinteger(L, 1 << 30);
+    lua_call(L, 2, 1);
+    lua_setglobal(L, "big");
+}
+
 /* accept one connection, echo one read back, then close both ends —
  * so the client sees its chunk, then EOF */
 static void echo_serve(int listener)
 {
-    int c = accept(listener, NULL, NULL);
+    /* bounded like sink_main (SO_RCVTIMEO inherits to the accepted
+     * socket): a starved client that never connects must not wedge
+     * the test's pthread_join forever */
+    struct timeval tv = {30, 0};
+    setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    /* the suite self-delivers signals (SIGUSR2 et al) and accept can
+     * surface aborted/transient states as EAGAIN (see accept_transient):
+     * retrying keeps the listener up for the connect that is on its way */
+    int c = accept_transient(listener);
+    if (c < 0) {
+        close(listener);
+        return;
+    }
     char buf[256];
-    ssize_t n = read(c, buf, sizeof buf);
+    ssize_t n;
+    do {
+        n = read(c, buf, sizeof buf);
+    } while (n < 0 && errno == EINTR);
     if (n > 0) {
         ssize_t off = 0;
         while (off < n) {
             ssize_t w = write(c, buf + off, (size_t)(n - off));
+            if (w < 0 && errno == EINTR) {
+                continue;
+            }
             if (w <= 0) {
                 break;
             }
@@ -4102,6 +4362,329 @@ static void test_fs_write_enospc_reports_through_the_callback(void **state)
         "return out"), "enospc-x2");
 }
 
+/* -- round-11 dark-line sweep: offline-stable drives for the remaining
+ * net/udp/dns/fs/process legs: the lua_typename fallback every
+ * string-raising reporter never showed, the OOM-cleanup branches under
+ * an address-space window, the EMFILE-shaped connect failures, and the
+ * quiet bookkeeping lines (cb-less shutdown, peer-before-establish,
+ * ctl roundtrips on the handle faces). -- */
+
+static void test_net_table_errors_and_cbless_shutdown(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "local g\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then return end\n"
+        "  g = s\n"
+        "  s:unref() s:ref()            -- ctl roundtrip while live\n"
+        "  s:write('ping', function(e2) error({code = 5}) end)\n"
+        "  s:read(function(e3, chunk) error({code = 6}) end)\n"
+        "end)\n"
+        "loop.setTimeout(function() if g then g:shutdown() end end, 150)\n"
+        "loop.setTimeout(function() if g then g:close() end end, 400)\n"
+        "assert(loop.run())\n"
+        "return 'survived'", tcp_port_of(listener));
+    /* write cb (sock_deliver), read cb and the server-less shutdown all
+     * raise non-strings: each reporter must fall back to lua_typename
+     * and the run must still drain */
+    assert_string_equal(eval_string(code), "survived");
+    pthread_join(th, NULL);
+}
+
+static void test_net_connect_dns_failure_reports_through_callback(void **state)
+{
+    (void)state;
+    /* a label past the 63-char limit fails the resolver below any
+     * faux-IP proxy: on_connected's status != 0 leg must deliver the
+     * error and close the half-built socket itself */
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.net.connect(string.rep('a', 70) .. '.invalid', 80,\n"
+        "  function(e, s)\n"
+        "    out = e and 'err' or 'noerr'\n"
+        "    assert(s == nil)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"), "err");
+}
+
+static void test_server_close_and_conn_callbacks_swallow_table_errors(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  c:close()\n"
+        "  error({code = 7})\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  if s then s:close() end\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  srv:close(function() error({code = 8}) end)\n"
+        "  out = 'survived'\n"
+        "end, 200)\n"
+        "assert(loop.run())\n"
+        "return out"), "survived");
+}
+
+static void test_sock_peer_before_connect_establishes_throws(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "local s = net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  if sock then sock:close() end\n"
+        "end)\n"
+        "out = 'pending'\n"
+        "local ok, err = pcall(s.peer, s)   -- still connecting\n"
+        "assert(not ok and tostring(err):find('getpeername') ~= nil, err)\n"
+        "loop.setTimeout(function() out = 'done' end, 100)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "done");
+    pthread_join(th, NULL);
+}
+
+static void test_sock_write_oom_leg_reports_a_clean_error(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[900];
+    seed_big_global();
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'noconnect'\n"
+        "net.connect('127.0.0.1', %d, function(e, s)\n"
+        "  if e then out = 'conn:' .. e return end\n"
+        "  out = 'connected'\n"
+        "  t_lowermem()\n"
+        "  local ok, err = pcall(s.write, s, big)\n"
+        "  t_restoremem()\n"
+        "  out = out .. '|' .. tostring(ok) .. '|' ..\n"
+        "          tostring((tostring(err):find('out of memory') ~= nil))\n"
+        "  s:close()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "connected|false|true");
+    pthread_join(th, NULL);
+}
+
+static void test_udp_send_callback_swallows_table_errors(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function() end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', r:port(), function()\n"
+        "  out = 'threw'\n"
+        "  snd:close() r:close()\n"
+        "  error({code = 9})\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' snd:close() r:close() end\n"
+        "  loop.stop()\n"
+        "end, 500)\n"
+        "assert(loop.run())\n"
+        "return out"), "threw");
+}
+
+static void test_udp_recv_callback_swallows_table_errors(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local r, snd\n"
+        "r = udp.bind('127.0.0.1', 0, function(m, a, p)\n"
+        "  out = 'threw'\n"
+        "  snd:close() r:close()\n"
+        "  error({code = 10})\n"
+        "end)\n"
+        "snd = udp.socket()\n"
+        "snd:send('x', '127.0.0.1', r:port())\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' snd:close() r:close() end\n"
+        "  loop.stop()\n"
+        "end, 500)\n"
+        "assert(loop.run())\n"
+        "return out"), "threw");
+}
+
+static void test_udp_broadcast_send_is_reported(void **state)
+{
+    (void)state;
+    /* no SO_BROADCAST anywhere in the face: the kernel refuses the
+     * broadcast sendmsg with EACCES, and the refusal must surface —
+     * whether through uv_udp_send's return (throw) or the send
+     * callback's status is the kernel/libuv's choice, not ours */
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "out = 'none'\n"
+        "local s = udp.socket()\n"
+        "local ok, err = pcall(s.send, s, 'x', '255.255.255.255', 40000,\n"
+        "  function(e)\n"
+        "    out = tostring(e)\n"
+        "    s:close()\n"
+        "  end)\n"
+        "if not ok then\n"
+        "  out = tostring(err)\n"
+        "  s:close()\n"
+        "end\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' s:close() end\n"
+        "  loop.stop()\n"
+        "end, 500)\n"
+        "assert(loop.run())\n"
+        "return (tostring(out):find('permission') ~= nil) and 'denied' or out"),
+        "denied");
+}
+
+static void test_udp_send_oom_leg_reports_a_clean_error(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local udp = loop.udp\n"
+        "big = string.rep('A', 2^30)\n"
+        "local s = udp.socket()\n"
+        "t_lowermem()\n"
+        "local ok, err = pcall(s.send, s, big, '127.0.0.1', 9, function() end)\n"
+        "t_restoremem()\n"
+        "s:close()\n"
+        "assert(loop.run())\n"
+        "return tostring(ok) .. '|' ..\n"
+        "       tostring((tostring(err):find('out of memory') ~= nil))"),
+        "false|true");
+}
+
+static void test_dns_and_process_callbacks_swallow_table_errors(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = 'none'\n"
+        "loop.dns.lookup('127.0.0.1', function() error({code = 11}) end)\n"
+        "local p = process.spawn('echo', {'x'}, function()\n"
+        "  error({code = 12})\n"
+        "end)\n"
+        "p:stdin():close() p:stdout():close() p:stderr():close()\n"
+        "loop.setTimeout(function() out = 'survived' end, 400)\n"
+        "assert(loop.run())\n"
+        "return out"), "survived");
+}
+
+static void test_fs_truncate_with_negative_length_reports_einval(void **state)
+{
+    (void)state;
+    /* (size_t)-1 lands in ftruncate as a negative off_t: EINVAL after
+     * the open succeeded — the chain must fail through the callback
+     * with the file still intact */
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = 'none'\n"
+        "fs.writeFile('/tmp/luna-loop-trunc.txt', 'hello', function(e)\n"
+        "  if e then out = 'write:' .. e return end\n"
+        "  fs.truncate('/tmp/luna-loop-trunc.txt', -1, function(e2)\n"
+        "    if not e2 then out = 'noerror' return end\n"
+        "    fs.readFile('/tmp/luna-loop-trunc.txt', function(e3, d)\n"
+        "      out = tostring((tostring(e2):find('invalid') ~= nil)) ..\n"
+        "            ':' .. tostring(d)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "true:hello");
+    unlink("/tmp/luna-loop-trunc.txt");
+}
+
+static void test_fs_oom_legs_report_clean_errors(void **state)
+{
+    (void)state;
+    /* 2 GiB sparse file: the stat succeeds, but the read buffer it
+     * asks for cannot exist once the address-space window closes —
+     * the chain must close the fd and report ENOMEM through the cb */
+    int fd = open("/tmp/luna-loop-sparse.bin",
+                  O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    assert_int_not_equal(fd, -1);
+    assert_int_equal(ftruncate(fd, (off_t)2 << 30), 0);
+    assert_int_equal(close(fd), 0);
+
+    assert_string_equal(eval_string(
+        "local fs = loop.fs\n"
+        "out = {}\n"
+        "big = string.rep('A', 2^30)\n"
+        "t_lowermem()\n"
+        "local okw, ew = pcall(fs.writeFile, '/tmp/luna-loop-oom-w.txt',\n"
+        "                      big, function() end)\n"
+        "local oka, ea = pcall(fs.appendFile, '/tmp/luna-loop-oom-w.txt',\n"
+        "                      big, function() end)\n"
+        "t_restoremem()\n"
+        "out[1] = tostring(okw) .. '|' ..\n"
+        "         tostring((tostring(ew):find('out of memory') ~= nil))\n"
+        "out[2] = tostring(oka) .. '|' ..\n"
+        "         tostring((tostring(ea):find('out of memory') ~= nil))\n"
+        "t_lowermem()\n"
+        "fs.readFile('/tmp/luna-loop-sparse.bin', function(e, d)\n"
+        "  out[3] = e and ('read:' .. e) or 'read:ok'\n"
+        "  t_restoremem()          -- hand the limit back from inside\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "t_restoremem()\n"
+        "return table.concat(out, ',')"),
+        /* the write/append arms throw the module's own message; the
+         * read arm's ENOMEM rides the uv error table */
+        "false|true,false|true,read:not enough memory");
+    unlink("/tmp/luna-loop-sparse.bin");
+    unlink("/tmp/luna-loop-oom-w.txt");
+}
+
+static void test_proc_oom_cleanup_legs(void **state)
+{
+    (void)state;
+    /* four malloc-failure arms of the process face, all inside one
+     * address-space window: the huge COMMAND (argv[0] copy fails and
+     * the run cleanup frees a NULL argv), the huge ARGUMENT (partial
+     * argv freed mid-build), and the same pair through spawn — where
+     * the already-created pipes must be closed and unrefed cleanly */
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "big = string.rep('A', 2^30)\n"
+        "t_lowermem()\n"
+        "local ok1, e1 = pcall(process.run, big, {}, function() end)\n"
+        "local ok2, e2 = pcall(process.run, 'echo', {big}, function() end)\n"
+        "local ok3, e3 = pcall(process.spawn, big, {}, function() end)\n"
+        "local ok4, e4 = pcall(process.spawn, 'echo', {big}, function() end)\n"
+        "t_restoremem()\n"
+        "assert(not ok1 and not ok2 and not ok3 and not ok4)\n"
+        "assert(loop.run())\n"
+        "return tostring((tostring(e1):find('out of memory') ~= nil)) .. ',' ..\n"
+        "       tostring((tostring(e2):find('out of memory') ~= nil)) .. ',' ..\n"
+        "       tostring((tostring(e3):find('spawn failed') ~= nil)) .. ',' ..\n"
+        "       tostring((tostring(e4):find('spawn failed') ~= nil))"),
+        "true,true,true,true");
+}
+
 static void test_broken_attach_step_never_stops_time(void **state)
 {
     (void)state;
@@ -4394,6 +4977,280 @@ static void test_tls_big_write_pends_then_flushes(void **state)
     unlink("/tmp/luna-loop-tls-key.pem");
 }
 
+/* accepts three connections, swallows everything they send and never
+ * replies: a connectTls against it sits mid-handshake indefinitely —
+ * the window the pre-handshake legs below need. SO_RCVTIMEO rides from
+ * the listener onto the accepted sockets, so a stalled test still
+ * releases the thread. */
+static void *sink_main(void *arg)
+{
+    int listener = (int)(intptr_t)arg;
+    struct timeval tv = {5, 0};
+    setsockopt(listener, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    for (int i = 0; i < 3; i++) {
+        /* transient-armored accept (see accept_transient): the suite's
+         * self-delivered signals and aborted queues must not end the
+         * swallow loop early */
+        int c = accept_transient(listener);
+        if (c < 0) {
+            break;
+        }
+        char buf[4096];
+        while (recv(c, buf, sizeof buf, 0) > 0) {
+        }
+        close(c);
+    }
+    close(listener);
+    return NULL;
+}
+
+static void test_tls_connect_dns_failure_reports_through_callback(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.net.connectTls(string.rep('a', 70) .. '.invalid', 80,\n"
+        "  {insecure = true}, function(e, s)\n"
+        "    out = e and 'err' or 'noerr'\n"
+        "    assert(s == nil)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"), "err");
+}
+
+static void test_tls_pre_handshake_write_close_and_peer_legs(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, sink_main,
+                                    (void *)(intptr_t)listener), 0);
+    int port = tcp_port_of(listener);
+    char code[1600];
+    seed_big_global();
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = {}\n"
+        /* a: peer() before the fd even exists; a pre-handshake write
+         * pends; closing hands the write cb its error at once */
+        "local a = net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "  function(e, s) end)\n"
+        "local okp, errp = pcall(a.peer, a)\n"
+        "out[1] = tostring(okp) .. '|' ..\n"
+        "         tostring((tostring(errp):find('getpeername') ~= nil))\n"
+        "out[2] = tostring(pcall(a.write, a, 'pre', function(e2)\n"
+        "  out[3] = 'pendcb:' .. tostring(e2)\n"
+        "end))\n"
+        "a:close()\n"
+        /* b: the pending-copy malloc fails inside the address window */
+        "local b = net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "  function() end)\n"
+        "t_lowermem()\n"
+        "local okb, eb = pcall(b.write, b, big)\n"
+        "t_restoremem()\n"
+        "out[4] = tostring(not okb and\n"
+        "  (tostring(eb):find('out of memory') ~= nil))\n"
+        "b:close()\n"
+        /* c: close(cb1) schedules cb1; close(cb2) drops it unrefed and
+         *    answers cb2 immediately (the socket is already going down) */
+        "local c = net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "  function() end)\n"
+        "c:close(function() out[5] = 'cb1' end)\n"
+        "c:close(function() out[5] = 'cb2' end)\n"
+        "assert(loop.run())\n"
+        "out[6] = tostring(out[5])\n"
+        "return table.concat(out, ',')", port, port, port);
+    assert_string_equal(eval_string(code),
+        "false|true,true,pendcb:tls: closed with a write pending,true,"
+        "cb2,cb2");
+    pthread_join(th, NULL);
+}
+
+static void test_tls_handle_callbacks_swallow_table_errors(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1400];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = {}\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'}, function(e, c)\n"
+        "    if e then return end\n"
+        "    c:read(function(e2, chunk)\n"
+        "      out[#out + 1] = 'srvread'\n"
+        "      c:close()\n"
+        "      error({code = 21})\n"
+        "    end)\n"
+        "  end)\n"
+        "local cli = net.connectTls('127.0.0.1', srv:port(),\n"
+        "  {insecure = true}, function(e, s)\n"
+        "    out[#out + 1] = 'conn'\n"
+        "    if e then return end\n"
+        "    s:write('x')\n"
+        "    error({code = 20})\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  out[#out + 1] = 'close'\n"
+        "  srv:close(function() error({code = 22}) end)\n"
+        "  cli:close(function() error({code = 23}) end)\n"
+        "end, 600)\n"
+        "assert(loop.run())\n"
+        "return table.concat(out, ',')", cert, key);
+    /* delivery order (srvread vs close) is load-dependent — assert
+     * membership; every raise is non-string, so all three reporters
+     * take their lua_typename fallback arm */
+    const char *r = eval_string(code);
+    assert_non_null(strstr(r, "conn"));
+    assert_non_null(strstr(r, "srvread"));
+    assert_non_null(strstr(r, "close"));
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_unref_ref_roundtrips_on_tls_handles(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1100];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "local wd\n"
+        "out = 'none'\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'}, function(e, c)\n"
+        "    if c then c:unref() c:ref() c:close() end\n"
+        "  end)\n"
+        "srv:unref() srv:ref()\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out = 'conn:' .. e srv:close() return end\n"
+        "    s:unref() s:ref()\n"
+        "    s:close() srv:close()\n"
+        "    if wd then loop.clearTimeout(wd) end\n"
+        "    out = 'ok'\n"
+        "  end)\n"
+        "wd = loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'lost' srv:close() end\n"
+        "  loop.stop()\n"
+        "end, 5000)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    assert_string_equal(eval_string(code), "ok");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+/* a closed loopback port RSTs the probe: the failure surfaces through
+ * SO_ERROR on the next WRITABLE poll and rides tls_fail into the
+ * connect callback (its sock is closed on the spot) */
+static void test_tls_connect_refused_reports_through_callback(void **state)
+{
+    (void)state;
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    close(fd);
+    char code[600];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "  function(e, s)\n"
+        "    out = tostring(e)\n"
+        "    if s then s:close() end\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out", port);
+    const char *r = eval_string(code);
+    if (!strstr(r, "refused")) {
+        fail_msg("expected a refused TLS connect, got r=[%s]", r);
+    }
+}
+
+/* the accepted sock dies (server closes it in onConn) while the client
+ * is established: after the death propagates, the client's next
+ * SSL_write is a hard SSL error — neither WANT_READ nor WANT_WRITE —
+ * so the payload dies through tls_fail and the sock closes */
+static void test_tls_write_after_peer_death_reports_failure(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1100];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'},\n"
+        "  function(e, c)\n"
+        "    if c then c:close() end\n"
+        "  end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out = 'conn:' .. e srv:close() return end\n"
+        "    srv:close()\n"
+        "    loop.setTimeout(function()\n"
+        "      pcall(s.write, s, 'x')\n"
+        "    end, 100)\n"
+        "    loop.setTimeout(function()\n"
+        "      if tostring(s):find('closed') == nil then\n"
+        "        pcall(s.write, s, 'y')\n"
+        "      end\n"
+        "      out = tostring(tostring(s):find('closed') ~= nil)\n"
+        "      s:close()\n"
+        "    end, 400)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    assert_string_equal(eval_string(code), "true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+static void test_tls_fd_exhaustion_reports_socket_failure(void **state)
+{
+    (void)state;
+    /* the resolver for a numeric literal opens nothing, so inside a
+     * zero-fd budget the raw socket() call is the first thing that
+     * fails — the bail reports it through the connect callback.
+     * Pending uv-closes from earlier tests release their fds during
+     * the close phase of a loop round; counted while still in flight,
+     * those frees would hand socket() a slot before connectTls' own
+     * socket() runs — so settle them (two timer rounds) first. The
+     * 5s watchdog hands the budget back if the callback fails. */
+    int fd = tcp_listen_loopback();
+    int port = tcp_port_of(fd);
+    close(fd);
+    char code[900];
+    snprintf(code, sizeof code,
+        "out = 'none'\n"
+        "loop.setTimeout(function()\n"
+        "  loop.setTimeout(function()\n"
+        "    t_deny_fds(0)\n"
+        "    local wd = loop.setTimeout(function()\n"
+        "      out = out .. '|bail'\n"
+        "      t_allow_fds()\n"
+        "      loop.stop()\n"
+        "    end, 5000)\n"
+        "    loop.net.connectTls('127.0.0.1', %d, {insecure = true},\n"
+        "      function(e, s)\n"
+        "        out = tostring(e)\n"
+        "        if s then s:close() end\n"
+        "        t_allow_fds()\n"
+        "        loop.clearTimeout(wd)\n"
+        "      end)\n"
+        "  end, 100)\n"
+        "end, 300)\n"
+        "assert(loop.run())\n"
+        "t_allow_fds()\n"
+        "return out", port);
+    const char *r = eval_string(code);
+    if (!strstr(r, "open files")) {
+        fail_msg("expected an EMFILE-flavoured connect error, got r=[%s]", r);
+    }
+}
+
 #endif  /* LUNA_LOOP_HAVE_OPENSSL */
 
 int main(void)
@@ -4440,6 +5297,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_dns_lookup_resolves_localhost, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_lookup_reports_failure_through_the_callback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_lookup_of_an_overlong_host_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_connect_of_an_overlong_host_reports_through_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_closed_server_accessors_report_getsockname_failure, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_reverse_of_a_non_address_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_dns_reverse_maps_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_os_basics_report_sane_values, setup_loop, teardown_loop),
@@ -4560,6 +5419,19 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_eof_paths_without_readers, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_server_conn_callback_may_raise, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_fs_write_enospc_reports_through_the_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_table_errors_and_cbless_shutdown, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_connect_dns_failure_reports_through_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_server_close_and_conn_callbacks_swallow_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sock_peer_before_connect_establishes_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sock_write_oom_leg_reports_a_clean_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_callback_swallows_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_recv_callback_swallows_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_broadcast_send_is_reported, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_udp_send_oom_leg_reports_a_clean_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dns_and_process_callbacks_swallow_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_truncate_with_negative_length_reports_einval, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_fs_oom_legs_report_clean_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_oom_cleanup_legs, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_broken_attach_step_never_stops_time, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listener_coordinates_then_closed_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_rejects_bad_hosts_and_taken_ports, setup_loop, teardown_loop),
@@ -4569,6 +5441,13 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_read_swap_and_tostring, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_write_callback_may_raise, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_big_write_pends_then_flushes, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_connect_dns_failure_reports_through_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_pre_handshake_write_close_and_peer_legs, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_handle_callbacks_swallow_table_errors, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_ref_roundtrips_on_tls_handles, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_connect_refused_reports_through_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_after_peer_death_reports_failure, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_fd_exhaustion_reports_socket_failure, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

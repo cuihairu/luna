@@ -454,13 +454,102 @@
       40 缺):rocks 92.25%、repl 100%、luna 95.95%、introspect
       99.40%(241 维持)、http 96.59%(维持)、其余 100%。
 
+## C 侧 loop 91% → 95%:两个真产品 bug 根因修复 + 四条真缺腿(2026-09-27 第十一轮)
+
+- [x] **根因修复两个真实产品 bug(ASan 实证,非猜测)**——此前
+      各轮"漂移的堆破坏/SEGV/free(): invalid next size"全部归因
+      于这两处叠加:
+  1. **proc uv_spawn exec 失败句柄泄漏 → UAF**:libuv exec 失败
+     从函数底部 return,跳过 error: 标号的 uv__queue_remove
+     (deps/libuv process.c,内注 PR 3107),进程句柄留在静态
+     g_loop 队列;proc userdata 在该失败用例 lua_close 时释放,
+     下一个用例首个 uv__handle_init 经悬空链写穿已释放堆
+     (ASan:分配于 l_process_run,写于下一个用例的 uv_pipe_init)。
+     修复 proc_spawn_error 增 spawned 参数:uv_spawn 跑过则补
+     uv_close(与 node 同契约);args 分配失败腿 spawn 未跑、无
+     句柄,不 close。
+  2. **tsock ref/unref 越界**:LUNA_HANDLE_CTL 把指针盒 userdata
+     (struct tsock **,72 字节)整个当 uv_handle_t——uv_ref/
+     uv_unref 把 GC 头当 type 字段读、越过盒尾读句柄字段(句柄
+     ~90 字节),ASan 实证 heap-buffer-overflow READ 8。改为解引用
+     盒体 + closed 守卫(close 后句柄已终化,ref 只会钉住一个不再
+     应答的 loop)。
+  3. 顺手真修:**TLS 连接拒绝误报 "bad file descriptor"**——libuv
+     把裸 POLLERR 映射 UV_EBADF 后才回调(poll.c),status≠0 臂改问
+     SO_ERROR 取真因(负 errno 才印 "connection refused");
+     ERR_clear_error() 排空陈旧 OpenSSL 队列防误标后续 tls_fail。
+- [x] **四条真缺腿收线 + 20 个吞噬/边界用例**(本会话累计 24 个新
+      测试):超长主机名走回调报错(net+tls dns 双腿)、关服后
+      accessor 报 getsockname 失败、TLS 拒绝报真因、TLS 对端死亡
+      后写报错——另补 net/tls/udp/dns/process/fs 表错误吞噬、
+      建连前 peer 抛错、UDP 广播、fs 负长 EINVAL、fd 耗尽、
+      pre-handshake 写/close 双 cb、fs/proc/udp OOM 窗口腿。
+- [x] **测试侧两个自伤根因修复**(互为表里的 flake 源):
+  1. **accept EAGAIN 假死**:套件自投递信号 + Linux 把排队连接的
+     中止以 EAGAIN 从 accept 抛出(man 2 accept 明示按 EAGAIN
+     处理),echo_serve/sink_main 旧代码视作致命直接关 listener
+     → 客户端拿到真拒绝。accept_transient:瞬态错误全重试
+     (10s 墙钟界,资源类 1ms 退避),listener 不再自毁。
+  2. **1 GiB string.rep 在 ASan 下 23.85s(实测)**:chunk 内先建
+     big 后连接 → helper 的 accept 窗口先到期。seed_big_global()
+     在 spawn 线程前从 C 建全局;两块有 listener 的 chunk 移除
+     chunk 内构建。loop 组 TIMEOUT 60→240(净跑 ~50s,负载下
+     2-4x,60 恒在假失败边缘)。
+- [x] **实测(2026-09-27,不虚报)**:ASan 树 **186/186 零
+      sanitizer 报错**(allocator_may_return_null=1 让 OOM 窗口走
+      产品 NULL 路径);两树 cmake --build + ctest **15 组全绿**。
+      rocks 组两树各遇 GitHub tarball 下载抖动挂 1-2 次(网络性,
+      build 树重跑通过、cov 树间隔重跑 try1 通过,与第十轮同类
+      环境性)。C 侧 gcovr 诚实账 **92% → 95.3%**(2579/2706,
+      函数 100%、分支 73.5%):loop **91% → 95%**(2118/2225,
+      107 缺)、kernel 98%、line 97%、main 90% 均维持;Lua 侧
+      无改动,97.82% 维持。
+
+## loop.c 107 缺行逐腿表征(2026-09-27 第十一轮复核,行号为当前树)
+
+- **libuv 契约性死腿(构造性不可达)**:1716-1717/1719/1723-1724/
+  1741/1744/1747-1748/1753-1755(server accept 错误臂——stream.c
+  uv__server_io 只以 status 0 调 connection_cb,EMFILE/ENFILE 由
+  uv__emfile_trick 内部消化,uv_accept 对已排队健康连接不失败;
+  connref==LUA_NOREF 丢弃臂为防御)、3345-3346/3348/3352/
+  3358-3359(tserver 同簇:poll 错误/EAGAIN/accept 失败臂)、
+  1449(NOREF 防御守卫)、1492-1493(libuv 读回调 n==0 与
+  UV_ENOBUFS 契约臂);
+- **OOM knife-edge 不分离**(RLIMIT_AS 窗口对小额分配临界,离线
+  不可确定性注入):1097(scandir 中途)、1352、2284、2334、2368、
+  2655、2684-2685、2984、3012-3013、3038-3039、3397、3133、
+  3631(proc argv 增长 realloc);
+- **同步系统调用臂不可离线注入**:2405/2417/2429/2440/2451/2491/
+  2527(os 的 home/temp/hostname/uname/uptime/cpu/接口——平台恒真);
+  612/652-656(fs 写重启半途 EAGAIN)、955/959-961/967/988-989
+  (fswatch 内核错误孪生);
+- **竞态/孪生腿(异步兄弟已驱动)**:1265(mid-connect 用户 close)、
+  1481(closing 双回调)、1492 孪生、1588/1603-1604(未知地址族,
+  平台枚举外)、1623(getnameinfo 同步孪生;async 已驱动)、
+  2008/2012-2014/2047-2049(udp recv 错误孪生)、2174-2176
+  (uv_udp_send 失败)、2377-2380(getnameinfo 同步失败孪生)、
+  2739(tls 无队列错误串)、2765/2854-2855/2883-2884/3124-3125
+  (WANT_READ/WANT_WRITE 与握手竞态孪生)、2893/2906(SO_ERROR
+  查询失败 fallback——getsockopt 对活 fd 不失败)、2917-2918
+  (tls_fail 空串孪生)、3168(closeref 竞态孪生)、3423-3425
+  (listen 后 accept errno 臂)、3446-3447(tserver close 孪生)、
+  3680(proc 回调臂)、3811(proc title NULL)、4048(uv_loop_init
+  失败,仅系统级资源耗尽)、3755(p:kill 报错臂——p:kill(9999)
+  EINVAL 理论可驱动,为 1 行引入跨平台信号号假设,判定不值得);
+- **TLS 同步 connect 双臂**:3071-3073(同步失败)/3079-3082
+  (即时成功)——loopback 上 connect 恒 EINPROGRESS 或内核即时
+  完成且不可禁用,两臂均不可离线确定性触发;
+- 1222(半读回调 lstring 臂,半包时序不可稳定注入)。
+
+
 ## 下轮方向
 
-- **收尾判定**:Lua 侧 97.82% 后剩余 40 缺行全为表征过的网络/
-  时序/口径腿(见上);若无新缺口,覆盖率专项到此收官,转入
-  按需修补。
-- **C 侧 loop 91%**:193 行余量维持第八轮逐函数表征;malloc
-  注入基建仅在出现真实回归疑点时再评估。
+- **tsock 结构体泄漏(唯一值得排期的真维护项)**:struct tsock
+  calloc 后从不释放、无 __gc——close 只关句柄,结构体随最后持有
+  泄漏。释放时序要过 close 竞态(回调仍握指针),建议独立一轮
+  专项处理。
+- malloc 注入基建维持第八轮判定(仅在真实回归疑点时再评估)。
+- 覆盖率专项收官:C/Lua 两侧余量全为逐腿表征,转入按需修补。
 
 ## 明确不做(上一轮)
 

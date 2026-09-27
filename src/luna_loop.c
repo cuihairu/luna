@@ -2730,6 +2730,11 @@ static void tls_errstr(char *buf, size_t cap)
     unsigned long code = ERR_peek_last_error();
     if (code != 0) {
         ERR_error_string_n(code, buf, cap);
+        /* drain: a queue left behind outlives its failure and would
+         * mislabel every later tls_fail — including reasons (EMFILE,
+         * a refused connect) that produced no queue entry of their
+         * own — with this stale one */
+        ERR_clear_error();
     } else {
         snprintf(buf, cap, "tls: unknown error");
     }
@@ -2888,7 +2893,18 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
         return;
     }
     if (status != 0) {
-        tls_fail(t, uv_strerror(status));
+        /* libuv maps a bare POLLERR to UV_EBADF before the event ever
+         * reaches us (poll.c uv__poll_io), so a refused connect would
+         * be reported as "bad file descriptor" — ask the kernel what
+         * actually happened, and keep the poll status as fallback */
+        int soerr = 0;
+        socklen_t slen = sizeof(soerr);
+        if (t->fd >= 0 && getsockopt(t->fd, SOL_SOCKET, SO_ERROR,
+                                     &soerr, &slen) == 0 && soerr != 0) {
+            tls_fail(t, uv_strerror(-soerr));
+        } else {
+            tls_fail(t, uv_strerror(status));
+        }
         return;
     }
     if (!t->tcp_connected && (events & UV_WRITABLE)) {
@@ -2898,7 +2914,7 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
         socklen_t slen = sizeof(soerr);
         getsockopt(t->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen);
         if (soerr != 0) {
-            tls_fail(t, uv_strerror(soerr));
+                tls_fail(t, uv_strerror(soerr));
             return;
         }
         t->tcp_connected = 1;
@@ -2924,6 +2940,9 @@ static void tsock_close(struct tsock *t)
     t->closed = 1;
     if (t->ssl) {
         SSL_shutdown(t->ssl); /* best effort, no wait */
+        /* shutdown on a dead peer queues an error nobody will report:
+         * it must not ride along to mislabel the next tls_fail */
+        ERR_clear_error();
         SSL_free(t->ssl);
         t->ssl = NULL;
     }
@@ -2932,7 +2951,7 @@ static void tsock_close(struct tsock *t)
         t->ctx = NULL;
     }
     if (t->fd >= 0) {
-        close(t->fd);
+            close(t->fd);
         t->fd = -1;
     }
     if (t->poll_inited) {
@@ -3212,7 +3231,32 @@ static int l_tsock_tostring(lua_State *L)
     return 1;
 }
 
-LUNA_HANDLE_CTL(tsock, struct tsock, "loop.tsock")
+/* tsock cannot use LUNA_HANDLE_CTL: its userdata is a pointer box
+ * (struct tsock **), not the uv handle itself. The macro would cast
+ * the whole box — Lua header and all — as uv_handle_t, so uv_unref
+ * reads the "loop" pointer out of the GC header and pokes
+ * active_handles through it, and reads past the allocation entirely
+ * (72-byte box, ~90-byte handle). Dereference the box, and keep the
+ * closed guard: the struct outlives close only while some Lua holder
+ * keeps the box, and uv_ref on the already-finalized handle would pin
+ * a loop the handle can no longer answer for. */
+static int l_tsock_unref(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    if (!(*p)->closed) {
+        uv_unref((uv_handle_t *)&(*p)->h);
+    }
+    return 0;
+}
+
+static int l_tsock_ref(lua_State *L)
+{
+    struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
+    if (!(*p)->closed) {
+        uv_ref((uv_handle_t *)&(*p)->h);
+    }
+    return 0;
+}
 
 static const luaL_Reg tsock_funcs[] = {
     { "write", l_tsock_write },
@@ -3790,13 +3834,26 @@ static char **proc_build_argv(lua_State *L, const char *cmd, int nargs)
 }
 
 /* spawn-failure tail: every handle the attempt opened gets closed,
- * every pin dropped, then throw — the run still drains afterwards */
-static int proc_spawn_error(lua_State *L, struct proc *pr, int rc)
+ * every pin dropped, then throw — the run still drains afterwards.
+ * 'spawned' says whether uv_spawn actually ran. A failed uv_spawn with
+ * the stdio pipes opening fine returns its exec error from the bottom
+ * of the function — skipping the error: label that would have unlinked
+ * the handle — so the never-started UV_PROCESS node stays linked in
+ * the loop's handle queue, per libuv's contract that the caller still
+ * uv_close()s it (node does the same). Without this close, the proc
+ * userdata can be collected while g_loop still points into it: the
+ * next uv__handle_init in ANY later Lua state then writes the queue's
+ * new tail through that dangling link — a use-after-free in freed heap
+ * that no sanitizer-less run can predict the site of. */
+static int proc_spawn_error(lua_State *L, struct proc *pr, int rc, int spawned)
 {
     luaL_unref(L, LUA_REGISTRYINDEX, pr->cbref);
     luaL_unref(L, LUA_REGISTRYINDEX, pr->selfref);
     pr->cbref = LUA_NOREF;
     pr->selfref = LUA_NOREF;
+    if (spawned) {
+        uv_close((uv_handle_t *)&pr->h, NULL);
+    }
     if (pr->mode == PROC_RUN) {
         uv_close((uv_handle_t *)&pr->out->p, on_piper_gone_dead);
         uv_close((uv_handle_t *)&pr->err->p, on_piper_gone_dead);
@@ -3861,7 +3918,7 @@ static int l_process_run(lua_State *L)
     int rc = uv_spawn(&g_loop, &pr->h, &opts);
     proc_free_argv(args);
     if (rc != 0) {
-        return proc_spawn_error(L, pr, rc);
+        return proc_spawn_error(L, pr, rc, 1);
     }
     keepalive_open();
     uv_read_start((uv_stream_t *)pr->out, on_proc_alloc, on_proc_read);
@@ -3897,7 +3954,8 @@ static int l_process_spawn(lua_State *L)
 
     char **args = proc_build_argv(L, cmd, nargs);
     if (!args) {
-        return proc_spawn_error(L, pr, UV_ENOMEM);
+        /* uv_spawn never ran: no process handle exists to close */
+        return proc_spawn_error(L, pr, UV_ENOMEM, 0);
     }
 
     uv_stdio_container_t io[3];
@@ -3913,7 +3971,7 @@ static int l_process_spawn(lua_State *L)
     int rc = uv_spawn(&g_loop, &pr->h, &opts);
     proc_free_argv(args);
     if (rc != 0) {
-        return proc_spawn_error(L, pr, rc);
+        return proc_spawn_error(L, pr, rc, 1);
     }
     keepalive_open();
     pr->in_s->connected = pr->out_s->connected = pr->err_s->connected = 1;

@@ -1213,11 +1213,12 @@ static void test_ref_restores_keepalive(void **state)
  * EAGAIN) or a transient resource error. Any of these must not take
  * the listener down while the client's connect is still on its way:
  * a dead listener is what turns this into a client-side "connection
- * refused". Bounded by wall clock, not spin count, so a signal storm
- * cannot burn the budget. */
+ * refused". Bounded by wall clock (30s — generous enough to ride out
+ * a scheduling storm between the thread spawn and the connect), so a
+ * wedged case still releases pthread_join. */
 static int accept_transient(int listener)
 {
-    time_t deadline = time(NULL) + 10;
+    time_t deadline = time(NULL) + 30;
     for (;;) {
         int c = accept(listener, NULL, NULL);
         if (c >= 0) {
@@ -4464,11 +4465,15 @@ static void test_sock_write_oom_leg_reports_a_clean_error(void **state)
 {
     (void)state;
     int listener = tcp_listen_loopback();
+    /* seed before the thread spawns: the build is the single largest
+     * delay between the accept window opening and the connect hitting
+     * the wire, and under a scheduling storm it must not be racing
+     * the helper's bounded accept */
+    seed_big_global();
     pthread_t th;
     assert_int_equal(pthread_create(&th, NULL, echo_main,
                                     (void *)(intptr_t)listener), 0);
     char code[900];
-    seed_big_global();
     snprintf(code, sizeof code,
         "local net = loop.net\n"
         "out = 'noconnect'\n"
@@ -4891,6 +4896,47 @@ static void test_tls_read_swap_and_tostring(void **state)
     unlink("/tmp/luna-loop-tls-key.pem");
 }
 
+/* the read callback closes the sock while a second write is still
+ * queued: the pump resumes into the discard path with the SSL object
+ * already freed, and the t->closed guard at tsock_discard_readable's
+ * entry is what stands between that resume and a use-after-free —
+ * disabling the guard makes this test report the UAF under ASan */
+static void test_tls_read_cb_close_mid_batch_never_touches_freed_ssl(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function(e2, chunk)\n"
+        "    if chunk then log[#log+1] = chunk; c:close() end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then log[1] = 'connect:' .. e return end\n"
+        "    s:read(function(e2, chunk)   -- registered before the writes:\n"
+        "      log[#log+1] = 'client:' .. tostring(chunk)  -- the close\n"
+        "    end)                         -- sweep lands here as (nil,nil)\n"
+        "    s:write('a')\n"
+        "    s:write('b')   -- still queued when the server closes on 'a'\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  if #log == 0 then log = {'bail'} end\n"
+        "  srv:close()\n"
+        "end, 1000)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key);
+    assert_string_equal(eval_string(code), "a,client:nil");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
 static void test_tls_write_callback_may_raise(void **state)
 {
     (void)state;
@@ -5022,12 +5068,14 @@ static void test_tls_pre_handshake_write_close_and_peer_legs(void **state)
 {
     (void)state;
     int listener = tcp_listen_loopback();
+    /* seed before the thread spawns: under a scheduling storm the
+     * build must not be racing the helper's bounded accept */
+    seed_big_global();
     pthread_t th;
     assert_int_equal(pthread_create(&th, NULL, sink_main,
                                     (void *)(intptr_t)listener), 0);
     int port = tcp_port_of(listener);
     char code[1600];
-    seed_big_global();
     snprintf(code, sizeof code,
         "local net = loop.net\n"
         "out = {}\n"
@@ -5204,6 +5252,111 @@ static void test_tls_write_after_peer_death_reports_failure(void **state)
         "assert(loop.run())\n"
         "return out", cert, key);
     assert_string_equal(eval_string(code), "true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+/* the struct behind a closed tsock is freed by the last holder of the
+ * box (__gc), not at close: a holder that kept the box must still see
+ * the closed-guard behavior, and once the box is gone nothing may
+ * touch the struct again. Under ASan a premature free — or a use
+ * after it — is the report; the second TLS round-trip churns the heap
+ * so a dangling pointer would land in reused memory. */
+static void test_tsock_gc_releases_struct_at_final_collection(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1500];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "k = nil\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'},\n"
+        "  function(e, c)\n"
+        "    if c then k = c end\n"   /* retain the box across close */
+        "  end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out = 'conn:' .. e srv:close() return end\n"
+        "    srv:close()\n"
+        /* data with no reader on the accepted side: the server must
+         * drain-and-discard it (a level-triggered poll would spin
+         * forever otherwise), then the close_notify ends the conn */
+        "    s:write('discarded-by-server', function()\n"
+        "      s:close(function() out = 'closed' end)\n"
+        "    end)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "assert(out == 'closed', out)\n"
+        /* the holder is still valid: closed guards answer, nothing
+         * crashed, and peer still throws its closed error */
+        "out = tostring((tostring(k):find('closed') ~= nil))\n"
+        "local ok, err = pcall(k.peer, k)\n"
+        "out = out .. '|' .. tostring(not ok) .. '|' ..\n"
+        "      tostring((tostring(err):find('closed') ~= nil))\n"
+        "k = nil\n"
+        "collectgarbage('collect')\n"
+        "collectgarbage('collect')\n"
+        /* churn: a full second round over the freed struct's region */
+        "local srv2 = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'}, function(e, c)\n"
+        "    if c then c:close() end\n"
+        "  end)\n"
+        "net.connectTls('127.0.0.1', srv2:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    srv2:close()\n"
+        "    if s then s:close() end\n"
+        "    out = out .. '|churn'\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out", cert, key, cert, key);
+    assert_string_equal(eval_string(code), "true|true|true|churn");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+/* a write left pending when the peer dies still hears about it: close
+ * sweeps every pending callback ref (the EOF arm used to leave the
+ * write cb pinned in the registry forever, and the struct held the
+ * parked payload). The 1 GiB payload cannot fully flush into a dying
+ * socket, so the write is deterministically still pending when the
+ * close_notify or the reset lands — either arm answers the cb with an
+ * error and closes. */
+static void test_eof_with_flush_pending_still_answers_write_cb(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    seed_big_global();
+    char code[1300];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = 'none'\n"
+        "local srv = net.listenTls('127.0.0.1', 0,\n"
+        "  {cert = '%s', key = '%s'},\n"
+        "  function(e, c)\n"
+        "    if c then c:close() end\n"
+        "  end)\n"
+        "net.connectTls('127.0.0.1', srv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out = 'conn:' .. e srv:close() return end\n"
+        "    srv:close()\n"
+        "    s:write(big, function(e2)\n"
+        "      out = 'wc:' .. tostring(e2)\n"
+        "      s:close()\n"
+        "    end)\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  if out == 'none' then out = 'wd:timed out' end\n"
+        "  loop.stop()\n"
+        "end, 30000)\n" /* 10s tripped once under a parallel gate run */
+        "assert(loop.run())\n"
+        "return out", cert, key);
+    const char *r = eval_string(code);
+    assert_true(strncmp(r, "wc:", 3) == 0);
+    assert_true(strstr(r, "nil") == NULL); /* the cb got an error, not success */
     unlink("/tmp/luna-loop-tls-cert.pem");
     unlink("/tmp/luna-loop-tls-key.pem");
 }
@@ -5439,6 +5592,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_client_dials_by_hostname, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_client_closed_before_resolution_answers, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_read_swap_and_tostring, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_read_cb_close_mid_batch_never_touches_freed_ssl, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_write_callback_may_raise, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_big_write_pends_then_flushes, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_connect_dns_failure_reports_through_callback, setup_loop, teardown_loop),
@@ -5447,6 +5601,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_unref_ref_roundtrips_on_tls_handles, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_connect_refused_reports_through_callback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_write_after_peer_death_reports_failure, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tsock_gc_releases_struct_at_final_collection, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_eof_with_flush_pending_still_answers_write_cb, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_fd_exhaustion_reports_socket_failure, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

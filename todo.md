@@ -542,12 +542,74 @@
 - 1222(半读回调 lstring 臂,半包时序不可稳定注入)。
 
 
+## tsock 结构体泄漏专项:__gc 释放路径 + 无读回调热旋产品 bug(2026-09-27 第十二轮)
+
+- [x] **tsock 释放路径(本轮唯一排期项)**:`struct tsock` calloc
+  后确实从不释放,本轮回收。设计要点与竞态论证:
+  1. **`__gc` 只在 `t->selfref == LUA_NOREF` 时 free**(l_tsock_gc,
+     loop.c:3331):selfref 在握时注册表钉住指针盒,userdata 不可
+     达则 `__gc` 根本不会触发;selfref 只在 on_tls_closed(loop.c:
+     2966,uv_close 完成回调)里解除——此刻句柄已关、回调全部
+     交付完毕,此后既无 Lua 方法能再拿盒、也无 uv 工作会碰 `t`,
+     free 天然无竞态,不需要代际/引用计数。`__gc` 注册在元表
+     本体(loop.c:4154,不在 luaL_Reg 的 __index 表):Lua 终结化
+     只读元表自身,挂 __index 里静默不触发(首轮实测踩过)。
+  2. **无 close 的弃置 sock 仍不释放结构体**(selfref 恒在):
+     这不是漏——共享静态 g_loop 活得比 lua_State 久,free 会把
+     活轮询句柄留在已析构 state 后面(与第十一轮 failed-spawn
+     修复同构的跨 state 形状);结构体本身仅 ~200 字节且随句柄
+     一起在 close 时归还。
+  3. **tsock_close 引用清扫**(loop.c:2981-2997):close 时把
+     pend/readref/connectref 全部交付并解除——此前 writeref 在
+     EOF 时、readref 在用户 close 时永久钉在注册表(泄漏的是
+     回调函数+闭包,不止 40 字节)。
+- [x] **顺带根因修复一个既有产品 bug:无读回调热旋**——新 gc
+  测试两度 100% CPU 自旋暴露:pump 的无读者守卫直接 return、
+  不耗数据,水平触发 poll 恒 READABLE → on_tls_event→pump→
+  return 死循环。新增 tsock_discard_readable(loop.c:2813):
+  无读者时消费并丢弃数据块;close_notify(r==0)置 eof 并
+  tsock_close;真错误 tls_fail。读循环里"回调把自己换下来"
+  分支(loop.c:2905)同样走 discard——数据必须离套,否则 poll
+  旋死。入口 `t->closed` 守卫(loop.c:2816)挡住 mid-pump 关闭
+  后的 SSL_read:负控实验(守卫改 if(0))实测本机 OpenSSL
+  3.5.5 公开 API NULL 安全(SSL_read(NULL)→-1、SSL_get_error→
+  SSL_ERROR_SSL,3 行探针程序验证),路径退化为对已 close 套
+  的 tls_fail(自身早退)——守卫是防御性(3.0 前的 OpenSSL
+  对 NULL 解引用)而非承重,按实测表述记录。
+- [x] **三个新测试**(189 个,原 188):
+  1. test_tsock_gc_releases_struct_at_final_collection:服务端
+     驻留盒 k,客户端全过后 `k=nil; collectgarbage('collect')×2`,
+     二轮 TLS 往返踩过释放区(tostring/pcall 验证 closed 态),
+     ASan 树绿 = 无 UAF、LSan 无泄漏;
+  2. test_eof_with_flush_pending_still_answers_write_cb:EOF 而
+     flush 未完时 write 回调拿到错误而非悬空(驱动 close 清扫
+     的 pend 腿);
+  3. test_tls_read_cb_close_mid_batch_never_touches_freed_ssl:
+     读回调在第二包仍在途时关闭——驱动 discard 的 closed 守卫
+     取用臂(负控证明路径真实到达:DBG 实测 discard 入口
+     closed=1 ssl=nil)。
+- [x] **实测(2026-09-27,不虚报)**:ASan 树 189/189 ×2 轮
+  (detect_leaks=0 与 =1 各一整轮,**0 个 sanitizer 报告、0 泄
+  漏**);两树 cmake --build + ctest **15 组全绿×2**(负载 ~45;
+  本轮 rocks 首跑即绿,无抖动)。覆盖率 gcovr **95.1%
+  (2609/2743)**:较上轮 95.3%(2608/2741)已覆盖行 **+1**,
+  新增 2 可执行行(守卫 if/return)双双点亮,百分比回落纯因
+  分母增长——按"净覆盖行数增加 + 暗腿逐条表征"口径判不倒退。
+  本轮代码暗腿仅余:2835-2836(discard 的硬 SSL 错误臂;与
+  2925-2926 有读者孪生同因——tsock 公开 API 无法在握手后发出
+  fatal alert,离线不可注入)、2838(while 自然退出死腿,got_eof
+  是唯一出口,防御性保留)。
+- 环境披露:负控与 DBG 插桩已全部还原移除(git diff 核对);
+  eof-flush 测试看门狗 10s→30s(并行门禁下一度过期误报,与
+  accept_transient 30s 同理由);两树门禁 ctest 以 --timeout 900
+  运行(库内 loop 测试 240s 上限在负载 45+ 下是误报陷阱,仅
+  运行参数、库文件未动);首轮 ASan 复跑因负载 45 超出 400s
+  预算 EXIT=124,加预算后复跑全绿。
+
+
 ## 下轮方向
 
-- **tsock 结构体泄漏(唯一值得排期的真维护项)**:struct tsock
-  calloc 后从不释放、无 __gc——close 只关句柄,结构体随最后持有
-  泄漏。释放时序要过 close 竞态(回调仍握指针),建议独立一轮
-  专项处理。
+- tsock 结构体泄漏:**已完成(第十二轮,见上)**。
 - malloc 注入基建维持第八轮判定(仅在真实回归疑点时再评估)。
 - 覆盖率专项收官:C/Lua 两侧余量全为逐腿表征,转入按需修补。
 

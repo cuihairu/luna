@@ -2804,6 +2804,40 @@ static void tls_fail(struct tsock *t, const char *err)
 /* the whole state machine: handshake, then flush pending writes, then
  * drain reads — each stage may stop at WANT_READ/WANT_WRITE and wait
  * for the next poll event */
+/* no reader registered: the data must still leave the socket, or the
+ * level-triggered poll reports READABLE forever — a hot spin that
+ * never reaches the peer's close_notify. Consume and discard chunks;
+ * close_notify still closes the conn, so an abandoned peer cannot
+ * wedge the loop. Returns 1 when the conn was closed (or failed) and
+ * the caller must stop touching it. */
+static int tsock_discard_readable(struct tsock *t)
+{
+    char buf[16384];
+    if (t->closed) {
+        /* a callback that just ran closed the sock (its teardown
+         * freed the SSL object): nothing left to drain */
+        return 1;
+    }
+    while (!t->got_eof) {
+        int r = SSL_read(t->ssl, buf, sizeof(buf));
+        if (r > 0) {
+            continue;
+        }
+        if (r == 0) {
+            t->got_eof = 1;
+            tsock_close(t); /* nothing is listening; close the conn */
+            return 1;
+        }
+        int e = SSL_get_error(t->ssl, r);
+        if (e == SSL_ERROR_WANT_READ || e == SSL_ERROR_WANT_WRITE) {
+            return 0;
+        }
+        tls_fail(t, NULL);
+        return 1;
+    }
+    return 0;
+}
+
 static void tls_pump_body(struct tsock *t);
 
 static void tls_pump(struct tsock *t)
@@ -2858,6 +2892,9 @@ static void tls_pump_body(struct tsock *t)
     }
 
     if (t->readref == LUA_NOREF || t->got_eof) {
+        if (tsock_discard_readable(t)) {
+            return;
+        }
         tls_update_events(t);
         return;
     }
@@ -2866,6 +2903,11 @@ static void tls_pump_body(struct tsock *t)
         if (r > 0) {
             tsock_deliver(t, &t->readref, NULL, buf, (size_t)r);
             if (t->readref == LUA_NOREF) { /* cb swapped itself out */
+                /* the data still has to leave the socket or the poll
+                 * spins (see tsock_discard_readable) */
+                if (tsock_discard_readable(t)) {
+                    return;
+                }
                 break;
             }
             continue;
@@ -2938,6 +2980,23 @@ static void tsock_close(struct tsock *t)
         return;
     }
     t->closed = 1;
+    /* no callback ref may survive the close: the struct is freed by the
+     * last holder of the box (l_tsock_gc) once Lua collects it, and a
+     * ref left behind would pin its function in the registry forever —
+     * and never hear anything. The deliveries re-enter user code, but
+     * every method on a closed sock is guarded from here on.
+     * l_tsock_close and tls_fail deliver their legs before getting
+     * here; these cover the paths that skip them (EOF while a flush is
+     * pending, user close with a resident read). */
+    if (t->pend) {
+        free(t->pend);
+        t->pend = NULL;
+        tsock_deliver(t, &t->writeref, "tls: closed with a write pending",
+                      NULL, 0);
+    }
+    tsock_deliver(t, &t->readref, NULL, NULL, 0); /* stream over: (nil,nil) */
+    tsock_deliver(t, &t->connectref, "tls: closed before handshake",
+                  NULL, 0);
     if (t->ssl) {
         SSL_shutdown(t->ssl); /* best effort, no wait */
         /* shutdown on a dead peer queues an error nobody will report:
@@ -3254,6 +3313,29 @@ static int l_tsock_ref(lua_State *L)
     struct tsock **p = luaL_checkudata(L, 1, "loop.tsock");
     if (!(*p)->closed) {
         uv_ref((uv_handle_t *)&(*p)->h);
+    }
+    return 0;
+}
+
+/* __gc: free the calloc'd struct the box points at. The ordering makes
+ * the release race-free by construction: while close has not finished,
+ * selfref still pins the box in the registry, so __gc cannot run; it
+ * drops only in on_tls_closed, after uv_close completed and every
+ * pending callback was delivered. By the time the box is unreachable
+ * — the only way __gc fires — no Lua code can call a method on it and
+ * no uv work holds the struct: this is the one observer left. A sock
+ * abandoned without close keeps selfref forever, so its struct (and
+ * handle) is left alone even at state teardown: freeing there would
+ * strand a live poll handle in the shared loop (it outlives states),
+ * the same cross-state shape the failed-spawn fix closed. */
+static int l_tsock_gc(lua_State *L)
+{
+    struct tsock **p = (struct tsock **)luaL_testudata(L, 1, "loop.tsock");
+    struct tsock *t = p ? *p : NULL;
+    if (t && t->selfref == LUA_NOREF) {
+        *p = NULL;
+        free(t->pend); /* a payload parked by the flush, never resumed */
+        free(t);
     }
     return 0;
 }
@@ -4069,6 +4151,10 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__index");
         lua_pushcfunction(L, l_tsock_tostring);
         lua_setfield(L, -2, "__tostring");
+        /* __gc must sit on the metatable itself (not the __index
+         * table): finalization looks only at the metatable */
+        lua_pushcfunction(L, l_tsock_gc);
+        lua_setfield(L, -2, "__gc");
     }
     lua_pop(L, 1);
     if (luaL_newmetatable(L, "loop.tserver")) {

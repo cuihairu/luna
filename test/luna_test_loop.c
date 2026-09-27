@@ -5404,7 +5404,197 @@ static void test_tls_fd_exhaustion_reports_socket_failure(void **state)
     }
 }
 
+/* both pend-malloc legs of the tls write path (pre-handshake park and
+ * post-handshake partial-write park) under a closed address-space
+ * window: each must raise the module's own out-of-memory message
+ * synchronously and leave the conn walkable — no half-built pend */
+static void test_tls_write_oom_leg_reports_a_clean_error(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end end)\n"
+        "local s = net.connectTls('127.0.0.1', srv:port(),"
+        " {insecure = true},\n"
+        "  function(e, s2)\n"
+        "    if e then out[2] = 'c=' .. e return end\n"
+        "    t_lowermem()\n"
+        "    local ok2, e2 = pcall(s2.write, s2, big)\n"
+        "    t_restoremem()\n"
+        "    out[2] = tostring(not ok2 and\n"
+        "      tostring(e2):find('out of memory', 1, true) ~= nil)\n"
+        "    s2:close()\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "t_lowermem()\n"
+        "local ok1, e1 = pcall(s.write, s, big)\n"
+        "t_restoremem()\n"
+        "out[1] = tostring(not ok1 and\n"
+        "  tostring(e1):find('out of memory', 1, true) ~= nil)\n"
+        "loop.setTimeout(function()\n"
+        "  if #out < 2 then out[2] = 'bail' end\n"
+        "  srv:close()\n"
+        "end, 2000)\n"
+        "assert(loop.run())\n"
+        "return table.concat(out, ',')", cert, key);
+    seed_big_global(); /* the 1 GiB payload, before any window closes */
+    assert_string_equal(eval_string(code), "true,true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
+/* every guarded method on a closed sock — plain, udp and tls — must
+ * throw the module's own message instead of touching the dead handle */
+static void test_closed_sock_method_contracts_throw_cleanly(void **state)
+{
+    (void)state;
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[2400];
+    snprintf(code, sizeof code,
+        "local net, udp = loop.net, loop.udp\n"
+        "out = {}\n"
+        "local fn = function() end\n"
+        "local function probe(tag, want, f, ...)\n"
+        "  local ok, e = pcall(f, ...)\n"
+        "  out[#out+1] = tag .. '=' ..\n"
+        "    tostring(not ok and tostring(e):find(want, 1, true) ~= nil)\n"
+        "end\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  if e then return end c:close() end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  if e then out[1] = 'c=' .. e return end\n"
+        "  s:close()\n"
+        "  probe('w', 'socket not connected', s.write, s, 'x')\n"
+        "  probe('end', 'socket not connected', s['end'], s)\n"
+        "  probe('r', 'socket is closed', s.read, s, fn)\n"
+        "  probe('peer', 'sock is closed', s.peer, s)\n"
+        "  probe('sn', 'sock is closed', s.sockname, s)\n"
+        "  local u = udp.bind('127.0.0.1', 0, fn)\n"
+        "  u:close()\n"
+        "  probe('uw', 'socket is closed', u.send, u, 'x', '127.0.0.1', 1)\n"
+        "  probe('uport', 'socket is closed', u.port, u)\n"
+        "  probe('usn', 'socket is closed', u.sockname, u)\n"
+        "  srv:close()\n"
+        "end)\n"
+        "probe('lcert', 'opts.cert (path) required',"
+        " net.listenTls, '127.0.0.1', 0, {}, fn)\n"
+        "probe('lkey', 'opts.key (path) required',"
+        " net.listenTls, '127.0.0.1', 0, {cert = '%s'}, fn)\n"
+        "probe('cport', 'out of range',"
+        " net.connectTls, '127.0.0.1', 0, {insecure = true}, fn)\n"
+        "tsrv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end end)\n"
+        "local okb, eb = pcall(net.listenTls,"
+        " '127.0.0.1', tsrv:port(), {cert = '%s', key = '%s'}, fn)\n"
+        "out[#out+1] = 'tbind=' ..\n"
+        "  tostring(not okb and tostring(eb):find('listen failed', 1, true) ~= nil)\n"
+        "net.connectTls('127.0.0.1', tsrv:port(), {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out[9] = 'c=' .. e return end\n"
+        "    s:close()\n"
+        "    probe('tw', 'tls sock is closed', s.write, s, 'x')\n"
+        "    probe('tr', 'tls sock is closed', s.read, s, fn)\n"
+        "    probe('tpeer', 'tsock is closed', s.peer, s)\n"
+        "    probe('tsn', 'tsock is closed', s.sockname, s)\n"
+        "    tsrv:close()\n"
+        "  end)\n"
+        "loop.setTimeout(function()\n"
+        "  if #out < 12 then out[#out+1] = 'bail' end\n"
+        "  srv:close()\n"
+        "  tsrv:close()\n"
+        "end, 2000)\n"
+        "assert(loop.run())\n"
+        "return table.concat(out, ',')", cert, cert, key, cert, key);
+    assert_string_equal(eval_string(code),
+        "lcert=true,lkey=true,cport=true,tbind=true,"
+        "w=true,end=true,r=true,peer=true,sn=true,"
+        "uw=true,uport=true,usn=true,"
+        "tw=true,tr=true,tpeer=true,tsn=true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
 #endif  /* LUNA_LOOP_HAVE_OPENSSL */
+
+/* argument contracts enforced before anything async runs: timer ranges,
+ * signal ranges, port ranges across the net/udp faces, the dns.reverse
+ * numeric-address gate, the udp sendto port gate and a pipe server's
+ * missing port — each throws its own message synchronously */
+static void test_sync_arg_contracts_throw_cleanly(void **state)
+{
+    (void)state;
+    unlink("/tmp/luna-loop-arg.sock");
+    assert_string_equal(eval_string(
+        "local loop_, net, udp, dns = loop, loop.net, loop.udp, loop.dns\n"
+        "local fn = function() end\n"
+        "res = {}\n"
+        "local function probe(tag, want, f, ...)\n"
+        "  local ok, e = pcall(f, ...)\n"
+        "  res[#res+1] = tag .. '=' ..\n"
+        "    tostring(not ok and tostring(e):find(want, 1, true) ~= nil)\n"
+        "end\n"
+        "probe('to', 'timeout must be >= 0', loop_.setTimeout, fn, -1)\n"
+        "probe('iv', 'interval must be >= 1', loop_.setInterval, fn, 0)\n"
+        "probe('sig0', 'out of range', loop_.signal, 0, fn)\n"
+        "probe('sig65', 'out of range', loop_.signal, 65, fn)\n"
+        "probe('c0', 'out of range', net.connect, '127.0.0.1', 0, fn)\n"
+        "probe('cbig', 'out of range', net.connect, '127.0.0.1', 70000, fn)\n"
+        "probe('lbig', 'out of range', net.listen, '127.0.0.1', 70000, fn)\n"
+        "probe('lneg', 'out of range', net.listen, '127.0.0.1', -1, fn)\n"
+        "probe('ub', 'out of range', udp.bind, '127.0.0.1', 70000, fn)\n"
+        "probe('ubneg', 'out of range', udp.bind, '127.0.0.1', -1, fn)\n"
+        "local u = udp.bind('127.0.0.1', 0, fn)\n"
+        "probe('us0', 'out of range', u.send, u, 'x', '127.0.0.1', 0)\n"
+        "probe('usbig', 'out of range', u.send, u, 'x', '127.0.0.1', 70000)\n"
+        "u:close()\n"
+        "probe('rev', 'not a numeric address', dns.reverse, 'not-an-ip', fn)\n"
+        "local psv = net.listenPipe('/tmp/luna-loop-arg.sock', fn)\n"
+        "probe('pport', 'unix server has no port', psv.port, psv)\n"
+        "psv:close()\n"
+        "return table.concat(res, ',')"),
+        "to=true,iv=true,sig0=true,sig65=true,c0=true,cbig=true,"
+        "lbig=true,lneg=true,ub=true,ubneg=true,us0=true,usbig=true,"
+        "rev=true,pport=true");
+    unlink("/tmp/luna-loop-arg.sock");
+}
+
+/* process-face contracts: argv entries must be strings, run() procs
+ * carry no stdio streams, kill past the exit gate refuses — and a cwd
+ * opts table actually lands the child in the given directory */
+static void test_proc_arg_and_lifecycle_contracts(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local process = loop.process\n"
+        "out = {}\n"
+        "local function probe(tag, want, f, ...)\n"
+        "  local ok, e = pcall(f, ...)\n"
+        "  out[#out+1] = tag .. '=' ..\n"
+        "    tostring(not ok and tostring(e):find(want, 1, true) ~= nil)\n"
+        "end\n"
+        "probe('args', 'args must be strings', process.spawn,"
+        " 'echo', {true}, function() end)\n"
+        "local p = process.run('true', {}, function()\n"
+        "  out[#out+1] = 'exit'\n"
+        "  process.run('pwd', {}, {cwd = '/tmp'}, function(e, res)\n"
+        "    out[#out+1] = 'cwd=' ..\n"
+        "      tostring(res.stdout:find('/tmp', 1, true) ~= nil)\n"
+        "  end)\n"
+        "end)\n"
+        "probe('stdio', 'run() procs have no stdio streams', p.stdout, p)\n"
+        "assert(loop.run())\n"
+        "probe('kill', 'process already exited', p.kill, p)\n"
+        "return table.concat(out, ',')"),
+        "args=true,stdio=true,exit,cwd=true,kill=true");
+}
 
 int main(void)
 {
@@ -5604,6 +5794,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tsock_gc_releases_struct_at_final_collection, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_eof_with_flush_pending_still_answers_write_cb, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_fd_exhaustion_reports_socket_failure, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_oom_leg_reports_a_clean_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_closed_sock_method_contracts_throw_cleanly, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_sync_arg_contracts_throw_cleanly, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_proc_arg_and_lifecycle_contracts, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

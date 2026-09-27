@@ -607,11 +607,100 @@
   预算 EXIT=124,加预算后复跑全绿。
 
 
+## luna_loop 分支覆盖专项:OOM 守卫补齐 + 参数契约面(2026-09-27 第十三轮)
+
+- [x] **口径与基线更正(非交互,自行假设并注明)**:派发单引用
+  的"分支 51%"是早期轮次的陈旧数字;本轮起点实测(gcov -b,
+  行号为当前树)**72.68%(705/970 臂)**。按「逐腿表征、不为
+  行数写测试」口径,只补真实可达的腿:分配失败守卫的可达子集
+  用既有 t_lowermem 窗口驱动,参数校验臂作为 API 契约面钉死,
+  其余 231 条臂逐簇表征(见下),「明确不做」清单一律未碰。
+- [x] **四个新测试(189 → 193),全部是真实行为契约**:
+  1. test_tls_write_oom_leg_reports_a_clean_error:tsock write
+     的两个 pend malloc 腿(loop.c:3167 握手前停车、:3190 握手
+     后半写停车)在 t_lowermem 窗口下同步抛模块自己的
+     "out of memory",连接仍可行走、无半建 pend 残留——TLS 面
+     此前是 OOM 窗口唯一没碰到的角落(fs/udp/proc/sock 已有);
+  2. test_closed_sock_method_contracts_throw_cleanly:plain/
+     udp/tls 三面 16 个关闭态方法探针——write/end 抛
+     "socket not connected"、read "socket is closed"、
+     peer/sockname "sock is closed"、tsock 四法 "tls sock is
+     closed"/"tsock is closed",外加 listenTls 缺 cert/缺 key、
+     connectTls 端口越界、listenTls 端口被占(bind 失败腿,
+     loop.c:3511)——全部同步抛、无一处碰死句柄;
+  3. test_sync_arg_contracts_throw_cleanly:timer/interval 负
+     值、signal 0/65、connect/listen/udp.bind/sendto 端口越界
+     与负值、dns.reverse 非数字地址、pipe server :port()——
+     14 个同步契约臂一次钉死;
+  4. test_proc_arg_and_lifecycle_contracts:argv 非字符串拒绝
+     (:3857)、run() 进程无 stdio(:4067)、退出后 kill 拒绝
+     (:3832)、opts.cwd 真实生效(pwd 落在 /tmp,:3865)。
+     备注:run 的 opts 表必须放第三参(args 之后的 [opts]),
+     首写把 opts 放在 args 位被当空 argv 吞掉——测试因此多验
+     了一个真实调用形状。
+- [x] **实测(2026-09-27,不虚报)**:分支 **72.68% → 76.19%**
+  (705→739/970,**+34 臂**);行 95.1% → **95.2%**
+  (2610/2743,+1 行);gcovr 聚合分支 73.4% → 76.3%(905/1186);
+  函数 100% 持平。ASan 树 **193/193**(detect_leaks=1 整轮,
+  0 报告 0 泄漏);两树 cmake --build + ctest **15 组全绿×2**
+  (--timeout 900)。
+- **余 231 臂逐簇表征(行号为当前树,均不再为行数补测)**:
+  1. **libuv/构建契约死臂**:accept 错误簇 1715-1752(stream.c
+     只以 status 0 回调、EAGAIN/EMFILE 内部消化)、uv_loop_init
+     失败 4129(仅系统级资源耗尽)、luaL_newmetatable 二次调用
+     臂 4134-4196(单 state 进程恒首建)、alloc_buf 的
+     suggested==0 臂 1502-1503/3702(内核不回 0)、470/3716/
+     3721(proc 管道半包汇合的内部分派);
+  2. **平台恒真臂**:2404-2526(os 簇 home/temp/hostname/
+     uname/uptime/cpu/接口失败臂,Linux 上不失败,第十一轮
+     表征维持);
+  3. **小额分配 OOM knife-edge**:2654(tsock_new calloc)、
+     2683(SSL_new)、3042/3478(SSL_CTX_new)、3439(tserver
+     calloc)、3892/3977(proc 结构)——t_lowermem 的 128MiB
+     头寸只对 ≥数百 MiB 的目标分配确定失效,KB 级目标即退回
+     第八轮判定过的 knife-edge;malloc 注入基建维持不投入;
+  4. **lit 行的守卫子臂**:`malloc(len ? len : 1)` 的 len==0 臂
+     726/1502/3167/3190(0 长 payload 走 malloc(1),不会失败)、
+     `len ? len : 1` 三元分派本身、||/&& 的另一半(954/1096/
+     2007/2072 等closed||NOREF 守卫已驱一半);
+  5. **异步孪生的同步臂**:fswatch 内核错误 958/964/987、udp
+     recv 错误 2046、uv_udp_send 失败 2173、dns 内部 2281/
+     2324/2333/2367/2376、mid-connect close 孪生 1264/1288/
+     1480、SSL 硬错误孪生 2885-2887/3180-3182(对端握手后
+     fatal alert,tsock API 不可发)、同步 connect 双臂
+     3096-3137(loopback 恒 EINPROGRESS,第十一轮)、SO_ERROR
+     查询失败 fallback 2944-2958(活 fd 不失败)、
+     getpeername 失败 1640/3257;
+  6. **TLS 内部时序支路**:2749(uv_is_closing 防御)、2752/
+     2764/2783/2821/2832/2869/2894/2908/2922/2934/2952/2991/
+     3000(pump 状态机的 WANT 孪生与 eof/close 交叠)、
+     3212(read-after-eof)、3226(双 close(cb) 重钉)、3288
+     (tostring handshake 臂)、3305/3314(ref/unref closed
+     臂——close 后无事件再武装,防御)、3334-3335(__gc 的
+     testudata 与 selfref 在握臂——注册表钉盒,终结化不可达,
+     第十二轮设计不变式的防御性补充);
+  7. **proc 交付门时序孪生**:3758/3761(delivered/exit_seen/
+     pipes_closed 的到达顺序组合)、3816(running 臂——run()
+     模式出口只在进程死后)、3836(uv_process_kill 失败——
+     活进程对 SIGTERM 不失败)、3852(无 args 调用形状);
+  8. **环境依赖**:2309-2310(dns 多地址循环——本机 localhost
+     单 AF,不可确定性驱动)。
+- 环境披露:本轮零产品代码改动(纯测试 + todo,git diff 核对
+  无插桩残留);门禁首跑 build 树 loop 一败——与 ASan 轮并行
+  导致 /tmp/luna-loop-sparse.bin 共享夹具竞态(ASan 进程中途
+  unlink,ENOENT 冒充 ENOMEM;第十一轮 ASan 日志互串同类),
+  串行复跑全绿;两树 ctest 均按 --timeout 900 运行参数,库
+  文件未动;ASan 按既有加预算做法(720s)复跑。
+
+
 ## 下轮方向
 
 - tsock 结构体泄漏:**已完成(第十二轮,见上)**。
-- malloc 注入基建维持第八轮判定(仅在真实回归疑点时再评估)。
-- 覆盖率专项收官:C/Lua 两侧余量全为逐腿表征,转入按需修补。
+- luna_loop 分支覆盖专项:**已完成(第十三轮,见上;余量全为
+  逐臂表征)**。
+- malloc 注入基建维持第八轮判定(仅在真实回归疑点时再评估;
+  第十三轮确认 t_lowermem 窗口已覆盖其对大分配的全部可达面)。
+- 覆盖率专项收官:C/Lua 两侧余量全为逐腿/逐臂表征,转入按需修补。
 
 ## 明确不做(上一轮)
 

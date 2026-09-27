@@ -157,10 +157,163 @@ static void test_install_lock_reproduce_cycle(void **state)
     free(lock2);
 }
 
+/* The offline corners of the wrapper: usage errors, lock-file errors,
+ * the sha refusal, path injection — none of these touch the network,
+ * so they run everywhere the real install test does (and faster). */
+
+static void write_file(const char *relpath, const char *text)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", workdir, relpath);
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    assert_int_equal(fwrite(text, 1, strlen(text), f), strlen(text));
+    assert_int_equal(fclose(f), 0);
+}
+
+static int run_luna_in(const char *dir, const char *args)
+{
+    char cmd[600];
+    snprintf(cmd, sizeof(cmd),
+             "cd '%s' && timeout 420 '%s' %s > out.log 2>&1",
+             dir, LUNA_BIN, args);
+    int rc = system(cmd);
+    if (rc == -1 || !WIFEXITED(rc))
+        return -1;
+    return WEXITSTATUS(rc);
+}
+
+static char *out_log(void)
+{
+    char logpath[512];
+    snprintf(logpath, sizeof(logpath), "%s/out.log", workdir);
+    return read_all(logpath);
+}
+
+static void test_install_usage_is_an_error(void **state)
+{
+    (void)state;
+    assert_int_equal(run_luna("install"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "usage: luna install"));
+    free(log);
+}
+
+static void test_update_without_a_lock_is_an_error(void **state)
+{
+    (void)state;
+    assert_int_equal(run_luna("update"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "no luna.lock here"));
+    free(log);
+}
+
+static void test_update_with_a_broken_lock_is_an_error(void **state)
+{
+    (void)state;
+    write_file("luna.lock", "{oops");
+    assert_int_equal(run_luna("update"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "not valid JSON"));
+    free(log);
+}
+
+static void test_update_on_an_empty_lock_relocks_offline(void **state)
+{
+    (void)state;
+    write_file("luna.lock",
+               "{\"version\":1,\"lua\":\"5.5\",\"rocks\":[]}\n");
+    assert_int_equal(run_luna("update"), 0);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "locked 0 rocks"));
+    free(log);
+}
+
+static void test_from_lock_refuses_a_cached_sha_mismatch(void **state)
+{
+    (void)state;
+    /* a cached source whose bytes do not hash to the locked sha is
+     * refused before luarocks ever runs — offline */
+    char mkcache[600];
+    snprintf(mkcache, sizeof(mkcache), "mkdir -p '%s/.luna/cache'", workdir);
+    assert_int_equal(system(mkcache), 0);
+    write_file(".luna/cache/fakerock-1.0-1.src.rock", "not the bytes\n");
+    write_file("luna.lock",
+               "{\"version\":1,\"lua\":\"5.5\",\"rocks\":["
+               "{\"name\":\"fakerock\",\"version\":\"1.0-1\","
+               "\"sha256\":\"0000\"}]}\n");
+    assert_int_equal(run_luna("install --from-lock"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "sha256 mismatch for cached"));
+    free(log);
+}
+
+static void test_rocks_tree_injects_module_paths(void **state)
+{
+    (void)state;
+    /* a .luna/rocks tree in the cwd (and in a parent of the cwd)
+     * joins package.path/cpath at startup */
+    char lunadir[512], tree[512], deep[512];
+    snprintf(lunadir, sizeof(lunadir), "%s/.luna", workdir);
+    assert_int_equal(mkdir(lunadir, 0755), 0);
+    snprintf(tree, sizeof(tree), "%s/.luna/rocks", workdir);
+    assert_int_equal(mkdir(tree, 0755), 0);
+    snprintf(deep, sizeof(deep), "%s/deep", workdir);
+    assert_int_equal(mkdir(deep, 0755), 0);
+    assert_int_equal(run_luna_in(
+        workdir, "-e 'print(package.path:find(\".luna/rocks\", 1, true) "
+                 "~= nil, package.cpath:find(\".luna/rocks\", 1, true) "
+                 "~= nil)'"), 0);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "true\ttrue"));
+    free(log);
+    /* and from a subdirectory the walk-up finds the same tree */
+    assert_int_equal(run_luna_in(
+        deep, "-e 'print(package.path:find(\".luna/rocks\", 1, true) "
+              "~= nil)'"), 0);
+    char deeplog[512];
+    snprintf(deeplog, sizeof(deeplog), "%s/out.log", deep);
+    char *dlog = read_all(deeplog);
+    assert_non_null(dlog);
+    assert_non_null(strstr(dlog, "true"));
+    free(dlog);
+}
+
+static void test_list_on_an_empty_tree_is_quiet_offline(void **state)
+{
+    (void)state;
+    char lunadir[512], tree[512];
+    snprintf(lunadir, sizeof(lunadir), "%s/.luna", workdir);
+    assert_int_equal(mkdir(lunadir, 0755), 0);
+    snprintf(tree, sizeof(tree), "%s/.luna/rocks", workdir);
+    assert_int_equal(mkdir(tree, 0755), 0);
+    assert_int_equal(run_luna("list"), 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_install_lock_reproduce_cycle,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_install_usage_is_an_error,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_update_without_a_lock_is_an_error,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_update_with_a_broken_lock_is_an_error,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_update_on_an_empty_lock_relocks_offline,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_from_lock_refuses_a_cached_sha_mismatch,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_rocks_tree_injects_module_paths,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_list_on_an_empty_tree_is_quiet_offline,
                                         setup_rocks, teardown_rocks),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);

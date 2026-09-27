@@ -95,8 +95,11 @@ static int setup_modules(void **state)
     /* install the module system (mirrors the luna entry chunk) */
     lua_pushlstring(L, LUNA_LUA_MODULES, sizeof(LUNA_LUA_MODULES) - 1);
     lua_setglobal(L, "__LUNA_MODULES_SRC");
+    lua_pushlstring(L, LUNA_LUA_ROCKS, sizeof(LUNA_LUA_ROCKS) - 1);
+    lua_setglobal(L, "__LUNA_ROCKS_SRC");
     run(L,
         "package.preload['luna.modules'] = assert(load(__LUNA_MODULES_SRC, luna_chunkname('modules')))\n"
+        "package.preload['luna.rocks'] = assert(load(__LUNA_ROCKS_SRC, luna_chunkname('rocks')))\n"
         "require('luna.modules').install()\n"
         "M = require('luna.modules')");
     return 0;
@@ -446,6 +449,59 @@ static void test_start_dir_falls_back_without_lfs(void **state)
         "return ok == false and tostring(err):find('no-such-mod-zz', 1, true) ~= nil"));
 }
 
+/* luna.rocks' own load-time and vendor guards, driven from this VM
+ * where the kernel module (which hands the real paths over) is absent */
+
+static void test_rocks_module_needs_dkjson(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "package.loaded['luna.rocks'] = nil\n"
+        "local saved_pre = package.preload['dkjson']\n"
+        "local saved_loaded = package.loaded['dkjson']\n"
+        "package.loaded['dkjson'] = nil\n"
+        "package.preload['dkjson'] = function() error('stub: dkjson away') end\n"
+        "local ok, err = pcall(require, 'luna.rocks')\n"
+        "package.preload['dkjson'] = saved_pre\n"
+        "package.loaded['dkjson'] = saved_loaded\n"
+        "return tostring(ok) .. ',' ..\n"
+        "    tostring(tostring(err):find('needs dkjson', 1, true) ~= nil)"),
+        "false,true");
+}
+
+static void test_rocks_vendor_legs_die_before_luarocks(void **state)
+{
+    (void)state;
+    /* empty LUNA_VENDOR_DIR reads as unset; a bogus one fails the
+     * vendored-sources check — both must die before any luarocks code
+     * loads. os.exit is stubbed so the VM survives the exit(1). */
+    setenv("LUNA_VENDOR_DIR", "", 1);
+    assert_string_equal(eval_string(
+        "local rocks = require('luna.rocks')\n"
+        "local code, real = nil, os.exit\n"
+        "os.exit = function(c) code = c or 0 error('OS_EXIT') end\n"
+        "local ok = pcall(rocks.dispatch, {'list'})\n"
+        "os.exit = real\n"
+        "return tostring(ok) .. ',' .. tostring(code)"),
+        "false,1");
+    setenv("LUNA_VENDOR_DIR", "/nonexistent-luna-vendor", 1);
+    assert_string_equal(eval_string(
+        "local code, real = nil, os.exit\n"
+        "os.exit = function(c) code = c or 0 error('OS_EXIT') end\n"
+        "local ok = pcall(require('luna.rocks').dispatch, {'list'})\n"
+        "os.exit = real\n"
+        "return tostring(ok) .. ',' .. tostring(code)"),
+        "false,1");
+    unsetenv("LUNA_VENDOR_DIR");
+    /* a command outside the four names returns 1 without exiting or
+     * touching luarocks — the luna entry's ROCKS_CMDS gate means this
+     * leg is only reachable through a direct dispatch call */
+    assert_string_equal(eval_string(
+        "local ok, rc = pcall(require('luna.rocks').dispatch, {'frobnicate'})\n"
+        "return tostring(ok) .. ',' .. tostring(rc)"),
+        "true,1");
+}
+
 /* -- runner ---------------------------------------------------------------- */
 
 int main(void)
@@ -479,6 +535,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_manifest_main_without_lua_suffix_variants, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_relative_source_caller_absolutizes_via_lfs, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_start_dir_falls_back_without_lfs, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_rocks_module_needs_dkjson, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_rocks_vendor_legs_die_before_luarocks, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

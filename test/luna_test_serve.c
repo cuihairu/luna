@@ -642,6 +642,88 @@ static void test_attach_reports_when_the_target_dies(void **state)
  * the \1 meta line to the target, the framed candidate list comes back,
  * and the inserted tail lands in the editor. %exit detaches the CLIENT
  * (EXIT frame) and leaves the target running. */
+static void test_attach_pty_when_the_target_dies_mid_session(void **state)
+{
+    (void)state;
+    char marker[512];
+    snprintf(marker, sizeof(marker), "%s/target.done", sockdir);
+
+    int tpipe[2];
+    assert_int_equal(pipe(tpipe), 0);
+    pid_t target = fork();
+    assert_int_not_equal(target, -1);
+    if (target == 0) {
+        close(tpipe[0]);
+        dup2(tpipe[1], STDOUT_FILENO);
+        dup2(tpipe[1], STDERR_FILENO);
+        close(tpipe[1]);
+        char *argv[] = { LUNA_BINARY, SERVE_FIXTURES "/attach_target.lua",
+                         marker, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+    close(tpipe[1]);
+
+    char path[256];
+    snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    assert_int_equal(access(path, F_OK), 0);
+
+    int master;
+    pid_t attacher = forkpty(&master, NULL, NULL, NULL);
+    assert_int_not_equal(attacher, -1);
+    if (attacher == 0) {
+        setenv("TERM", "xterm", 1);
+        char pidstr[16];
+        snprintf(pidstr, sizeof(pidstr), "%d", (int)target);
+        char *argv[] = { LUNA_BINARY, "--attach", pidstr, NULL };
+        execv(LUNA_BINARY, argv);
+        _exit(127);
+    }
+
+    char wire[32768];
+    wire[0] = '\0';
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "attached to",
+                                10000), 1);
+
+    /* the target vanishes under the client: a Tab now finds the socket
+     * dead (the completion hook hands back an empty list — the bell —
+     * instead of crashing the editor) and the next committed line ends
+     * the session. Which message lands depends on the kernel's close
+     * timing: the send may still fit in the dead socket's buffer (no
+     * reply) or hit EPIPE at once (went away). Either way exit 1. */
+    assert_int_equal(kill(target, SIGKILL), 0);
+    waitpid(target, NULL, 0);
+    assert_int_equal(write(master, "z\t", 2), 2);
+    pty_collect(master, wire, sizeof(wire), 500);
+    assert_int_equal(write(master, "x\r", 2), 2);
+    assert_int_equal(pty_expect(master, wire, sizeof(wire), "reply", 10000),
+                     1);
+
+    int status = 0;
+    waited = 0;
+    while (waited < 30000) {
+        if (waitpid(attacher, &status, WNOHANG) == attacher)
+            break;
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    if (waited >= 30000) {
+        kill(attacher, SIGKILL);
+        waitpid(attacher, &status, 0);
+        close(master);
+        fail_msg("attacher never left; wire=[%s]", wire);
+    }
+    assert_true(WIFEXITED(status));
+    assert_int_equal(WEXITSTATUS(status), 1);
+    close(master);
+    unlink(marker);
+}
+
 static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
 {
     (void)state;
@@ -695,16 +777,21 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
     /* the completed line evaluates in the target's live state (raw
      * mode: Enter is CR) */
     assert_int_equal(write(master, "\r", 1), 1);
-    assert_int_equal(pty_expect(master, wire, sizeof(wire), "42", 10000), 1);
+    /* wait for the *settled* reply, not just the "42": the next
+     * prompt's paint only happens once the editor is back in raw
+     * mode. Typing while the terminal is still cooked echoes the
+     * keystrokes to the wire and hands replxx a batched line it can
+     * wedge on — the client then never sends, and its 30s socket
+     * timeout outlives any sane expect window. */
+    assert_int_equal(
+        pty_expect(master, wire, sizeof(wire), "42\r\nattach>", 10000), 1);
     /* %exit detaches the client and prints the EXIT frame's body. The
      * delivery rides the target's instruction-count hook, and the
-     * target is a busy poll loop: under a loaded machine its share of
-     * CPU decides when the frame lands, so this one window is generous
-     * rather than the usual 10s. */
+     * target is a busy poll loop — but 10s is plenty once the line is
+     * actually typed into a settled editor: the old flake was the
+     * cooked-terminal race above, not hook latency. */
     assert_int_equal(write(master, "%exit\r", 6), 6);
-    assert_int_equal(
-        pty_expect(master, wire, sizeof(wire), "detaches the client", 30000),
-        1);
+    PTY_EXPECT(master, wire, "detaches the client");
 
     int status = 0;
     waited = 0;
@@ -1185,6 +1272,7 @@ int main(void)
         cmocka_unit_test(test_attach_shows_error_frames_on_stderr),
         cmocka_unit_test(test_attach_reports_when_the_target_dies),
         cmocka_unit_test(test_attach_pty_completes_and_leaves_via_exit_magic),
+        cmocka_unit_test(test_attach_pty_when_the_target_dies_mid_session),
         cmocka_unit_test(test_console_percent_clear_paints_the_screen),
         cmocka_unit_test(test_console_percent_exit_leaves_cleanly),
         cmocka_unit_test(test_a_broken_attach_poll_never_kills_the_chunk),

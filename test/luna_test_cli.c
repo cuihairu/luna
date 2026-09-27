@@ -306,6 +306,27 @@ static void test_interactive_help_injected(void **state)
     assert_non_null(strstr(outbuf, "function("));
 }
 
+static void test_interactive_whos_injected(void **state)
+{
+    (void)state;
+    /* whos() is the other injected convenience: a table of globals */
+    run_luna_piped("q = 7\\nwhos()\\n", "");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "name"));
+    assert_non_null(strstr(outbuf, "q"));
+}
+
+static void test_help_sugar_on_a_broken_expr(void **state)
+{
+    (void)state;
+    /* `? expr` sugar evaluating to a compile failure reports it like
+     * any evaluation error and the session keeps going */
+    run_luna_piped("? 1+\\n40 + 2\\n", "");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "expected"));
+    assert_non_null(strstr(outbuf, "Out[1]: 42"));
+}
+
 /* -- color / degradation --------------------------------------------------- */
 
 static void test_color_forced_by_env(void **state)
@@ -378,6 +399,8 @@ int main(void)
         cmocka_unit_test(test_interactive_after_script),
         cmocka_unit_test(test_interactive_error_keeps_going),
         cmocka_unit_test(test_interactive_help_injected),
+        cmocka_unit_test(test_interactive_whos_injected),
+        cmocka_unit_test(test_help_sugar_on_a_broken_expr),
         cmocka_unit_test(test_color_forced_by_env),
         cmocka_unit_test(test_color_disabled_by_env),
         cmocka_unit_test(test_runs_without_coverage_instrumentation),

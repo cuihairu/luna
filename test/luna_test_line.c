@@ -880,6 +880,60 @@ static void test_non_string_candidates_are_skipped(void **state)
     assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
 }
 
+/* the completion bridge caps what it hands replxx at 1000 candidates;
+ * with 1002 matching globals the pager announces exactly 1000 — direct
+ * evidence the truncation fired — and the flood does not wedge the
+ * editor */
+static void test_completion_candidates_cap_at_1000(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "for i=1,1002 do _G[\"zzq\"..i]=i end\r");
+    assert_true(expect(master, "In [2]", 10000));
+    mark_step();
+    type(master, "zzq\t");
+    assert_true(expect(master, "Display all 1000 possibilities", 5000));
+    mark_step();
+    type(master, "n");  /* abort the listing; the draft line is redrawn */
+    assert_true(expect(master, "zzq", 3000));
+    type(master, "\x03"); /* cancel it rather than run it */
+    assert_true(expect(master, "^C", 3000));
+    /* the fresh prompt usually lands in the same read chunk as the ^C,
+     * so no mark here — a mark would cut it out of the window */
+    assert_true(expect(master, "In [2]", 3000));
+    /* replxx re-arms raw mode after the prompt is up: bytes typed in
+     * that window are dropped by the terminal-attributes flush. Settle
+     * past it. */
+    usleep(250 * 1000);
+    mark_step();
+    type(master, "6*7\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    /* the for-loop was input #1 and 6*7 is #2 (the ^C cancel does not
+     * bump the counter), so the closing prompt is In [3] */
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* an astral-plane character is four UTF-8 bytes: the highlighter's
+ * decoder takes its 4-byte-width arm and the value round-trips —
+ * #s counts 4 */
+static void test_astral_utf8_roundtrips_through_the_editor(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "s = \"\xf0\x9d\x84\x9e\"\r"); /* U+1D11E musical G clef */
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    type(master, "#s\r");
+    assert_true(expect(master, "Out[1]: 4", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
 /* -- coverage-targeted tests for remaining dark branches ------------------- */
 
 /* 4-byte UTF-8 codepoint through the highlighter: the width calculation
@@ -1076,6 +1130,8 @@ int main(void)
         cmocka_unit_test(test_ctrl_l_repaints_and_keeps_the_draft),
         cmocka_unit_test(test_completion_spans_outside_the_input_are_rejected),
         cmocka_unit_test(test_non_string_candidates_are_skipped),
+        cmocka_unit_test(test_completion_candidates_cap_at_1000),
+        cmocka_unit_test(test_astral_utf8_roundtrips_through_the_editor),
         /* coverage-targeted tests */
         cmocka_unit_test(test_four_byte_utf8_in_highlighter),
         cmocka_unit_test(test_highlighter_tail_fill),

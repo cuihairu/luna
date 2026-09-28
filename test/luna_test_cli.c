@@ -112,6 +112,79 @@ static void test_error_object_with_raising_tostring_is_named(void **state)
     assert_non_null(strstr(outbuf, "stack traceback"));
 }
 
+static void test_error_object_tostring_message_skips_traceback(void **state)
+{
+    (void)state;
+    /* a __tostring that succeeds and returns a string takes the
+     * handler's early path: the string IS the message, rendered
+     * verbatim, and no traceback is attached — the contract the
+     * fallback path (raising/absent tostring) inverts */
+    run_luna("'" LUNA_FIXTURES "/tostring_message.lua'");
+    assert_int_equal(last_code, 1);
+    assert_non_null(strstr(outbuf, "tbl: via metamethod"));
+    assert_null(strstr(outbuf, "stack traceback"));
+    assert_null(strstr(outbuf, "(error object is not a string)"));
+}
+
+static void test_error_object_with_non_string_tostring_falls_back(void **state)
+{
+    (void)state;
+    /* a __tostring that returns a NUMBER: the metamethod path only
+     * accepts a string, so the handler falls back to naming the object
+     * and the traceback renders (the mirror of the metamethod-string
+     * path above, which attaches none) */
+    run_luna("'" LUNA_FIXTURES "/tostring_returns_non_string.lua'");
+    assert_int_equal(last_code, 1);
+    assert_non_null(strstr(outbuf, "(error object is not a string)"));
+    assert_non_null(strstr(outbuf, "stack traceback"));
+}
+
+/* kernel.chmod's mode argument is parsed with strtol(base 8) and every
+ * malformed shape — trailing garbage, negative, over 07777 — is the
+ * same "bad mode" rejection */
+static void test_chmod_rejects_bad_modes(void **state)
+{
+    (void)state;
+    run_luna("-e 'print(pcall(kernel.chmod, \"/tmp/luna-chmod-probe\", \"444x\"))"
+             " print(pcall(kernel.chmod, \"/tmp/luna-chmod-probe\", \"-1\"))"
+             " print(pcall(kernel.chmod, \"/tmp/luna-chmod-probe\", \"10000\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "bad mode \"444x\""));
+    assert_non_null(strstr(outbuf, "bad mode \"-1\""));
+    assert_non_null(strstr(outbuf, "bad mode \"10000\""));
+}
+
+/* the incompleteness contract for each surface the heuristic guards:
+ * trailing blank after an operator (space/tab/CR) and the unterminated
+ * long bracket, with a complete chunk as the control */
+static void test_check_classifies_truncated_chunks(void **state)
+{
+    (void)state;
+    run_luna("-e 'local s = \"\""
+             " for _, c in ipairs({\"1 + \", \"1 +\\t\", \"1 +\\r\", \"x = [[\"}) do"
+             " s = s .. ({kernel.check(c)})[1] .. \",\" end"
+             " print(s)"
+             " print(({kernel.check(\"x = 6*7\")})[1])'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "incomplete,incomplete,incomplete,incomplete,"));
+    assert_non_null(strstr(outbuf, "ok"));
+}
+
+/* the name slot is dropped and everything after it becomes the
+ * chunk's `...`, matching the script convention; the bare one-argument
+ * call skips the name slot entirely */
+static void test_exec_passes_script_args_after_name(void **state)
+{
+    (void)state;
+    run_luna("-e 'print(kernel.exec(\"return select(\\\"#\\\", ...), ...\","
+             " \"nm\", \"a\", \"b\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "true\t2\ta\tb"));
+    run_luna("-e 'print(kernel.exec(\"return 5\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "true\t5"));
+}
+
 /* -- eval group -------------------------------------------------------- */
 
 static void test_eval_expression_echoes(void **state)
@@ -363,6 +436,19 @@ static void test_color_disabled_by_env(void **state)
     assert_null(strstr(outbuf, "\x1b["));
 }
 
+static void test_color_empty_value_defers_to_tty(void **state)
+{
+    (void)state;
+    /* an EMPTY LUNA_COLOR is not a forcing value: only a non-empty one
+     * decides, so the empty form falls through to the TTY check — and
+     * a pipe is no TTY, so colors stay off (LUNA_COLOR=1 would force
+     * them on here; that contrast is the point) */
+    run_luna_env("LUNA_COLOR=", "-e '40 + 2'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "Out[1]: 42"));
+    assert_null(strstr(outbuf, "\x1b["));
+}
+
 static void test_runs_without_coverage_instrumentation(void **state)
 {
     (void)state;
@@ -401,6 +487,11 @@ int main(void)
         cmocka_unit_test(test_script_error_exit_code),
         cmocka_unit_test(test_script_missing_file),
         cmocka_unit_test(test_error_object_with_raising_tostring_is_named),
+        cmocka_unit_test(test_error_object_tostring_message_skips_traceback),
+        cmocka_unit_test(test_error_object_with_non_string_tostring_falls_back),
+        cmocka_unit_test(test_chmod_rejects_bad_modes),
+        cmocka_unit_test(test_check_classifies_truncated_chunks),
+        cmocka_unit_test(test_exec_passes_script_args_after_name),
         cmocka_unit_test(test_eval_expression_echoes),
         cmocka_unit_test(test_eval_print),
         cmocka_unit_test(test_eval_error_exit_code),
@@ -417,6 +508,7 @@ int main(void)
         cmocka_unit_test(test_help_sugar_on_a_broken_expr),
         cmocka_unit_test(test_color_forced_by_env),
         cmocka_unit_test(test_color_disabled_by_env),
+        cmocka_unit_test(test_color_empty_value_defers_to_tty),
         cmocka_unit_test(test_runs_without_coverage_instrumentation),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),

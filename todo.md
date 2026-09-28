@@ -767,6 +767,48 @@
   line 组 37 例态,已推送);本轮 CMakeLists 仅动 gcovr 报告
   范围,产品代码零改动;rocks 网络腿本轮未涉足。
 
+## C 侧分支方向清扫(2026-09-28 第十七轮)
+
+- 前提:Lua 侧已到登记上限(97.82%,四文件暗腿全在"明确不
+  做"),本轮转 C 侧从未系统扫过的**分支方向**(taken 0%):
+  luna_main 62%(19 暗/50)、luna_kernel 83.33%(16 暗/96)。
+- kernel 16 条逐腿处置,10 条落真测试、6 条登记:
+  - chmod 模式解析三暗臂(尾部垃圾/负数/超 07777):一个 cli
+    测试三 pcall 全锁(实测 `bad mode "..."` 文本);
+  - check:修剪臂 Tab/CR(空格臂先期已亮)+ 未闭合长括号,
+    聚合断言四个 incomplete;243 第二 strstr("unfinished
+    long")按消息形状重叠登记——实测 5.5 该消息恒带
+    `<eof>`(`unfinished long string (starting at line 1)
+    near <eof>`),241 先截,该臂为死防御;
+  - exec:name 槽与脚本参数(实测 `true 2 a b`)+ 无 name 单
+    参形态(全套件从未用过,实测 `true 5`);
+  - msghandler __tostring 两暗臂与第十六轮"会炸的
+    __tostring"拼成三形态契约:**返回字符串**走早路径,消息
+    直出且**无 traceback**(fixture tostring_message.lua);
+    **返回非字符串**(42)落回退,`(error object is not a
+    string)`+traceback(tostring_returns_non_string.lua);
+  - colors:LUNA_COLOR 空值非强制(env 测试,落到 TTY 判定);
+    TERM=dumb 与 TERM 未设两臂需 isatty(1)==true 才短路到,
+    只有 pty 可达——harness 加 spawn_repl_term(TERM 参数化,
+    NULL 即 unsetenv),dumb 断言 SGR 缺席、未设断言 SGR 在
+    场(锁"未设回退 TTY 能力"语义);
+  - 登记 6 条:200 branch1+202(修剪到空——全空白块 load 恒
+    OK,构造不可达)、236+288(load 失败无消息——OOM 类)、
+    324(运行时非字符串错误对象——第十六轮实测 5.5 handler
+    吸收,OOM 类)、243 branch2(消息形状重叠,见上)。
+- main 19 条暗方向逐腿核对:全部落在第十六轮已登记暗行的同
+  族区域(78/93/203-204/250/257/268/281/295/349/364/368——
+  构造保证/白盒已测未计/OOM 类),无新增可注入腿;分支 taken
+  维持 62%(31/50),登记升级为行+方向双层口径。
+- 账面:kernel 分支 taken 83.33% → **93.75%**(90/96);聚合
+  分支 76.6% → **77.5%**(919/1186);行账 95.2% 不动(零产品
+  代码改动,符合预期)。测试账:cli 23→29、line 37→39。
+- 门禁:两树全量 15/15 串行绿(build 先行,cov 随后;负载峰
+  值 59,rocks 组未假挂);覆盖率门禁如上。
+- 方法披露:分支编号不直观处(gcda 的 branch N 与源码子条件
+  的对应)一律以行命中数交叉定案——如 msghandler 早路径先判
+  为未亮,264 行 23 次命中证伪,残暗实为另一子条件。
+
 
 ## 下轮方向
 
@@ -775,7 +817,9 @@
   逐臂表征)**。
 - malloc 注入基建维持第八轮判定(仅在真实回归疑点时再评估;
   第十三轮确认 t_lowermem 窗口已覆盖其对大分配的全部可达面)。
-- 覆盖率专项收官:C/Lua 两侧余量全为逐腿/逐臂表征,转入按需修补。
+- 覆盖率专项收官:C/Lua 两侧余量全为逐腿/逐臂/逐方向表征
+  (第十七轮后含 C 分支方向层:luna_main 62%、luna_kernel
+  93.75% 的残暗方向全数登记),转入按需修补。
 
 ## 明确不做(上一轮)
 

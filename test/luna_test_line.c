@@ -49,7 +49,11 @@ static void hist_path(char *out, size_t cap, const char *home)
  * editor engage at all. The pty gets a real window size: replxx lays
  * the input line out against the terminal width, and a 0x0 pty (what
  * forkpty hands out by default) makes that arithmetic degenerate. */
-static pid_t spawn_repl(int *master_out, const char *home, int no_color)
+/* `term` == NULL runs the child with TERM scrubbed (kernel.colors()
+ * then takes its getenv-returned-NULL arm); "dumb" exercises the
+ * classic no-color terminal convention on a real TTY. */
+static pid_t spawn_repl_term(int *master_out, const char *home, int no_color,
+                             const char *term)
 {
     struct winsize ws;
     memset(&ws, 0, sizeof(ws));
@@ -60,7 +64,10 @@ static pid_t spawn_repl(int *master_out, const char *home, int no_color)
     assert_int_not_equal(pid, -1);
     if (pid == 0) {
         char *argv[] = { LUNA_BIN, NULL };
-        setenv("TERM", "xterm", 1);
+        if (term)
+            setenv("TERM", term, 1);
+        else
+            unsetenv("TERM");
         setenv("HOME", home, 1);
         setenv("LUNA_SOCK_DIR", sockdir, 1);
         if (no_color)
@@ -72,6 +79,11 @@ static pid_t spawn_repl(int *master_out, const char *home, int no_color)
     wire_len = 0;
     mark = 0;
     return pid;
+}
+
+static pid_t spawn_repl(int *master_out, const char *home, int no_color)
+{
+    return spawn_repl_term(master_out, home, no_color, "xterm");
 }
 
 /* Drop everything read so far: the next wait only sees what comes
@@ -523,6 +535,41 @@ static void test_no_color_degrades_the_input_line(void **state)
     expect_no_raw(master, "\x1b[0;1;31m", 500);
     expect_no_raw(master, "\x1b[0;1;36m", 500);
     expect_no_raw(master, "\x1b[1;35m", 500);
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+/* TERM=dumb is the classic "this terminal cannot color" convention:
+ * on a real TTY the session must degrade exactly like NO_COLOR and
+ * otherwise work untouched. */
+static void test_term_dumb_degrades_colors_on_a_tty(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl_term(&master, hist_home, 0, "dumb");
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "local tt = 9\r");
+    assert_true(expect(master, "In [2]", 5000));
+    expect_no_raw(master, "\x1b[0;1;31m", 500);
+    expect_no_raw(master, "\x1b[0;1;36m", 500);
+    expect_no_raw(master, "\x1b[1;35m", 500);
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+/* TERM unset is not dumb: on a TTY the answer falls back to the TTY's
+ * own ability, which here means colors stay on. */
+static void test_term_unset_on_a_tty_keeps_colors(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl_term(&master, hist_home, 0, NULL);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "local uu = 9\r");
+    assert_true(expect(master, "In [2]", 5000));
+    /* the input line is painted when color is allowed: the same SGR the
+     * NO_COLOR test asserts the absence of */
+    expect_raw(master, "\x1b[0;1;36m", 500);
     assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
 }
 
@@ -1011,6 +1058,8 @@ int main(void)
         cmocka_unit_test(test_tty_line_echo_is_highlighted),
         cmocka_unit_test(test_utf8_line_is_highlighted_and_echoed_intact),
         cmocka_unit_test(test_no_color_degrades_the_input_line),
+        cmocka_unit_test(test_term_dumb_degrades_colors_on_a_tty),
+        cmocka_unit_test(test_term_unset_on_a_tty_keeps_colors),
         cmocka_unit_test(test_ctrl_c_cancels_the_line_and_keeps_the_session),
         cmocka_unit_test(test_ctrl_c_in_a_continuation_drops_the_block),
         cmocka_unit_test(test_eof_on_fresh_prompt_exits_cleanly),

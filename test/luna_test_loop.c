@@ -1104,6 +1104,15 @@ static void test_dns_reverse_maps_loopback(void **state)
         "return out"), "true:localhost");
 }
 
+/* The dnsop/resolver/tsock_new/argv_array malloc-failure legs allocate
+ * only small structs (a few hundred bytes). The existing RLIMIT_AS-based
+ * OOM injection (VmSize + 128 MiB) cannot trigger these reliably — the
+ * limit still leaves ample room for tiny allocations. Only the LARGE
+ * allocation legs (1 GiB+ payloads, 2 GiB sparse files) are exercised by
+ * the t_lowermem/t_deny_fds infrastructure. These small-struct legs are
+ * characterized here as untestable with current tooling; the meaningful
+ * OOM surface is the large-buffer paths already covered. */
+
 static void test_os_basics_report_sane_values(void **state)
 {
     (void)state;
@@ -4259,6 +4268,12 @@ static void test_net_connect_hostname_via_resolver(void **state)
     pthread_join(th, NULL);
 }
 
+/* The resolver malloc (struct resolver) is a small fixed-size allocation.
+ * The t_lowermem injection cannot reliably trigger its failure — see the
+ * note above the dns OOM legs. The meaningful OOM surface for connect()
+ * is the sockwrite payload buffer, already covered by
+ * test_sock_write_oom_leg_reports_a_clean_error. */
+
 static void test_net_connect_closed_before_it_completes(void **state)
 {
     (void)state;
@@ -4689,6 +4704,12 @@ static void test_proc_oom_cleanup_legs(void **state)
         "       tostring((tostring(e4):find('spawn failed') ~= nil))"),
         "true,true,true,true");
 }
+
+/* The argv array malloc (proc_build_argv first malloc) is a small allocation.
+ * The t_lowermem injection cannot reliably trigger its failure — see the
+ * note above the dns OOM legs. The meaningful proc OOM surfaces are the
+ * large command/argument string copies, already covered by
+ * test_proc_oom_cleanup_legs. */
 
 static void test_broken_attach_step_never_stops_time(void **state)
 {
@@ -5449,6 +5470,60 @@ static void test_tls_write_oom_leg_reports_a_clean_error(void **state)
     unlink("/tmp/luna-loop-tls-key.pem");
 }
 
+/* The tsock struct itself (calloc at tsock_new) is a small fixed allocation.
+ * The t_lowermem injection cannot reliably trigger its failure — see the
+ * note above the dns OOM legs. The meaningful TLS OOM surfaces are the
+ * pend payload buffers (1 GiB+), exercised by
+ * test_tls_write_oom_leg_reports_a_clean_error and
+ * test_tls_write_pend_oom_legs_reports_clean_errors below. */
+
+static void test_tls_write_pend_oom_legs_reports_clean_errors(void **state)
+{
+    (void)state;
+    /* targeted test for BOTH pend-malloc legs:
+     * 1) pre-handshake park (write before handshake completes)
+     * 2) post-handshake partial-write park (SSL_write returns WANT_READ/WRITE)
+     * Each must raise the module's own out-of-memory message synchronously. */
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1200];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0,"
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end end)\n"
+        "-- leg 1: write IMMEDIATELY after connectTls returns (pre-handshake)\n"
+        "local s1 = net.connectTls('127.0.0.1', srv:port(),"
+        " {insecure = true}, function() end)\n"
+        "t_lowermem()\n"
+        "local ok1, e1 = pcall(s1.write, s1, big)\n"
+        "t_restoremem()\n"
+        "out[1] = tostring(not ok1 and\n"
+        "  tostring(e1):find('out of memory', 1, true) ~= nil)\n"
+        "s1:close()\n"
+        "-- leg 2: write AFTER handshake completes, force partial write by\n"
+        "-- sending a large payload that will block (server not reading)\n"
+        "local s2 = net.connectTls('127.0.0.1', srv:port(),"
+        " {insecure = true},\n"
+        "  function(e, s)\n"
+        "    if e then out[2] = 'c=' .. e return end\n"
+        "    t_lowermem()\n"
+        "    local ok2, e2 = pcall(s.write, s, big)\n"
+        "    t_restoremem()\n"
+        "    out[2] = tostring(not ok2 and\n"
+        "      tostring(e2):find('out of memory', 1, true) ~= nil)\n"
+        "    s:close()\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(out, ',')", cert, key);
+    seed_big_global();
+    assert_string_equal(eval_string(code), "true,true");
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
 /* every guarded method on a closed sock — plain, udp and tls — must
  * throw the module's own message instead of touching the dead handle */
 static void test_closed_sock_method_contracts_throw_cleanly(void **state)
@@ -5795,6 +5870,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_eof_with_flush_pending_still_answers_write_cb, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_fd_exhaustion_reports_socket_failure, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_write_oom_leg_reports_a_clean_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_pend_oom_legs_reports_clean_errors, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_closed_sock_method_contracts_throw_cleanly, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_sync_arg_contracts_throw_cleanly, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_arg_and_lifecycle_contracts, setup_loop, teardown_loop),

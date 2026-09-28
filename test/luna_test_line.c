@@ -701,6 +701,138 @@ static void test_history_save_to_a_bad_path_reports(void **state)
     assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
 }
 
+/* -- the wider editing surface -------------------------------------------
+ *
+ * The remaining keys a REPL user actually presses: arrows past the
+ * line ends, the kill ring (^U/^K/^W), the forward-delete key, ^L,
+ * history walking down again. Every assertion is on what the line
+ * EVALUATES to after the keys, never on how the editor painted it. */
+
+static void test_arrow_keys_move_the_cursor_and_insert_mid_line(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* "124", Left once (before the 4), insert 3 -> "1234" */
+    type(master, "124\x1b[D" "3\r");
+    assert_true(expect(master, "Out[1]: 1234", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+static void test_kill_to_start_and_kill_to_end_build_one_line(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* ^U drops the whole draft; then the line is rebuilt and ^K cuts
+     * everything right of the cursor (^A, three rights, ^K leaves
+     * "999"), which is what commits */
+    type(master, "junkjunk\x15" "9996*7\x01\x1b[C\x1b[C\x1b[C\x0b\r");
+    assert_true(expect(master, "Out[1]: 999", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+static void test_word_kill_and_forward_delete_edit_the_middle(void **state)
+{
+    (void)state;
+    int master;
+    int master2;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* ^W kills the word left of the cursor ("xxx", blanks kept):
+     * "print(  xxx" -> "print(  " and the line completes to a call;
+     * the needle is the print output, which bypasses the Out display */
+    type(master, "print(  xxx\x17" "'wk 42')\r");
+    assert_true(expect(master, "wk 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+
+    /* the Delete key (\x1b[3~) removes the character UNDER the cursor:
+     * "12X34", three lefts (onto the X), Delete -> "1234" */
+    pid = spawn_repl(&master2, hist_home, 0);
+    assert_true(expect(master2, "In [1]", 10000));
+    mark_step();
+    type(master2, "12X34\x1b[D\x1b[D\x1b[D\x1b[3~\r");
+    assert_true(expect(master2, "Out[1]: 1234", 5000));
+    assert_int_equal(finish_repl(pid, master2, "In [2]"), 0);
+}
+
+static void test_arrow_down_walks_back_to_a_fresh_line(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    type(master, "alpha = 41\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    /* Up recalls, Down walks forward again: the recalled line is gone,
+     * so what commits is exactly what is typed after it */
+    type(master, "\x1b[A\x1b[B" "6*7\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+static void test_ctrl_l_repaints_and_keeps_the_draft(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* ^L clears the screen; replxx keeps the buffer and repaints it,
+     * so the line still commits to its value */
+    type(master, "1+1\x0c\r");
+    assert_true(expect(master, "Out[1]: 2", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+static void test_completion_spans_outside_the_input_are_rejected(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* a negative span is as implausible as one past the end: the
+     * bridge keeps neither and lets replxx derive its own context, so
+     * each Tab still rewrites the draft to the candidate */
+    type(master,
+         "require('linedit').set_completion(function() return {'zz'}, -1 "
+         "end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    type(master, "42\t\x15");
+    type(master,
+         "require('linedit').set_completion(function() return {'yy'}, 9999 "
+         "end)\r");
+    assert_true(expect(master, "In [3]", 5000));
+    type(master, "42\t\x15" "6*7\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [4]"), 0);
+}
+
+static void test_non_string_candidates_are_skipped(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* candidates that are not strings cannot be inserted: the bridge
+     * skips them and offers the rest, so Tab lands on '77' */
+    type(master,
+         "require('linedit').set_completion(function() return {false, '77'} "
+         "end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    type(master, "42\t\r");
+    assert_true(expect(master, "Out[1]: 77", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -727,6 +859,13 @@ int main(void)
         cmocka_unit_test(test_raising_highlighter_keeps_the_session),
         cmocka_unit_test(test_clearing_the_highlighter_keeps_the_session),
         cmocka_unit_test(test_history_save_to_a_bad_path_reports),
+        cmocka_unit_test(test_arrow_keys_move_the_cursor_and_insert_mid_line),
+        cmocka_unit_test(test_kill_to_start_and_kill_to_end_build_one_line),
+        cmocka_unit_test(test_word_kill_and_forward_delete_edit_the_middle),
+        cmocka_unit_test(test_arrow_down_walks_back_to_a_fresh_line),
+        cmocka_unit_test(test_ctrl_l_repaints_and_keeps_the_draft),
+        cmocka_unit_test(test_completion_spans_outside_the_input_are_rejected),
+        cmocka_unit_test(test_non_string_candidates_are_skipped),
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }

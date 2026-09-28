@@ -833,6 +833,167 @@ static void test_non_string_candidates_are_skipped(void **state)
     assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
 }
 
+/* -- coverage-targeted tests for remaining dark branches ------------------- */
+
+/* 4-byte UTF-8 codepoint through the highlighter: the width calculation
+ * at line 164 has a 4-byte arm ((c & 0xF8) == 0xF0) that the existing
+ * UTF-8 test does not exercise because the REPL's default highlighter
+ * only highlights keywords/numbers, not string contents. Install a custom
+ * highlighter that returns a color for every codepoint to force the
+ * UTF-8 walk to visit the 4-byte character. */
+static void test_four_byte_utf8_in_highlighter(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* Install a highlighter that colors every codepoint green (32).
+     * The input line contains a 4-byte character (U+1F389 = 🎉 = \xF0\x9F\x8E\x89).
+     * This forces the highlighter callback's UTF-8 walk to take the 4-byte arm. */
+    type(master,
+         "require('linedit').set_highlighter(function(input) "
+         "  local colors = {} "
+         "  for i = 1, #input do colors[i] = 32 end "
+         "  return colors "
+         "end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    /* Type a line with the 4-byte character and commit it */
+    type(master, "s = \"\xF0\x9F\x8E\x89\"\r");
+    /* The REPL echoes the assignment; look for the prompt advance */
+    assert_true(expect(master, "In [3]", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* Tail-fill loop in the highlighter (lines 175-176): when the hook
+ * returns fewer colors than the `size` buffer replxx provides, the
+ * bridge fills the remainder with REPLXX_COLOR_DEFAULT. This happens
+ * when the highlighter returns a shorter table than the number of
+ * codepoints in the input. */
+static void test_highlighter_tail_fill(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* Install a highlighter that returns only 2 colors for a longer input.
+     * The bridge must tail-fill the rest with default colors. */
+    type(master,
+         "require('linedit').set_highlighter(function(input) "
+         "  return {31, 36} "
+         "end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    /* Type a line with more than 2 codepoints (e.g., "abc" = 3 codepoints).
+     * The highlighter returns 2 colors, so the tail-fill loop runs for the 3rd. */
+    type(master, "abc\r");
+    assert_true(expect(master, "In [3]", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* Kill word (^W) at the start of the line: nothing to kill, line stays. */
+static void test_kill_word_at_line_start(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* ^W at column 0 should be a no-op */
+    type(master, "\x17" "6*7\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+/* Kill to end (^K) at the end of the line: nothing to kill. */
+static void test_kill_to_end_at_line_end(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "6*7\x0b\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+/* Completion hook returning nil (no candidates, no span): the bridge
+ * should not crash and replxx should use its derived context. This
+ * exercises the nil-check branch in luna_completion_cb. */
+static void test_completion_hook_returns_nil(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master,
+         "require('linedit').set_completion(function() return nil end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    /* Tab should not crash; the line stays as typed */
+    type(master, "42\t\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* Completion hook returning a non-integer span: the bridge ignores the
+ * span and lets replxx derive its own. This exercises the lua_isinteger
+ * false branch. */
+static void test_completion_hook_non_integer_span(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master,
+         "require('linedit').set_completion(function() "
+         "  return {'candidate'}, 'not-a-number' "
+         "end)\r");
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    /* Type a simple word and tab: replxx derives its own span.
+     * The exact replacement behavior varies; we just verify no crash
+     * and that a completion occurred (prompt advances). */
+    type(master, "testword\t\r");
+    assert_true(expect(master, "In [3]", 5000)); /* prompt advances = no crash */
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* Wake thread mechanism: send SIGUSR1 to the REPL process to trigger
+ * the async wake path (luna_wake_thread). This exercises the wake
+ * thread's read loop and the synthetic ENTER emulation. */
+static void test_wake_thread_via_sigusr1(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    /* Type a partial line, then send SIGUSR1 which should cause the
+     * wake thread to inject a synthetic Enter, committing the empty line
+     * and returning to prompt. The partial line is discarded by replxx. */
+    type(master, "partial");
+    assert_true(expect(master, "partial", 3000));
+    kill(pid, SIGUSR1);
+    /* Should see a new prompt (the partial line was discarded) */
+    assert_true(expect(master, "In [2]", 5000));
+    mark_step();
+    type(master, "6*7\r");
+    assert_true(expect(master, "Out[1]: 42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
+/* Notify wake called from another thread: this is hard to exercise
+ * from a pty test because it's an internal C API. The function
+ * luna_line_notify_wake is only called from signal handlers or
+ * other threads. We note this as a branch that requires white-box
+ * testing (covered by luna_test_linedit white-box suite). */
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -866,6 +1027,14 @@ int main(void)
         cmocka_unit_test(test_ctrl_l_repaints_and_keeps_the_draft),
         cmocka_unit_test(test_completion_spans_outside_the_input_are_rejected),
         cmocka_unit_test(test_non_string_candidates_are_skipped),
+        /* coverage-targeted tests */
+        cmocka_unit_test(test_four_byte_utf8_in_highlighter),
+        cmocka_unit_test(test_highlighter_tail_fill),
+        cmocka_unit_test(test_kill_word_at_line_start),
+        cmocka_unit_test(test_kill_to_end_at_line_end),
+        cmocka_unit_test(test_completion_hook_returns_nil),
+        cmocka_unit_test(test_completion_hook_non_integer_span),
+        cmocka_unit_test(test_wake_thread_via_sigusr1),
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }

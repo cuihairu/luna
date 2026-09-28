@@ -99,6 +99,19 @@ static void test_script_missing_file(void **state)
     assert_non_null(strstr(outbuf, "cannot open"));
 }
 
+static void test_error_object_with_raising_tostring_is_named(void **state)
+{
+    (void)state;
+    /* a __tostring that itself dies with a non-string: the message
+     * handler's fallback names the object and the traceback still
+     * renders — the runner survives a hostile error object and exits
+     * cleanly (script mode is the one kernel.exec caller) */
+    run_luna("'" LUNA_FIXTURES "/non_string_error.lua'");
+    assert_int_equal(last_code, 1);
+    assert_non_null(strstr(outbuf, "(error object is not a string)"));
+    assert_non_null(strstr(outbuf, "stack traceback"));
+}
+
 /* -- eval group -------------------------------------------------------- */
 
 static void test_eval_expression_echoes(void **state)
@@ -387,6 +400,7 @@ int main(void)
         cmocka_unit_test(test_script_runs_and_gets_args),
         cmocka_unit_test(test_script_error_exit_code),
         cmocka_unit_test(test_script_missing_file),
+        cmocka_unit_test(test_error_object_with_raising_tostring_is_named),
         cmocka_unit_test(test_eval_expression_echoes),
         cmocka_unit_test(test_eval_print),
         cmocka_unit_test(test_eval_error_exit_code),

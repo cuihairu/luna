@@ -732,6 +732,42 @@
   todo.md,负控/插桩零残留。
 
 
+## C 侧覆盖扫描(2026-09-28 第十六轮)
+
+- sweep 发现并修复:gcovr_summary 的 `-r` 原为源码根,会把兄弟
+  build 树(其 build/ 也带全套插桩产物)的 gcda 一并扫入——
+  build/test 的白盒 luna_main 副本(陈旧 198 行视图,main() 全
+  暗)把诚实账拖到 64%(128/198)、TOTAL 93.4%;改 `-r
+  BINARY_DIR` 后恢复 TOTAL 95.2%(2611/2743)。已在
+  CMakeLists 注明(2026-09-28 观测)。
+- 干净排名(cov 树诚实账):luna_loop 95%(112 暗行,第八/
+  十三轮逐臂表征维持)、**luna_main 90%(13 暗行,本轮对象)**、
+  luna_line 97%(4 暗行,第十五轮登记)、luna_kernel 98%(3 暗行)。
+- luna_main 13 暗行逐腿:78(package 表——openlibs 后构造不
+  可达)、205-207+367(run_chunk 错误臂与 rc=1——白盒
+  luna_test_main.c:37 直接驱动,已测未计)、269-272(缺
+  luacov 降级臂——白盒 luna_test_main.c:65 已测;cov 树内
+  LUNA_LUACOV_SRC 为编译期追加,env 不可注入)、282(shutdown
+  pop——stats 不可写类刀口)、296-297(newstate NULL——OOM
+  类)、371(rc=0 臂——entry 恒返整数的不变式)。
+- luna_kernel 3 暗行逐腿:203(tail_looks_incomplete 的
+  len==0——空块 load 恒 OK,k_check 到不了,防御)、289(load
+  错误对象非字符串——语法错误恒为字符串,OOM 类)、325(pcall
+  错误对象非字符串——msghandler 对任意错误对象恒产出字符串,
+  见下条实测)。
+- 新增 1 例(cli 组 23→24,两树绿):敌意错误对象脚本模式端到
+  端——`__tostring` 内 error(false) 不崩 runner,回退文本 +
+  traceback 照常渲染,退出 1(fixture non_string_error.lua)。
+  实测发现:5.5 的 message handler 在栈未展开时运行,该路径把
+  callmeta 的 raise 吸收进回退文本——测试锁的是实测契约而非
+  推断(初版按 5.4 直觉写"(non-string error object)"实测即纠)。
+- 门禁:两树全量 ctest 15/15(build 329.9s、cov 316.1s,串行);
+  覆盖率门禁 TOTAL 95.2%(2611/2743)、分支 76.6%(909/1186)。
+- 环境披露:并行会话本日再落 7 个 luna_line 测试(cc09142,
+  line 组 37 例态,已推送);本轮 CMakeLists 仅动 gcovr 报告
+  范围,产品代码零改动;rocks 网络腿本轮未涉足。
+
+
 ## 下轮方向
 
 - tsock 结构体泄漏:**已完成(第十二轮,见上)**。

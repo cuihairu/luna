@@ -213,12 +213,18 @@ target_link_libraries(lua_host PRIVATE lualib)
 # all-zero second line set for src/luna_main.c), and the harnesses'
 # own gcda would merge their dependency-lib counts into the report.
 # Harness binaries exist to pass/fail, not to report on src/.
+# The scan root is the BINARY dir, not the source tree: sibling build
+# trees (a plain `build/` is coverage-instrumented here too) carry their
+# own white-box gcda for src/*.c, and a source-tree walk merges those
+# ghost line sets into this report — observed 2026-09-28 as
+# src/luna_main.c reading 64% (128/198, whole of main() dark) instead
+# of the honest 90% (123/136) and dragging TOTAL to 93.4%.
 add_custom_target(gcovr_summary
         COMMAND ${CMAKE_COMMAND} -E rm -rf
                 ${PROJECT_BINARY_DIR}/gcov-discarded
         COMMAND find ${PROJECT_BINARY_DIR}/test -name *.gcda -delete
         COMMAND find ${PROJECT_BINARY_DIR}/test -name *.gcno -delete
-        COMMAND gcovr -r ${PROJECT_SOURCE_DIR}
+        COMMAND gcovr -r ${PROJECT_BINARY_DIR}
                 --object-directory ${PROJECT_BINARY_DIR}
                 --filter ${PROJECT_SOURCE_DIR}/src/ --print-summary
         WORKING_DIRECTORY ${PROJECT_BINARY_DIR}

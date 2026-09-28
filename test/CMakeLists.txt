@@ -117,8 +117,10 @@ target_compile_definitions(luna_test_loop PRIVATE
         LUNA_TEST_MODULES_DIR="${CMAKE_BINARY_DIR}/luna_modules")
 add_test(NAME loop COMMAND luna_test_loop)
 # ~50s clean wall on this box, 2-4x under load (parallel agents, GC):
-# 60 was always one slow moment from a false failure.
-set_tests_properties(loop PROPERTIES TIMEOUT 240)
+# 60 was always one slow moment from a false failure; at load 50+ the
+# suite measured 240.7s+ (2026-09-27 inspection), so the ceiling goes
+# to 600 — ctest --timeout cannot override an explicit property.
+set_tests_properties(loop PROPERTIES TIMEOUT 600)
 
 # Line editor (replxx bridge): typed commit, editing, Tab completion,
 # history recall/persistence, highlighting, ^C/^D — driven on a pty

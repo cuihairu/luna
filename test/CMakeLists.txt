@@ -152,6 +152,18 @@ add_test(NAME rocks COMMAND luna_test_rocks)
 # the Profiling tree too, where the coverage hook makes Lua ~10x slower
 set_tests_properties(rocks PROPERTIES TIMEOUT 600)
 
+# Coverage toolchain: the Lua summary reporter (cmake/lua_cov_summary.lua)
+# turns luacov's report into the build-log table the lua_coverage target
+# prints. Driven through the real binary with synthetic reports — a
+# silent parse regression here would empty the ledger with a green build.
+add_executable(luna_test_covsum luna_test_covsum.c)
+target_link_libraries(luna_test_covsum PRIVATE cmocka-static lualib luna_kernel)
+target_compile_definitions(luna_test_covsum PRIVATE
+        LUNA_BIN="$<TARGET_FILE:luna>"
+        LUNA_COVSUM_SCRIPT="${CMAKE_SOURCE_DIR}/cmake/lua_cov_summary.lua"
+        LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+add_test(NAME covsum COMMAND luna_test_covsum)
+
 # luacov collection (Profiling builds only): the harness glue targets
 # learn the coverage paths; every test exports LUNA_COVERAGE=1 so spawned
 # children (the real binary) instrument themselves as well.
@@ -164,7 +176,7 @@ foreach(t luna_test_main luna_test_repl luna_test_complete luna_test_introspect
 endforeach()
 if(CMAKE_BUILD_TYPE STREQUAL "Profiling")
     set_tests_properties(luna_test repl cli complete introspect highlight magic
-            modules plugins serve loop line linedit rocks
+            modules plugins serve loop line linedit rocks covsum
             PROPERTIES ENVIRONMENT "LUNA_COVERAGE=1")
 endif()
 # NOTE: the white-box tests (main, linedit) compile src/*.c into their

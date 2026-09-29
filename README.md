@@ -33,5 +33,5 @@ Linux 需要 cmake ≥ 3.16 与 C 编译器;macOS 另需 `brew install pkg-confi
 
 ## 开发
 
-- 测试:ctest 九组(repl / cli / complete / introspect / highlight / magic / modules / plugins / kernel),改完跑 `ctest --test-dir build`;
+- 测试:ctest 十六组(repl / cli / complete / introspect / highlight / magic / modules / plugins / kernel / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;
 - 文档:`cd docs && pnpm install && pnpm run docs:dev`;推送 main 后 CI 自动构建并发布到 Pages(部署不计为发布)。

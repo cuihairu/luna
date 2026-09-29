@@ -886,6 +886,114 @@
   可测的落了真测试,不可测/不值测的逐项登记理由。
 
 
+## Node 方向立项:格式标准库 + Node 底层能力(2026-09-29 第二十轮,规划落盘)
+
+- 本轮只落规划不写实现(派发单两批拆分的第一批):选型详单、API 草案、
+  错误口径、批次拆解与验收标准全部落进 **docs/node-parity.md**(新设计
+  文档,与 loop-backend-design 同体例),本节记立项决定与验收账。实现从
+  批次 2 起逐批做,每批单提交、两树全绿后才落下一批。
+- **现状盘点(源码核实,非推断)**:派发单 B 面所述「事件循环推迟」已
+  演进——`require "loop"` 第一批早已落地(luna_loop.c 4234 行,timer/fs
+  (+watch)/net(+TLS)/udp/dns/signal/os/process 八个 C 面 + loop.http 纯
+  Lua 面,libuv 1.53.0 静态链);**timers/child_process/os 三项已在**,
+  真缺口是 path/util.inspect/events/stream 四项 + timers 的全局化/脚本
+  自动排水决策。README 概览表「事件循环推迟的 rationale」指向上文,
+  表述滞后但指向的 architecture.md 本尊是现行版(opt-in 第一批)。
+- **决策记录**(详单与理由见 node-parity.md,此处只列结论):
+  1. **tomlc99 → tomlc17**:派发单指定的 tomlc99 上游已挂 OBSOLETE 横幅,
+     改推同作者继任者 tomlc17(MIT、TOML v1.1 过官方 toml-test、双文件
+     amalgamation、零依赖);C API 同族,绑定层可平移;c17 编译受阻时
+     回退钉死的 tomlc99 vendor。
+  2. **timers:启用「脚本尾部自动排水」,继续推迟全局化与 REPL 集成**。
+     run_script / -e 主 chunk 正常结束后若 loop 有活句柄自动 run()
+     (Node 的「事件循环跑到空退出」契约,unref 语义不变);全局
+     setTimeout 与 REPL 集成维持推迟(行编辑阻塞读、^C/130、attach
+     轮询点三张同步契约不动)。REPL 每求值后 drain(nowait) 记入下轮
+     方向的条件项。
+  3. **不遮蔽 Lua 全局 os**:Node os 的补齐进 loop.os(arch/release/EOL/
+     userInfo/availableParallelism),顶层 `os` 是官方标准库的地盘。
+  4. **新格式不加 parse/stringify 别名**:别名是 json 的历史包袱,新格式
+     decode/encode 唯一入口;错误口径统一 `nil, err`(不抛错),
+     err 带行列(`<fmt>: <原因> at line N, column M`),参数类型错才 raise。
+  5. **csv/ini 走 LPeg 不走 C**:deps 已有 lpeg(已注册),行导向格式
+     引 C 库方向反了;「绑定成熟 C 库」针对规范重的 xml/yaml/toml。
+
+### 批次拆解与验收标准
+
+- [ ] **批次 2:csv + ini(LPeg,零新依赖)**。LPeg 语法 + `lua/modules/
+      {csv,ini}/init.lua` 包装(现有 LUNA_STDLIB_WRAPPERS glob 自动 staged);
+      offset→line/col 公共辅助落在包装层。用例进 modules 组:RFC 4180 边界
+      (引号内分隔符/换行/双引号、CRLF/LF 双收、headers 表键行、delimiter、
+      坏输入行列)、ini(段/段前裸键/两种注释/引号值/重复键/cast/坏输入)。
+      **验收**:decode/encode 全口径用例绿;两树 cmake --build + ctest 全绿;
+      guide/modules.md 内置模块表更新;luacov 账收编新文件。
+- [ ] **批次 3:toml(tomlc17 vendor)**。deps/tomlc17 子模块钉版本 + 静态
+      库;`toml.core` 进 register_c_modules;包装层 decode 直通、**encode
+      为自写 Lua 面**(tomlc17 无 encoder,键序"标量在前"由包装层重排);
+      datetime → 表映射({year,…,secfrac?,offset?})。用例:toml-test 摘选
+      代表性 valid/invalid(多行字符串、Unicode 转义、整数边界、日期时间)、
+      encode 往返、错误行列。**验收**:同批次 2 + .gitmodules 登记与版本
+      钉死;构建零新增系统依赖(vendor 自带源码编译)。
+- [ ] **批次 4:yaml(libyaml + lyaml vendor)**。libyaml 上游 CMake 接线
+      (EXCLUDE_FROM_ALL,参考 libuv 段);lyaml 绑定源编入静态库;null→nil
+      默认 + opts.nullval 哨兵;anchors/aliases → 共享表引用,encode 循环
+      报错;decodeAll(多文档)批内定去留。用例:标量类型家族、块标量、
+      流式集合、多文档、坏输入行列、encode 循环。**验收**:同上;Lua 5.5
+      适配若需小补丁,vendor 内登记改动点。
+- [ ] **批次 5:xml(expat + lua-expat vendor)**。DOM 三件套 {tag, attrs,
+      kids}、文本节点为字符串、属性恒字符串、命名空间前缀原样;encode
+      转义 + opts.indent;xml.sax 透传 lxp handler(流式面)。用例:实体/
+      CDATA/嵌套/属性、坏输入行列(mismatched tag 等)、encode 往返、SAX
+      增量喂。**验收**:同上。
+- [ ] **批次 6:path + util + events(纯 Lua,零依赖)**。path 按 Node
+      path.posix 逐函数对照钉死(resolve/normalize/join/relative/parse/
+      format 的 Node 边界语义各配用例);util.inspect(depth/循环 [Circular]/
+      截断/键引号规则)+ util.format(%s %d %f %x %X %o %j %%,无符连接,
+      超参尾接);events 全 API(on/once/off/prepend/listeners/
+      listenerCount/setMaxListeners/缺省 10 警告/'error' 无监听 raise/
+      newListener 内建事件)。**验收**:三模块用例绿;两树全绿;文档
+      (guide/modules.md 表 + node-parity.md 状态勾稽)。
+- [ ] **批次 7:stream(基于 events,纯 Lua)**。Readable/Writable/Duplex/
+      Transform + pipe 背压(write false 停推等 drain 续推/unpipe)、
+      highWaterMark 记账阈值;适配器至少两个:sock(loop.net)→Duplex、
+      内存块→Readable(loop.http onData→Readable 视余量)。用例:背压
+      往返、error→destroy→'close' 联动、pipe 错误传播。**验收**:同上。
+- [ ] **批次 8:os 补齐 + child_process 糖 + timers 自动排水**。loop.os
+      增 arch(x86_64→x64 映射)/release/EOL/userInfo/availableParallelism
+      (loop.c os_funcs 表内 ~60 行);process.exec = run("sh",{"-c",…})
+      糖、execSync = io.popen 糖(close 三元组拿退出码,非零 raise);
+      **脚本尾部自动排水**(run_script 与 -e 尾部,loop 出
+      luna_loop_maybe_drain(),REPL 不启用)。**验收**:既有全部 loop
+      用例原样全绿(自动排水对自调 run() 的用例必须是无操作);新增:
+      脚本 setTimeout 不调 run 也触发、全 unref 立即退出、-e 同口径;
+      ^C/130 与 attach 契约用例不回归。
+- 每批共同门禁:单提交;两树 cmake --build + ctest 全绿(本立项日实为
+  **16 组**——README 旧文「九组」清单已顺手修正,历史轮次记录里的
+  九组/15 组是当时的账,不改);负载 >40 不取 rocks 终绿的纪律照旧;
+  不打 tag、不发版。
+
+### 本轮(批次 1)产出与门禁
+
+- [x] docs/node-parity.md 选型文档(五格式候选表与淘汰理由、API 草案、
+      错误口径、Node/Lua 生态对照;B 面逐项盘点表、timers 现状核实与
+      建议、path/util/events/stream/os/child_process 的层归属与草案);
+      侧栏挂「设计」组;README 测试行修正(九组→十六组,清单同步)。
+- [x] 门禁:ctest 16 组全绿(普通树);文档构建通过(vitepress build);
+      git fetch --rebase origin main 后单提交推送;零实现代码改动
+      (本轮只动 todo.md、docs/、README 一行)。
+
+## 明确不做(第二十轮,Node 方向)
+
+- XML 的 XPath/DTD 验证/libxml2 全家桶面、命名空间前缀展开
+  (fast-xml-parser 同款「前缀原样」口径);
+- YAML v1 的 anchors 发射(opts.anchors 列后续批次再议)、schema/tags
+  高级面;
+- stream 的 webstreams/异步迭代器/setEncoding/cork 小面;
+- util 的 promisify/callbackify(Lua 无 promise,契约无锚)与 types
+  判等族;path 的 win32 面(平台面 Linux/macOS);
+- 全局 setTimeout 与 REPL 集成(维持推迟,启用条件见下轮方向);
+- tomlc99 回退不预设,仅当 tomlc17 vendor 编译受阻时启用(决策记录 1)。
+
 ## 下轮方向
 
 - tsock 结构体泄漏:**已完成(第十二轮,见上)**。
@@ -897,6 +1005,10 @@
   (第十七、十八轮后含 C 分支方向层:luna_main 62%、
   luna_kernel 93.75%、luna_line 84.29% 的残暗方向全数登记;
   第十九轮非 C 侧盘点收官),转入按需修补。
+- **Node 方向补齐(第二十轮立项)**:批次 2–8 逐批实现(见上节),
+  每批两树全绿后单提交推进;REPL 集成循环(每求值后 drain nowait)
+  维持推迟,启用条件:行编辑可超时读或唤醒线程可定时(见
+  docs/node-parity.md timers 节)。
 
 ## 明确不做(上一轮)
 

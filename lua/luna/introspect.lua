@@ -18,6 +18,13 @@ local function quote_string(s)
         :gsub("\n", "\\n")
         :gsub("\t", "\\t")
         :gsub("\r", "\\r")
+    -- any other control byte (NUL, \a, \b, \v, \f, \027, DEL, ...) must
+    -- not render raw: invisible at best, and a literal NUL silently
+    -- truncates every C-side consumer of the attach frame — %whos once
+    -- flaked exactly there on utf8.charpattern's leading \0 (2026-09-30)
+    body = body:gsub("[%c\127]", function(c)
+        return ("\\x%02x"):format(c:byte())
+    end)
     return "'" .. body .. "'"
 end
 

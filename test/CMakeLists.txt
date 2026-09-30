@@ -79,7 +79,7 @@ add_test(NAME magic COMMAND luna_test_magic)
 
 # Module system: luna_modules resolution, manifests, stdlib modules
 add_executable(luna_test_modules luna_test_modules.c)
-target_link_libraries(luna_test_modules PRIVATE cmocka-static lualib lfs luasocket lua_zlib)
+target_link_libraries(luna_test_modules PRIVATE cmocka-static lualib lpeg lfs luasocket lua_zlib)
 if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna_test_modules PRIVATE luaossl)
     target_compile_definitions(luna_test_modules PRIVATE LUNA_HAVE_OPENSSL=1)

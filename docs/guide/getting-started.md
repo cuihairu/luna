@@ -40,8 +40,10 @@ cmake --build build-cov --target lua_coverage    # Lua 侧(lua/)
   `build-cov/luacov.stats.out`,`lua_coverage` 目标渲染报告并把汇总表打到构建
   输出。普通构建与交互行为不受影响(报错里的 `'=(luna/x)'` 块名原样保留)。
 - 合并 hook 的分工:每个 Lua 态只有一个 debug 钩子槽位,覆盖率接管该槽位后按
-  事件分发——行事件给 luacov 记数,count 事件转发 `kernel.count_hook()`,
-  `^C` 中断与 attach 轮询保持原有节奏。
+  事件分发——行事件给 luacov 记数,行事件与 count 事件都转发一步 `kernel.count_hook()`
+  (`^C` 中断检查与 attach 轮询)。转发不挑事件种类是刻意的:luacov 的逐行记账
+  本身也消耗 count 预算,紧凑循环里 count 事件可能只落在钩子帧内而永远到不了
+  用户代码,行事件每迭代必发,从它驱动不依赖指令预算的落点。
 
 ## 三种启动方式
 

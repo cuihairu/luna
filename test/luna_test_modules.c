@@ -18,6 +18,7 @@
 #include "luna_lua.h" /* embedded luna.modules source */
 #include "luna_cov.h"
 
+int luaopen_lpeg(lua_State *L);
 int luaopen_lfs(lua_State *L);
 int luaopen_socket_core(lua_State *L);
 int luaopen_mime_core(lua_State *L);
@@ -67,6 +68,8 @@ static int setup_modules(void **state)
     luna_cov_setup(L);
 
     /* stage the C backends the way luna_main does */
+    luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
+    lua_pop(L, 1);
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "socket.core", luaopen_socket_core, 0);
@@ -502,6 +505,348 @@ static void test_rocks_vendor_legs_die_before_luarocks(void **state)
         "true,1");
 }
 
+/* -- csv / ini format modules (batch 2, LPeg) ------------------------------ */
+
+static void test_csv_decode_basics_and_eols(void **state)
+{
+    (void)state;
+    /* LF, CRLF and mixed all decode; fields stay strings, never trimmed */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    "assert(enc(csv.decode('a,b\\nc,d')) == '[[\"a\",\"b\"],[\"c\",\"d\"]]')\n"
+                    "assert(enc(csv.decode('a,b\\r\\nc,d\\r\\n')) == enc(csv.decode('a,b\\nc,d')))\n"
+                    "assert(enc(csv.decode(' sp ,kept ')) == '[[\" sp \",\"kept \"]]')\n"
+                    "assert(enc(csv.decode('')) == '[]')\n"
+                    "return 'ok'"),
+        "ok");
+    /* edges: no phantom record after a trailing newline; a blank line is
+     * an empty record; a trailing delimiter yields an empty last field */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    "assert(#csv.decode('a\\n') == 1)\n"
+                    "assert(enc(csv.decode('a\\n\\n')) == '[[\"a\"],[\"\"]]')\n"
+                    "assert(enc(csv.decode('a,')) == '[[\"a\",\"\"]]')\n"
+                    "assert(enc(csv.decode('a,,b')) == '[[\"a\",\"\",\"b\"]]')\n"
+                    "return 'ok'"),
+        "ok");
+    /* a lone CR is not an EOL — rejected with its exact position */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local t, e = csv.decode('a\\rb')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | csv: unexpected character after field at line 1, column 2");
+}
+
+static void test_csv_quoted_fields_rfc4180(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    /* quoted comma, doubled quote, embedded newline */
+                    "assert(enc(csv.decode('\"a,b\",c')) == '[[\"a,b\",\"c\"]]')\n"
+                    "assert(csv.decode('\"x\"\"y\"')[1][1] == 'x\"y')\n"
+                    "assert(csv.decode('\"line1\\nline2\",z')[1][1] == 'line1\\nline2')\n"
+                    "assert(enc(csv.decode('\"\"')) == '[[\"\"]]')\n"
+                    "return 'ok'"),
+        "ok");
+    /* unterminated quote is reported where the closing quote was expected */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local t, e = csv.decode('a,\"b')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | csv: unterminated quoted field at line 1, column 5");
+    /* same case on line 2: position must track lines (UTF-8 columns) */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local t, e = csv.decode('a,b\\n\\u{00E9},\"x')\n"
+                    "return e"),
+        "csv: unterminated quoted field at line 2, column 5");
+    /* stray character after a properly closed quoted field */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local t, e = csv.decode('a,\"b\"x')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | csv: unexpected character after field at line 1, column 6");
+}
+
+static void test_csv_headers_and_delimiter(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local rows = csv.decode('name,age\\nbob,3\\n,4', {headers = true})\n"
+                    "assert(rows[1].name == 'bob' and rows[1].age == '3')\n"
+                    "assert(rows[2].name == '' and rows[2].age == '4')\n"
+                    "return 'ok'"),
+        "ok");
+    /* duplicate header names: last one wins; extra columns stay positional */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local rows = csv.decode('a,b,a\\n1,2,3,4', {headers = true})\n"
+                    "assert(rows[1].a == '3' and rows[1].b == '2' and rows[1][1] == '4')\n"
+                    "return 'ok'"),
+        "ok");
+    /* any single-byte delimiter except quote/CR/LF; bad ones raise */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    "assert(enc(csv.decode('a;b\\nc;d', {delimiter = ';'})) == '[[\"a\",\"b\"],[\"c\",\"d\"]]')\n"
+                    "local ok, e = pcall(csv.decode, 'a', {delimiter = '\"'})\n"
+                    "assert(not ok and e:find('delimiter', 1, true))\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_csv_encode_basics(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    /* rows are joined by eol (CRLF default); no trailing eol;
+                     * quote only when a field needs it */
+                    "assert(csv.encode({{'a,b', 'c\"d'}}) == '\"a,b\",\"c\"\"d\"')\n"
+                    "assert(csv.encode({{'plain'}}) == 'plain')\n"
+                    "assert(csv.encode({{'a'},{'b'}}) == 'a\\r\\nb')\n"
+                    "assert(csv.encode({}, {eol = '\\n'}) == '')\n"
+                    "assert(csv.encode({{'a'}}, {eol = '\\n'}) == 'a')\n"
+                    /* numbers/booleans stringify */
+                    "assert(csv.encode({{1, true}}, {eol = '\\n'}) == '1,true')\n"
+                    "return 'ok'"),
+        "ok");
+    /* unsupported field type: nil, err without raising */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local s, e = csv.encode({{function() end}})\n"
+                    "return tostring(s) .. ' | ' .. (e:match('unsupported field type (%a+)'))"),
+        "nil | function");
+    /* non-table rows rejected; row type is named in the message */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local s, e = csv.encode({'oops'})\n"
+                    "return tostring(s) .. ' | ' .. e"),
+        "nil | csv: row 1 is a string, expected a table");
+}
+
+static void test_csv_encode_headers_mapping(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local out = csv.encode(\n"
+                    "    {{name = 'bob', age = 3}, {name = 'eve', age = 4}},\n"
+                    "    {headers = {'name', 'age'}, eol = '\\n'})\n"
+                    "assert(out == 'name,age\\nbob,3\\neve,4')\n"
+                    "return 'ok'"),
+        "ok");
+    /* array-shaped rows pass through under the same header option */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local out = csv.encode({{'x', 'y'}, {'z'}},\n"
+                    "    {headers = {'h1', 'h2'}, eol = '\\n'})\n"
+                    "assert(out == 'h1,h2\\nx,y\\nz')\n"
+                    "return 'ok'"),
+        "ok");
+    /* headers = true has no defensible meaning (table order) — it raises */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local ok, e = pcall(csv.encode, {{}}, {headers = true})\n"
+                    "return tostring(ok) .. ' | ' .. tostring(e:find('explicit array', 1, true) ~= nil)"),
+        "false | true");
+}
+
+static void test_csv_roundtrip_and_lines(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    "local rows = {{'a,b', 'c\"d', 'e'}, {'', 'x'}}\n"
+                    "local back = csv.decode(csv.encode(rows))\n"
+                    "assert(enc(back) == enc(rows))\n"
+                    "return 'ok'"),
+        "ok");
+    /* lines(): one record per call, quoted newlines stay inside the field */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local enc = require('json').encode\n"
+                    "local got = {}\n"
+                    "for row in csv.lines('h1\\n\"a\\nb\",2\\nlast') do got[#got + 1] = row end\n"
+                    "assert(#got == 3 and got[1][1] == 'h1')\n"
+                    "assert(got[2][1] == 'a\\nb' and got[2][2] == '2')\n"
+                    "assert(got[3][1] == 'last')\n"
+                    "return 'ok'"),
+        "ok");
+    /* lines() raises on malformed input (an iterator's nil means "done") */
+    assert_string_equal(
+        eval_string("local csv = require('csv')\n"
+                    "local it = csv.lines('a,\"broken')\n"
+                    "local ok, e = pcall(it)\n"
+                    "return tostring(ok) .. ' | ' .. e"),
+        "false | csv: unterminated quoted field at line 1, column 10");
+}
+
+static void test_ini_decode_basics(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode([[\n"
+                    "# full-line comment\n"
+                    "root = before any section\n"
+                    "; semicolon comments too\n"
+                    "\n"
+                    "[server]\n"
+                    "host = example.org   \n"
+                    "port = 8080\n"
+                    "]])\n"
+                    "assert(t.root == 'before any section')\n"
+                    "assert(t.server.host == 'example.org')\n"
+                    "assert(t.server.port == '8080')\n"
+                    "assert(t.server.host2 == nil)\n"
+                    "return 'ok'"),
+        "ok");
+    /* values are strings unless cast; comments never strip mid-value '#' */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode('path = /tmp/x#not-a-comment\\nflag = ; also value')\n"
+                    "assert(t.path == '/tmp/x#not-a-comment')\n"
+                    "assert(t.flag == '; also value')\n"
+                    "return 'ok'"),
+        "ok");
+    /* blank values, empty sections, lone-CR leniency */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode('empty =\\n[nothing]\\r\\nnext = 1')\n"
+                    "assert(t.empty == '')\n"
+                    "assert(t.nothing.next == '1')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_ini_quoted_values(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode(\n"
+                    "    'q = \"a b\"\\n'\n"
+                    "    .. 'esc = \"x\\\\\"y\\\\\\\\z\"\\n'\n"
+                    "    .. 'empty = \"\"\\n')\n"
+                    "assert(t.q == 'a b')\n"
+                    "assert(t.esc == 'x\"y\\\\z')\n"
+                    "assert(t.empty == '')\n"
+                    "return 'ok'"),
+        "ok");
+    /* unterminated quote reported where the close was expected */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('a = \"bcd')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | ini: unterminated quoted value at line 1, column 9");
+    /* data after a closed quoted value */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('a = \"b\" x')\n"
+                    "return e"),
+        "ini: unexpected data after quoted value at line 1, column 9");
+}
+
+static void test_ini_duplicates_and_cast(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode('k = first\\nk = second\\n[s]\\nx = 1\\n[s]\\ny = 2')\n"
+                    "assert(t.k == 'second')\n"
+                    "assert(t.s.x == '1' and t.s.y == '2')\n"
+                    "return 'ok'"),
+        "ok");
+    /* cast converts tonumber-able values and lowercase true/false */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode('n = 42\\nf = 1.5\\nhex = 0x10\\nb = true\\nB = false\\n[s]\\ninner = 7',\n"
+                    "                   {cast = true})\n"
+                    "assert(t.n == 42 and t.f == 1.5 and t.hex == 16)\n"
+                    "assert(t.b == true and t.B == false)\n"
+                    "assert(t.s.inner == 7)\n"
+                    "return 'ok'"),
+        "ok");
+    /* without cast everything stays a string */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t = ini.decode('n = 42')\n"
+                    "assert(t.n == '42')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_ini_error_shapes(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('[sect\\n')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | ini: section header missing ']' at line 1, column 6");
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('justkey')\n"
+                    "return e"),
+        "ini: expected '[section]' or 'key = value' at line 1, column 1");
+    /* inline content after a section header is not a comment here */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('[a] ; trailing')\n"
+                    "return e"),
+        "ini: unexpected data after section header at line 1, column 5");
+    /* errors carry line numbers across the document */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local t, e = ini.decode('a = 1\\nb = 2\\nbroken line')\n"
+                    "return e"),
+        "ini: expected '[section]' or 'key = value' at line 3, column 1");
+}
+
+static void test_ini_encode_and_roundtrip(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local out = ini.encode({top = 'plain', keep = ' has spaces ',\n"
+                    "                        q = 'a\"b', sec = {a = '1', b = 'true'}})\n"
+                    "assert(out:find('top = plain', 1, true))\n"
+                    "assert(out:find('keep = \" has spaces \"', 1, true))\n"
+                    "assert(out:find('q = \"a\\\\\"b\"', 1, true))\n"
+                    "assert(out:find('%[sec%]'))\n"
+                    "assert(out:find('a = 1'))\n"
+                    "assert(ini.encode({}) == '')\n"
+                    "local flat = ini.encode({x = 1, y = true})\n"
+                    "assert(flat == 'x = 1\\ny = true' or flat == 'y = true\\nx = 1')\n"
+                    "return 'ok'"),
+        "ok");
+    /* roundtrip: decode(encode(t)) returns an equal table */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local enc = require('json').encode\n"
+                    "local t = {root = 'a', s = {x = '1', y = 'z z'}, t2 = {k = ''}}\n"
+                    "local back = ini.decode(ini.encode(t))\n"
+                    "assert(back.root == 'a' and back.s.x == '1')\n"
+                    "assert(back.s.y == 'z z' and back.t2.k == '')\n"
+                    "return 'ok'"),
+        "ok");
+    /* bad keys, nested sections and unsupported values report nil, err */
+    assert_string_equal(
+        eval_string("local ini = require('ini')\n"
+                    "local s1 = ini.encode({['k=x'] = 'v'})\n"
+                    "local s2 = ini.encode({s = {inner = {deep = 1}}})\n"
+                    "local s3 = ini.encode({f = function() end})\n"
+                    "return tostring(s1) .. tostring(s2) .. tostring(s3 ~= nil)"),
+        "nilnilfalse");
+}
+
 /* -- runner ---------------------------------------------------------------- */
 
 int main(void)
@@ -537,6 +882,17 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_start_dir_falls_back_without_lfs, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_rocks_module_needs_dkjson, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_rocks_vendor_legs_die_before_luarocks, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_decode_basics_and_eols, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_quoted_fields_rfc4180, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_headers_and_delimiter, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_encode_basics, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_encode_headers_mapping, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_csv_roundtrip_and_lines, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_ini_decode_basics, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_ini_quoted_values, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_ini_duplicates_and_cast, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_ini_error_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_ini_encode_and_roundtrip, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

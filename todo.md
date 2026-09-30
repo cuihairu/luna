@@ -929,13 +929,13 @@
 
 ### 批次拆解与验收标准
 
-- [ ] **批次 2:csv + ini(LPeg,零新依赖)**。LPeg 语法 + `lua/modules/
+- [x] **批次 2:csv + ini(LPeg,零新依赖)**。LPeg 语法 + `lua/modules/
       {csv,ini}/init.lua` 包装(现有 LUNA_STDLIB_WRAPPERS glob 自动 staged);
       offset→line/col 公共辅助落在包装层。用例进 modules 组:RFC 4180 边界
       (引号内分隔符/换行/双引号、CRLF/LF 双收、headers 表键行、delimiter、
       坏输入行列)、ini(段/段前裸键/两种注释/引号值/重复键/cast/坏输入)。
       **验收**:decode/encode 全口径用例绿;两树 cmake --build + ctest 全绿;
-      guide/modules.md 内置模块表更新;luacov 账收编新文件。
+      guide/modules.md 内置模块表更新;luacov 账收编新文件。(实录见下节)
 - [ ] **批次 3:toml(tomlc17 vendor)**。deps/tomlc17 子模块钉版本 + 静态
       库;`toml.core` 进 register_c_modules;包装层 decode 直通、**encode
       为自写 Lua 面**(tomlc17 无 encoder,键序"标量在前"由包装层重排);
@@ -990,6 +990,51 @@
 - [x] 门禁:ctest 16 组全绿(普通树);文档构建通过(vitepress build);
       git fetch --rebase origin main 后单提交推送;零实现代码改动
       (本轮只动 todo.md、docs/、README 一行)。
+
+### 批次 2(csv + ini)实录(2026-09-30)
+
+- [x] `lua/modules/{csv,ini}/init.lua`(LPeg,零新依赖;现有
+      LUNA_STDLIB_WRAPPERS glob 自动 staged)。csv:RFC 4180 全边界
+      (引号内分隔符/换行/双写引号、CRLF/LF/混合、headers 表键行、
+      任意单字节 delimiter、空记录/尾分隔符无幻影字段)、encode
+      按需引用、`lines()` 逐记录迭代器(引号内换行留在字段里)。
+      ini:段/段前裸键/`#` 与 `;` 双注释/引号值 `\\` `\"` 转义/段合并
+      重复键 last-win/`cast` 选项;错误统一 `<fmt>: <原因> at line N,
+      column M`(列按 UTF-8 字符计),offset→line/col 公共辅助在包装层。
+- [x] modules 组 +11 用例(26→37,`test/luna_test_modules.c` +356 行):
+      decode/encode 全口径 + 坏输入行列断言(含 UTF-8 列计数)。
+- [x] **门禁翻出的两个真产品 bug,均根因修复**:
+      1. 覆盖率合并钩子下 `^C` 与 attach 轮询可确定性饿死——luacov 逐行
+         记账在钩子帧内执行的几百条指令同样消耗 count 预算,count 归零
+         落在 `allowhook=0` 的钩子帧内时被静默重置,事件永不浮出到用户
+         代码;紧凑循环的每迭代指令预算使该相位确定成立(空循环必饿死,
+         非空循环凭相位运气)。修复:合并钩子对行事件与 count 事件一律转发
+         一步 `kernel.count_hook()`(行事件每迭代必发,ldebug.c 跳回即调
+         行钩子,不依赖指令预算落点),luna_kernel.k_count_hook 注释
+         留全机理;初版专设的 `interrupt_pending` 探针随之撤销。
+         现象账:cli 组 `test_eval_interrupt_exits_130` 挂死(空循环,
+         3/3 复现);serve 组 `test_attach_pty_completes_and_leaves_
+         via_exit_magic` 远端补全超时(TAB 补全请求发到 socket 但目标
+         忙循环的 serve 轮询饿死,wire 只剩 `attach> z`)。修复后 serve
+         组 5/5 稳定、cli 组 3.5s 绿,普通(非覆盖率)路径行为不变。
+      2. introspect 的 `quote_string` 漏逃 NUL 与其余控制字节——
+         `%whos` 对 `_G` 行的值预览截进 `utf8.charpattern` 的字面 `\0`
+         时,attach 帧 reply 在 C 侧被截断,`strstr(reply, "attachgx")`
+         偶发失败(每进程随机串哈希种子 → 全局表预览键序不定 → 抖动)。
+         修复:控制字节统一 `\xNN` 逃逸(introspect 测试钉住契约),
+         终端显示与帧体两清。
+- [x] 环境披露(门禁解读前提):build 与 build-cov 两树实为**皆
+      Profiling**(ctest 对全部组导出 LUNA_COVERAGE=1),故上述饿死
+      路径在两树全量门禁下都会走到;本轮另有并行会话,负载 9–14。
+- [x] 覆盖率账:luacov include 收编 `luna_modules/{csv,ini}/`;
+      csv 96.06%(122 行 5 暗)、ini 90.85%(129 行 13 暗)、Lua 侧
+      总 97.25%;C 侧 lines 95.2%(2611/2743)维持。
+- [x] 文档:guide/modules.md 内置模块表加 csv/ini 行 + 错误口径段
+      (与 json 同契);README/architecture/index 三处标准库清单同步;
+      getting-started.md 合并 hook 段改写(行/count 双事件转发)。
+- [x] 门禁:两树 cmake --build + ctest 16 组全绿(build 355.0s、
+      build-cov 346.0s,串行);单笔提交,push 前 fetch origin main
+      核对 SHA;不打 tag、不发版。
 
 ## 明确不做(第二十轮,Node 方向)
 

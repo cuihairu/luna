@@ -108,10 +108,21 @@ static void luna_count_hook(lua_State *L, lua_Debug *ar)
 }
 
 /* kernel.count_hook(): one step of the count hook's own logic — the
- * interrupt check plus a serve poll — as an ordinary callable. Coverage
- * instrumentation owns the single debug-hook slot (luacov needs line
- * events) and forwards count events here, keeping ^C and attach
- * polling on their usual cadence; plain runs never call it. */
+ * interrupt check plus a serve poll — as an ordinary callable.
+ * Coverage instrumentation owns the single debug-hook slot (luacov
+ * needs line events) and forwards BOTH count and line events here.
+ * Line forwarding is what makes it arithmetic-proof: luacov's per-line
+ * bookkeeping executes hundreds of instructions inside hook frames,
+ * and those instructions decrement the count budget, so the count
+ * event can fire (and silently reset) inside the hook where
+ * allowhook=0 suppresses it — for a loop whose per-iteration budget
+ * makes the countdown land there every time, count events never
+ * surface in user code at all, and ^C conversion AND attach polling
+ * both starve (observed as a deterministic hang and a dead attach
+ * socket, 2026-09-30). Line events fire on every loop iteration
+ * (ldebug.c calls the line hook on any jump back), so driving the
+ * count-hook step from there survives any instruction budget; plain
+ * runs never call this. */
 static int k_count_hook(lua_State *L)
 {
     luna_count_hook(L, NULL);

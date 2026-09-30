@@ -111,6 +111,10 @@ static void test_repr_string_quoted(void **state)
     assert_string_equal(buf, "'abc'");
     call_repr("'a\\'b'", buf, sizeof(buf)); /* contains a quote */
     assert_non_null(strstr(buf, "\\'"));
+    /* control bytes never render raw: a NUL in a repr would truncate
+     * every C-side consumer of the attach frame mid-string */
+    call_repr("'a\\0\\27b'", buf, sizeof(buf));
+    assert_string_equal(buf, "'a\\x00\\x1bb'");
 }
 
 static void test_repr_number_and_bool(void **state)

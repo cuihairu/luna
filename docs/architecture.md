@@ -107,6 +107,25 @@
 | 自研 registry 客户端 | 淘汰:仓库/上传/签名/索引/依赖解析全是长期负担,生态从零开始——违背"找成熟库、不要自己写" |
 | 移植 npm 客户端 | 淘汰:拿到的是 npm 的壳(格式/解析器),货(npm 仓库里的包)不是 Lua 代码;Lua 包仍须经 LuaRocks 发布,两套仓库并存只有成本 |
 
+### 绑定层 —— 手写 C luaopen 直绑(不引入 sol2)
+
+C 库怎么接进 Lua?luna 的答案一直是同一个:手写 `luaopen_*`(官方 C API),经
+`register_c_modules` 进 `package.loaded`(luna_main.c,glob off),纯 Lua 便捷层放
+`lua/modules/*/init.lua`。lfs / luasocket / lua-zlib / luaossl / loop 五族绑定全是这
+个模式:单模块 50–300 行,类型映射显式、栈操作所见即所得、错误路径逐行可审——格式
+模块要求的「错误带行列」口径正落在这层。规划中的 xml/yaml/toml(见
+[Node 方向选型](/node-parity))沿用。
+
+| 候选 | 结论 |
+| --- | --- |
+| **手写 C luaopen 绑定** | **入选**:官方 Lua 是内核(分层理由见上),绑定层保持官方形状;无中间抽象可遮蔽栈语义;每个绑定的错误口径可逐行核对 |
+| sol2(`ThePhD/sol2`) | 淘汰(2026-09-30 评估):最新发布 v3.3.0(2025-06)**不支持 Lua 5.5**——5.5 支持停在未合并的 PR #1723(2025-07 起),维护者在帖内零回应,下游评注 "increasingly unmaintained",osrm-backend 等项目各自手动携带补丁;接入等于 vendor 一个未合并补丁集,把上游停维风险内化进单二进制;header-only C++17 模板库也与「C 内核尽量薄」的分层相逆 |
+| LuaBridge / lua-wrapper 等模板绑定 | 淘汰:与 sol2 同类赌注(C++ 模板追官方 VM 演进),生态与踩坑资料面更小;手写绑定的"薄"正是既有五族绑定零事故的原因 |
+
+一并记录 Lua 版本账:deps/lua 钉 **v5.5.1**——上游最新的 5.5 发布 tag(master 领先
+6 个小修,GC 参数 UB 等,均未进发布;锁版本纪律等 5.5.2,不追 master)。「直接集成
+官方 Lua、不经绑定框架」因此不是新决定,是被再次确认的现状。
+
 ### 其余
 
 - **Lua 5.5**:官方源码,不用 LuaJIT(5.5 语义 + 维护优先);

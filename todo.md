@@ -917,6 +917,15 @@
      err 带行列(`<fmt>: <原因> at line N, column M`),参数类型错才 raise。
   5. **csv/ini 走 LPeg 不走 C**:deps 已有 lpeg(已注册),行导向格式
      引 C 库方向反了;「绑定成熟 C 库」针对规范重的 xml/yaml/toml。
+  6. **绑定层不用 sol2,维持手写 C luaopen 直绑官方 C API**(2026-09-30
+     评估,选型对比入 architecture.md「绑定层」节):sol2 最新发布
+     v3.3.0 不支持 Lua 5.5——支持停在未合并 PR(ThePhD/sol2#1723,
+     2025-07 起),维护者零回应、下游注 increasingly unmaintained;
+     接入即 vendor 未合并补丁集 + C++17 模板库进「薄 C 内核」。
+     「直接集成官方 Lua 5.5、不经绑定框架」本就是现状:deps/lua 钉
+     **v5.5.1 = 上游最新 5.5 发布 tag**(master 领先 6 个小修,均未进
+     发布,锁版本纪律等 5.5.2),五族绑定(lfs/luasocket/lua-zlib/
+     luaossl/loop)全走官方 C API,批次 3–5 的格式绑定沿用同模式。
 
 ### 批次拆解与验收标准
 

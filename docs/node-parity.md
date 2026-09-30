@@ -131,12 +131,12 @@ tags = ["repl", "lua"]
 ]]
 --   → { title = "luna", server = { host = "127.0.0.1", port = 8321, tags = {"repl","lua"} } }
 
-toml.encode({ title = "luna" })      -- 键按插入序(lua 5.5 表序),顶层标量键在前
+toml.encode({ title = "luna" })      -- 标量键在前、表键在后(encode 层重排,不依赖调用方)
 ```
 
-- **类型映射**:表/数组/字符串/整数/浮点/布尔直映;**datetime 映射为表** `{year, month, day, hour, min, sec, secfrac?, offset?}`(纯日期缺时分秒、纯时间缺年月日,`offset` 是分钟数)——Lua 无日期类型,这个形状 `os.time` 可直接吃(本地时间);encode 认同一形状回写;
-- **encode 的键序**:TOML 要求"先标量后表",encode 层负责重排(不依赖调用方);数组内允许混合类型照实输出;
-- **错误**:tomlc17 的错误串带行号(实现期核对精确形状,包装层规整为口径 4)。
+- **类型映射**:表/数组/字符串/整数/浮点/布尔直映;**datetime 映射为表** `{year, month, day, hour, minute, second, secfrac?, offset?}`(纯日期缺时分秒、纯时间缺年月日,`offset` 是分钟数)——Lua 无日期类型,这个形状 `os.time` 可直接吃(本地时间);encode 认同一形状回写(键集全属该组件集且带 `year` 或 `hour` 才认作 datetime,普通数据表带任一其它键即避开);
+- **encode 的键序**:TOML 要求"先标量后表",encode 层负责重排(不依赖调用方);同组之内按 Lua 表序(pairs,不承诺插入序);数组内允许混合类型照实输出;
+- **错误**:tomlc17 的错误串带行号(实现期已核对:三种串形统一规整为 `<fmt>: <原因> at line N`,**无列子句**——tomlc17 只报行号,与 csv/ini 的行列口径就这一点显式分叉,guide/modules.md 记账)。
 
 ### CSV / INI → LPeg 语法(零新依赖)
 

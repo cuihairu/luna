@@ -88,6 +88,18 @@ target_link_libraries(luasocket PUBLIC lualib)
 add_library(lua_zlib STATIC deps/lua-zlib/lua_zlib.c)
 target_link_libraries(lua_zlib PUBLIC lualib ZLIB::ZLIB)
 
+# toml -> tomlc17 R260821 (cktan/tomlc17, submodule pinned by SHA):
+# TOML 1.0 parser as a single C17 translation unit, no encoder — the
+# Lua-facing decode binding lives in src/luna_toml.c and encode is the
+# wrapper's own Lua face (scalar-first key ordering). No system deps.
+add_library(tomlc17 STATIC deps/tomlc17/src/tomlc17.c)
+target_include_directories(tomlc17 PUBLIC
+        "${PROJECT_SOURCE_DIR}/deps/tomlc17/src")
+
+# the decode binding over it (luaopen_toml_core)
+add_library(luna_toml STATIC src/luna_toml.c)
+target_link_libraries(luna_toml PUBLIC lualib tomlc17)
+
 # crypto -> luaossl rel-20260910 (wahern): requires OpenSSL development
 # headers; when absent, luna builds without crypto and the module
 # reports how to enable it.
@@ -176,7 +188,7 @@ list(APPEND luna_sources
 
 add_executable(luna ${luna_sources})
 target_link_libraries(luna lualib lpeg luna_line luna_kernel luna_loop
-        lfs luasocket lua_zlib)
+        lfs luasocket lua_zlib luna_toml)
 if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna luaossl)
 endif()

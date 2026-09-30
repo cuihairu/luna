@@ -42,7 +42,7 @@
 | 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
 | 全局注入 | `process`/`Buffer` | `kernel`/`Out`/`In` |
-| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`zlib`/`crypto` 随二进制 |
+| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`zlib`/`crypto` 随二进制 |
 
 差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。
 

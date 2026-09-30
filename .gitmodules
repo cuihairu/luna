@@ -43,3 +43,6 @@
 [submodule "deps/luacov"]
 	path = deps/luacov
 	url = https://github.com/lunarmodules/luacov.git
+[submodule "deps/tomlc17"]
+	path = deps/tomlc17
+	url = https://github.com/cktan/tomlc17

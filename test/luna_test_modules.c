@@ -23,6 +23,7 @@ int luaopen_lfs(lua_State *L);
 int luaopen_socket_core(lua_State *L);
 int luaopen_mime_core(lua_State *L);
 int luaopen_zlib(lua_State *L);
+int luaopen_toml_core(lua_State *L);
 #ifdef LUNA_HAVE_OPENSSL
 int luaopen__openssl(lua_State *L);
 int luaopen__openssl_digest(lua_State *L);
@@ -77,6 +78,8 @@ static int setup_modules(void **state)
     luaL_requiref(L, "mime.core", luaopen_mime_core, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "zlib.core", luaopen_zlib, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "toml.core", luaopen_toml_core, 0);
     lua_pop(L, 1);
 #ifdef LUNA_HAVE_OPENSSL
     luaL_requiref(L, "_openssl", luaopen__openssl, 0);
@@ -847,7 +850,323 @@ static void test_ini_encode_and_roundtrip(void **state)
         "nilnilfalse");
 }
 
-/* -- runner ---------------------------------------------------------------- */
+/* -- toml module (batch 3, tomlc17 R260821 + wrapper encode) --------------- */
+
+static void test_toml_decode_scalars(void **state)
+{
+    (void)state;
+    /* basic-string escapes, literal strings, all integer spellings
+     * including both int64 bounds, floats incl inf/nan, booleans */
+    assert_string_equal(
+        eval_string("local t = require('toml').decode([==[\n"
+                    "s = \"a\\tb\\né 😀 \\\"q\\\"\"\n"
+                    "l = 'C:\\raw\\no\\escape'\n"
+                    "hex = 0xDEADBEEF\n"
+                    "oct = 0o755\n"
+                    "bin = 0b1010\n"
+                    "grouped = 1_000_000\n"
+                    "max = 9223372036854775807\n"
+                    "min = -9223372036854775808\n"
+                    "f = [inf, -inf, 6.626e-34, -0.0, 3.0]\n"
+                    "b = [true, false]\n"
+                    "]==])\n"
+                    "assert(t.s == 'a\\tb\\né 😀 \\\"q\\\"')\n"
+                    "assert(t.l == 'C:\\\\raw\\\\no\\\\escape')\n"
+                    "assert(t.hex == 0xDEADBEEF and t.oct == 493 and t.bin == 10)\n"
+                    "assert(t.grouped == 1000000 and math.type(t.grouped) == 'integer')\n"
+                    "assert(t.max == math.maxinteger and t.min == math.mininteger)\n"
+                    "assert(t.f[1] == math.huge and t.f[2] == -math.huge)\n"
+                    "assert(t.f[3] == 6.626e-34 and t.f[4] == 0.0 and 1 / t.f[4] < 0)\n"
+                    "assert(math.type(t.f[5]) == 'float' and t.f[5] == 3.0)\n"
+                    "assert(t.b[1] == true and t.b[2] == false)\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_decode_multiline_and_unicode(void **state)
+{
+    (void)state;
+    /* multiline basic: the first newline after """ is trimmed, escapes
+     * work, a line-ending backslash swallows the following whitespace */
+    assert_string_equal(
+        eval_string("local t = require('toml').decode([==[\n"
+                    "one = \"\"\"\n"
+                    "line one\n"
+                    "line two \\n third\"\"\"\n"
+                    "two = \"\"\"\\\n"
+                    "   joined\\\n"
+                    "   lines\"\"\"\n"
+                    "lit = '''\n"
+                    "raw \\n stays'''\n"
+                    "]==])\n"
+                    "assert(t.one == 'line one\\nline two \\n third')\n"
+                    "assert(t.two == 'joinedlines')\n"
+                    "assert(t.lit == 'raw \\\\n stays')\n"
+                    "return 'ok'"),
+        "ok");
+    /* \uXXXX and \UXXXXXXXX escapes land as real UTF-8 */
+    assert_string_equal(
+        eval_string("local t = require('toml').decode([=[\n"
+                    "u = \"\\u00E9 \\U0001F600 \\u4E2D\\u6587\"\n"
+                    "]=])\n"
+                    "assert(t.u == 'é 😀 中文')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_decode_structures(void **state)
+{
+    (void)state;
+    /* [table], [[array of tables]], dotted keys, inline tables,
+     * nested arrays — toml-test selections */
+    assert_string_equal(
+        eval_string("local t = require('toml').decode([==[\n"
+                    "top = 1\n"
+                    "[server]\n"
+                    "host = 'example.org'\n"
+                    "  [server.tls]\n"
+                    "enabled = true\n"
+                    "[[fruit]]\n"
+                    "name = 'apple'\n"
+                    "  [[fruit.physical]]\n"
+                    "  color = 'red'\n"
+                    "[[fruit]]\n"
+                    "name = 'banana'\n"
+                    "dotted.key.deep = 5\n"
+                    "inline = { a = 1, sub = { b = 'x' } }\n"
+                    "matrix = [[1, 2], [3, 4], []]\n"
+                    "]==])\n"
+                    "assert(t.top == 1)\n"
+                    "assert(t.server.host == 'example.org' and t.server.tls.enabled == true)\n"
+                    "assert(#t.fruit == 2 and t.fruit[1].name == 'apple')\n"
+                    "assert(t.fruit[1].physical[1].color == 'red')\n"
+                    "assert(t.fruit[2].name == 'banana')\n"
+                    "assert(t.fruit[2].dotted.key.deep == 5)\n"
+                    "assert(t.fruit[2].inline.a == 1 and t.fruit[2].inline.sub.b == 'x')\n"
+                    "local m = t.fruit[2].matrix\n"
+                    "assert(#m == 3 and m[1][2] == 2 and m[2][1] == 3 and #m[3] == 0)\n"
+                    "return 'ok'"),
+        "ok");
+    /* empty document decodes to an empty table; duplicate keys and
+     * extending an inline table are rejected with the line number */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local t = toml.decode('')\n"
+                    "assert(type(t) == 'table' and next(t) == nil)\n"
+                    "local d = toml.decode('a = 1\\na = 2')\n"
+                    "assert(d == nil)\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_decode_datetimes(void **state)
+{
+    (void)state;
+    /* local date / time / datetime / offset datetime -> component
+     * tables; secfrac only when present (as a fraction); offset in
+     * minutes, 0 for Z */
+    assert_string_equal(
+        eval_string("local t = require('toml').decode([==[\n"
+                    "d = 1979-05-27\n"
+                    "tm = 07:32:00\n"
+                    "tmf = 00:32:00.999999\n"
+                    "dt = 1979-05-27T07:32:00Z\n"
+                    "dtz = 1979-05-27T00:32:00.999999-07:00\n"
+                    "space = 1979-05-27 07:32:00\n"
+                    "]==])\n"
+                    "assert(t.d.year == 1979 and t.d.month == 5 and t.d.day == 27)\n"
+                    "assert(t.d.hour == nil and t.d.offset == nil)\n"
+                    "assert(t.tm.hour == 7 and t.tm.minute == 32 and t.tm.second == 0)\n"
+                    "assert(t.tm.secfrac == nil and t.tm.year == nil)\n"
+                    "assert(t.tmf.secfrac == 0.999999)\n"
+                    "assert(t.dt.year == 1979 and t.dt.hour == 7 and t.dt.offset == 0)\n"
+                    "assert(t.dtz.secfrac == 0.999999 and t.dtz.offset == -420)\n"
+                    "assert(t.space.hour == 7 and t.space.offset == nil)\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_decode_errors(void **state)
+{
+    (void)state;
+    /* parse errors carry the line; the column clause does not apply —
+     * tomlc17 reports line numbers only (guide/modules.md) */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local t1, e1 = toml.decode('a = 1\\na = 2')\n"
+                    "local t2, e2 = toml.decode('x = \"unterminated')\n"
+                    "local t3, e3 = toml.decode('ok = 1\\nbad = 2 2')\n"
+                    "return e1 .. ' | ' .. e2 .. ' | ' .. e3"),
+        "toml: duplicate key at line 2 | toml: unterminated string at line 1"
+        " | toml: ENDL expected at line 2");
+    /* int64 overflow is rejected with the line, not silently truncated
+     * (toml-test's integer-bounds selections) */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local t, e = toml.decode('over = 9223372036854775808')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | toml: error parsing integer at line 1");
+    /* invalid UTF-8 is rejected (TOML 1.0 requires valid UTF-8) */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local t, e = toml.decode('k = \\255\\254 bad')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | toml: invalid UTF8 char at line 1");
+    /* surrogate escapes are rejected inside the string pass too */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local t, e = toml.decode('k = \"\\\\uD800\"')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | toml: invalid UTF8 char \\ud800 at line 1");
+}
+
+static void test_toml_encode_exact_shapes(void **state)
+{
+    (void)state;
+    /* scalar-first: key=value lines precede [headers] in every table;
+     * blank line before each header, none trailing */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({only = 1, sub = {b = 2}})"),
+        "only = 1\n\n[sub]\nb = 2");
+    /* array of plain tables -> [[header]] per element */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({items = {{k = 1}, {k = 2}}})"),
+        "[[items]]\nk = 1\n\n[[items]]\nk = 2");
+    /* nested sections carry the full dotted path in every header: the
+     * child-path helper is the difference between [a.mid.leaf] and a
+     * flattened [leaf] (pinned after a {table.unpack(path), fk} table
+     * constructor truncated the path and broke depth-2+ nesting) */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({a = {mid = {leaf = {x = 1},"
+                    " keep = 's'}}})"),
+        "[a]\n\n[a.mid]\nkeep = \"s\"\n\n[a.mid.leaf]\nx = 1");
+    /* mixed/scalar arrays, datetimes and empty tables render inline;
+     * one key per table — pairs order must not decide the expected text */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({arr = {1, 'a b', true}})"),
+        "arr = [1, \"a b\", true]");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({dt = {hour = 7, minute = 32,"
+                    " second = 0, secfrac = 0.5}})"),
+        "dt = 07:32:00.5");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({dt = {year = 1979, month = 5,"
+                    " day = 27, hour = 7, minute = 32, second = 0,"
+                    " offset = 450}})"),
+        "dt = 1979-05-27T07:32:00+07:30");
+    /* nan/inf/-inf spellings; offset 0 renders as Z */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({n = 0/0})"),
+        "n = nan");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({n = -math.huge})"),
+        "n = -inf");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({dt = {year = 1979, month = 5,"
+                    " day = 27, hour = 7, minute = 32, second = 0,"
+                    " offset = 0}})"),
+        "dt = 1979-05-27T07:32:00Z");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({e = {}})"),
+        "e = {}");
+    /* keys needing quotes; control bytes escape as \\uXXXX */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({['k.y'] = 'v'})"),
+        "\"k.y\" = \"v\"");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "return toml.encode({s = 'a\\0b'})"),
+        "s = \"a\\u0000b\"");
+}
+
+static void test_toml_encode_roundtrip(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local function eq(a, b)\n"
+                    "  if a == b then return true end\n"
+                    "  if type(a) ~= 'table' or type(b) ~= 'table' then return false end\n"
+                    "  local n = 0\n"
+                    "  for k, v in pairs(a) do\n"
+                    "    if not eq(v, b[k]) then return false end\n"
+                    "    n = n + 1\n"
+                    "  end\n"
+                    "  for _ in pairs(b) do n = n - 1 end\n"
+                    "  return n == 0\n"
+                    "end\n"
+                    "local t = {\n"
+                    "  title = 'round trip', esc = 'a\\ttab \\\\ \"q\" \\u{7F}',\n"
+                    "  n = {i = 42, big = math.maxinteger, f = 0.1, third = 1/3,\n"
+                    "       one = 1.0, inf = math.huge, negz = -0.0},\n"
+                    "  when = {year = 1979, month = 5, day = 27, hour = 7,\n"
+                    "         minute = 32, second = 0, secfrac = 0.5, offset = -420},\n"
+                    "  day = {year = 2026, month = 9, day = 30},\n"
+                    "  sub = {deep = {x = 'y'}},\n"
+                    "  aot = {{k = 1, vals = {1, 2}}, {k = 2, vals = {}}},\n"
+                    "}\n"
+                    "local s = toml.encode(t)\n"
+                    "assert(toml.decode(s))\n"
+                    "assert(eq(t, toml.decode(s)), 'roundtrip mismatch')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_encode_errors(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local a = toml.encode({f = function() end})\n"
+                    "local b = toml.encode({d = {year = 2020, month = 13, day = 1}})\n"
+                    "local c = toml.encode({d = {hour = 1, offset = 30}})\n"
+                    "return tostring(a) .. ' | ' .. tostring(b) .. ' | ' .. tostring(c)"),
+        "nil | nil | nil");
+    /* datetime component validation: out-of-range secfrac, offset on a
+     * non-datetime shape (needs a COMPLETE time or the hour/minute/second
+     * check fires first), offset beyond +/-23:59 */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local a = toml.encode({d = {year = 2020, month = 5, day = 1,"
+                    " hour = 1, minute = 2, second = 3, secfrac = 1.5}})\n"
+                    "local b = toml.encode({d = {hour = 1, minute = 2, second = 3,"
+                    " offset = 30}})\n"
+                    "local c = toml.encode({d = {year = 2020, month = 5, day = 1,"
+                    " hour = 1, minute = 2, second = 3, offset = 99999}})\n"
+                    "return tostring(a) .. ' | ' .. tostring(b) .. ' | ' .. tostring(c)"),
+        "nil | nil | nil");
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local cyc = {}\n"
+                    "cyc.self = cyc\n"
+                    "local _, e1 = toml.encode(cyc)\n"
+                    "local _, e2 = toml.encode({[1] = 'positional'})\n"
+                    "return tostring(e1) .. ' | ' .. tostring(e2)"),
+        "toml: cyclic table reference | toml: key must be a string (got number)");
+    /* bad arguments raise (shared contract: only bad DATA returns nil).
+     * A NUMBER argument coerces the way string.format's %s does, then
+     * still has to parse — "42" is not a TOML document — so it lands in
+     * the nil, err bucket rather than raising. */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local ok1 = pcall(toml.decode, {})\n"
+                    "local ok2 = pcall(toml.encode, 'str')\n"
+                    "local c1 = toml.decode(42)\n"
+                    "return tostring(ok1) .. ',' .. tostring(ok2) .. ','"
+                    " .. tostring(c1)"),
+        "false,false,nil");
+}
 
 int main(void)
 {
@@ -893,6 +1212,14 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_ini_duplicates_and_cast, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_ini_error_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_ini_encode_and_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_scalars, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_multiline_and_unicode, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_structures, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_datetimes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_encode_exact_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_encode_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_encode_errors, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

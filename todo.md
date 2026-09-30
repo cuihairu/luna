@@ -936,13 +936,13 @@
       坏输入行列)、ini(段/段前裸键/两种注释/引号值/重复键/cast/坏输入)。
       **验收**:decode/encode 全口径用例绿;两树 cmake --build + ctest 全绿;
       guide/modules.md 内置模块表更新;luacov 账收编新文件。(实录见下节)
-- [ ] **批次 3:toml(tomlc17 vendor)**。deps/tomlc17 子模块钉版本 + 静态
+- [x] **批次 3:toml(tomlc17 vendor)**。deps/tomlc17 子模块钉版本 + 静态
       库;`toml.core` 进 register_c_modules;包装层 decode 直通、**encode
       为自写 Lua 面**(tomlc17 无 encoder,键序"标量在前"由包装层重排);
       datetime → 表映射({year,…,secfrac?,offset?})。用例:toml-test 摘选
       代表性 valid/invalid(多行字符串、Unicode 转义、整数边界、日期时间)、
       encode 往返、错误行列。**验收**:同批次 2 + .gitmodules 登记与版本
-      钉死;构建零新增系统依赖(vendor 自带源码编译)。
+      钉死;构建零新增系统依赖(vendor 自带源码编译)。(实录见下节)
 - [ ] **批次 4:yaml(libyaml + lyaml vendor)**。libyaml 上游 CMake 接线
       (EXCLUDE_FROM_ALL,参考 libuv 段);lyaml 绑定源编入静态库;null→nil
       默认 + opts.nullval 哨兵;anchors/aliases → 共享表引用,encode 循环
@@ -1035,6 +1035,79 @@
 - [x] 门禁:两树 cmake --build + ctest 16 组全绿(build 355.0s、
       build-cov 346.0s,串行);单笔提交,push 前 fetch origin main
       核对 SHA;不打 tag、不发版。
+
+### 批次 3(toml)实录(2026-09-30)
+
+- [x] **vendor 与钉版**:deps/tomlc17 子模块按 **R260821 release tag**
+      (e0e8868)钉死,.gitmodules 登记;双文件 amalgamation 直接进静态库
+      (`add_library(tomlc17 STATIC deps/tomlc17/src/tomlc17.c)`),
+      C17 单翻译单元、零外部依赖,构建零新增系统依赖。上游 master 领先
+      7 个提交(超长数字字面量拒绝、闰秒 :60 拒绝、subnormal float 等
+      修正),**明知不取**:锁版本纪律按 release tag 钉(与 deps/lua
+      v5.5.1 同法),且已核实 tag 上 int64 溢出字面量同样报行号拒绝
+      (用例钉住),上游修正等下一个 release 再评估。
+      接线坑:cmake/FetchSubmodules.cmake 每次 configure 都跑
+      `git submodule update --init`,把工作树拉回**索引**里的 SHA——
+      先 `git add deps/tomlc17` 落索引再 configure,否则重钉会被
+      静默还原(本轮 12:34 复现一次才定位)。
+- [x] **decode 绑定(src/luna_toml.c,luaopen_toml_core)**:
+      `toml_parse(src,len)` → 递归转 Lua 值后立即 `toml_free`,无 C 侧
+      所有权外泄;深度守卫 100(方括号/花括号嵌套 tomlc17 自 capped 30,
+      链式表头不受其约束)。datetime → 组件表:DATE {year,month,day}、
+      TIME {hour,minute,second,secfrac?}、DATETIME 两者、DATETIMETZ 再加
+      offset(分钟,Z 为 0);secfrac 是秒的小数且仅当源有小数位
+      (tomlc17 只存整微秒,"07:32:00.0" 与 "07:32:00" 解码等价——按
+      微秒粒度等价处理,已核实接受)。`luaopen` 打开 check_utf8
+      (tomlc17 默认关,TOML 1.0 要求合法 UTF-8;进程级全局,单 VM/进程
+      无碍)。错误口径:**三种错误串形**(SETERROR 的 "(line N) <原因>"、
+      UTF-8 检查的 "<原因> on line N"、内部兜底 "Error near line N")
+      统一规整为 `toml: <原因> at line N`,**无列子句**(tomlc17 只报
+      行号,datum 虽带列、错误串不带)——与 csv/ini 的行列口径就这一点
+      显式分叉,guide/modules.md 与 node-parity.md 均已记账。陷阱实录:
+      `lua_pushfstring` 不支持 `%.*s`(精度符原样拷贝、不消费参数,
+      后续 %d 吃错位)——先 snprintf 截再 `%s`。
+- [x] **encode 自写 Lua 面(lua/modules/toml/init.lua)**:decode 直通
+      `core.decode`;encode 约束"标量键在前、表键在后"(TOML 硬规则,
+      分区后先发标量再发子表,不依赖调用方)、每表头前空行、无尾换行;
+      纯表数组 → `[[header]]` 逐元素,混合/标量数组、datetime、空表
+      内联(`[1, "a b"]`、`07:32:00.5`、`{}`);裸键 `^[A-Za-z0-9_-]+$`
+      否则加引号;控制字节 `\uXXXX` 大写十六进制;float 取
+      {%.14g,%.15g,%.16g,%.17g} 中**读回等值的最短拼写**(Lua tostring
+      的 %.14g 会丢往返),无 `.`/`e` 补 ".0";nan/inf/-inf 字面量;
+      datetime 组件表识别口径:键集 ⊆ 组件集且带 year 或 hour 才认,
+      普通数据表带任一其它键即避开(逃生门写进 node-parity.md);
+      环引用检测(ancestor 集,全退出路径清账)。**测试翻出的真 bug**:
+      子表 keypath 拼装初版写 `{ table.unpack(path), fk }`——构造器中
+      非末位的函数调用被调整为**单值**,`table.unpack({})` 调成裸 nil,
+      子路径成 {nil, fk} 且 # 塌到 0,二级以下嵌套表头被拍平([sub.deep]
+      变 [deep]);换显式拷贝辅助 child_path,深度 3 形状用例钉死。
+- [x] modules 组 +8 用例(37→45):decode 标量全拼写(两种 int64 界、
+      hex/oct/bin/下划线分组、inf/nan/-0.0/3.0、字面串与转义串)、多行
+      基本串(首换行裁剪、行尾反斜杠吞白)与多行字面串、\u/\U 转义
+      落真 UTF-8、[表]/[[表数组]]/点键/内联表/嵌套数组、四形态 datetime
+      与 secfrac/offset 映射、int64 溢出拒绝、非法 UTF-8 与代理对转义、
+      duplicate key/unterminated/ENDL 行号;encode 精确形状钉(分区、
+      [[aot]]、内联、带引号键、\u0000、深度 3 表头路径)、全量往返
+      deep-equal(含 DEL/inf/1/3/maxinteger/secfrac/offset)、错误契约
+      (坏数据 nil+err:函数值、month=13、time 带 offset、环引用、非串键;
+      参数类型错才 raise——**数字实参照 string.format %s 先转字符串**,
+      再按坏数据走 nil, err,已用例钉住)。
+- [x] 覆盖率与文档:luacov include 收编 `luna_modules/toml/`;
+      guide/modules.md 内置模块表加 toml 行、错误口径段记 no-column
+      分叉;README/architecture/index 三处标准库清单同步;
+      node-parity.md toml 节按实现勾稽(datetime 组件键名 minute/second
+      定稿、识别口径、encode 键序、错误串形已核)。
+- [x] 覆盖率账:toml 90.69%(185 行 19 暗;首测 87.75%,补钉 nan/
+      -inf 拼写、offset 0→Z、secfrac/offset 三错误臂后 90.69%,余暗为
+      分支末 `end` 类逐臂残余);Lua 侧总 96.46%(2232/82);C 侧 lines
+      94.8%(2689/2837,含新增 luna_toml.c)、branches 77.6%(948/1222)、
+      functions 100%。
+- [x] 门禁:两树 cmake --build + ctest **16 组全绿**——build 360.6s、
+      build-cov 445.1s(串行;期间负载 18 起伏至并行会话高峰,rocks 未
+      假挂);中途一次教训入库:ctest 不重建,先 `cmake --build build-cov`
+      再跑,否则 cov 组跑的是旧二进制(首轮 87.75% 即此因,重建重跑后
+      台账才真)。单笔提交,push 前 fetch origin main 核对 SHA;
+      不打 tag、不发版。
 
 ## 明确不做(第二十轮,Node 方向)
 

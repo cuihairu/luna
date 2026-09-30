@@ -22,6 +22,7 @@ int luaopen_socket_core(lua_State *L); /* luasocket */
 int luaopen_mime_core(lua_State *L);  /* luasocket mime */
 int luaopen_zlib(lua_State *L);       /* lua-zlib */
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport: attach */
+int luaopen_toml_core(lua_State *L);  /* src/luna_toml.c: tomlc17 binding */
 
 #ifdef LUNA_HAVE_OPENSSL
 /* luaossl: every submodule Lua layer requires "_openssl.<sub>". */
@@ -158,6 +159,9 @@ static void register_c_modules(lua_State *L)
          * the thin wrapper in luna_modules/zlib/ (one-shot helpers on
          * top of the streaming API) */
         { "zlib.core", luaopen_zlib },
+        /* toml decode core; encode is the wrapper's own Lua face in
+         * luna_modules/toml/ (tomlc17 ships no encoder) */
+        { "toml.core", luaopen_toml_core },
 #ifdef LUNA_HAVE_OPENSSL
         { "_openssl", luaopen__openssl },
         { "_openssl.compat", luaopen__openssl_compat },

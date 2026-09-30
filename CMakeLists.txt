@@ -143,6 +143,35 @@ if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna_loop PUBLIC OpenSSL::SSL)
 endif()
 
+# yaml -> libyaml 0.2.5 + lyaml 6.2.9 (both submodules pinned by SHA):
+# the reference C implementation of YAML behind lyaml's Lua binding.
+# libyaml's own CMake builds the static lib (BUILD_SHARED_LIBS defaults
+# off); its tests stay out of our ctest (BUILD_TESTING forced off for
+# the subdirectory, CMP0077-observing), and its
+# cmake_minimum_required(3.0) is grandfathered by the
+# CMAKE_POLICY_VERSION_MINIMUM set for libuv above.
+set(BUILD_TESTING OFF)
+set(LUNA_LYAML_VERSION "6.2.9")
+add_subdirectory("${PROJECT_SOURCE_DIR}/deps/libyaml" EXCLUDE_FROM_ALL)
+
+# lyaml's C face (luaopen_yaml): four translation units over libyaml.
+# Lua 5.5 upstream dropped lua_objlen/lua_strlen and lyaml.h only shims
+# 5.2-5.4 — but the bundled luaconf.h still restores both as compat
+# macros over lua_rawlen, so the binding compiles unpatched (zero
+# vendor changes; only the lukefile's VERSION define is supplied here,
+# pinned to the vendored tag for the MYVERSION string in yaml.c). The
+# lukefile's NDEBUG/_FORTIFY_SOURCE are release flags, not reproduced.
+add_library(luna_yaml STATIC
+        deps/lyaml/ext/yaml/yaml.c
+        deps/lyaml/ext/yaml/emitter.c
+        deps/lyaml/ext/yaml/parser.c
+        deps/lyaml/ext/yaml/scanner.c)
+target_include_directories(luna_yaml PRIVATE
+        "${PROJECT_SOURCE_DIR}/deps/lyaml/ext/yaml")
+target_compile_definitions(luna_yaml PRIVATE
+        VERSION="${LUNA_LYAML_VERSION}")
+target_link_libraries(luna_yaml PUBLIC lualib yaml)
+
 # embed the entry plus policy modules into the binary (raw strings)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
@@ -188,7 +217,7 @@ list(APPEND luna_sources
 
 add_executable(luna ${luna_sources})
 target_link_libraries(luna lualib lpeg luna_line luna_kernel luna_loop
-        lfs luasocket lua_zlib luna_toml)
+        lfs luasocket lua_zlib luna_toml luna_yaml)
 if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna luaossl)
 endif()

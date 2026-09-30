@@ -943,12 +943,12 @@
       代表性 valid/invalid(多行字符串、Unicode 转义、整数边界、日期时间)、
       encode 往返、错误行列。**验收**:同批次 2 + .gitmodules 登记与版本
       钉死;构建零新增系统依赖(vendor 自带源码编译)。(实录见下节)
-- [ ] **批次 4:yaml(libyaml + lyaml vendor)**。libyaml 上游 CMake 接线
+- [x] **批次 4:yaml(libyaml + lyaml vendor)**。libyaml 上游 CMake 接线
       (EXCLUDE_FROM_ALL,参考 libuv 段);lyaml 绑定源编入静态库;null→nil
       默认 + opts.nullval 哨兵;anchors/aliases → 共享表引用,encode 循环
       报错;decodeAll(多文档)批内定去留。用例:标量类型家族、块标量、
       流式集合、多文档、坏输入行列、encode 循环。**验收**:同上;Lua 5.5
-      适配若需小补丁,vendor 内登记改动点。
+      适配若需小补丁,vendor 内登记改动点。(实录见下节)
 - [ ] **批次 5:xml(expat + lua-expat vendor)**。DOM 三件套 {tag, attrs,
       kids}、文本节点为字符串、属性恒字符串、命名空间前缀原样;encode
       转义 + opts.indent;xml.sax 透传 lxp handler(流式面)。用例:实体/
@@ -1109,7 +1109,88 @@
       台账才真)。单笔提交,push 前 fetch origin main 核对 SHA;
       不打 tag、不发版。
 
-## 明确不做(第二十轮,Node 方向)
+### 批次 4(yaml)实录(2026-09-30)
+
+- [x] **vendor 与钉版**:deps/libyaml 子模块钉 **0.2.5**(tag 核实,
+      2c891fc)、deps/lyaml 钉 **v6.2.9**(cdc8a08;`git describe` 曾示
+      v6.1-72-gcdc8a08 有误导性,以 `git tag --points-at` 为准),双双
+      .gitmodules 登记。libyaml 上游 CMake 接线 `add_subdirectory(
+      EXCLUDE_FROM_ALL)`:必须先 `set(BUILD_TESTING OFF)` 再进——其
+      CMakeLists 的 `include(CTest)` 会把 11 个 C 测试挂进我们的树
+      (CMP0077 NEW 下普通变量即够,ctest -N 仍 16 组核实);其
+      `cmake_minimum_required(3.0)` 靠 libuv 段已设的
+      CMAKE_POLICY_VERSION_MINIMUM 3.5 放行,**yaml 段必须排在其后**。
+      lyaml 取绑定源(yaml.c/emitter.c/parser.c/scanner.c 四翻译单元)
+      编入 `luna_yaml` 静态库,luke 构建系统的 `VERSION` 宏由 CMake
+      `VERSION="6.2.9"` 定义(无它则 MYVERSION 拼不成立即可见)。
+      submodule add 陷阱再犯一次实录:`git submodule add` 落索引的是
+      **分支 HEAD** 而非检出 tag,FetchSubmodules 又按索引还原——
+      checkout tag 后须显式 `git add deps/libyaml deps/lyaml` 再
+      configure(批次 3 同坑,这次先验索引后配置,零返工)。
+- [x] **Lua 5.5 适配:零补丁**(好于派发单预期)。lyaml.h 自带的
+      5.2–5.4 垫片在 5.5 不触发,而 luna 随附 Lua 的 luaconf.h 仍保留
+      `lua_strlen`/`lua_objlen` 函数式兼容宏(365–367 行),四个 C 翻译
+      单元原样过。**反面教训**:初版想用命令行 `-Dlua_objlen=lua_rawlen`
+      对象式宏补缺,与 luaconf.h 的函数式宏重定义告警 ×8——垫片本就
+      不需要,删除后零告警。vendor 内**零改动**,"小补丁登记"一条
+      因此空置。
+- [x] **注册与包装层**:`yaml.core`(luaopen_yaml)进 register_c_modules
+      (luna_main.c mods[]);`lua/modules/yaml/` 四文件 staged(lyaml
+      lib 源拷贝:init.lua 公共接口尾换成 luna 面,explicit/implicit 的
+      require 改 `yaml.*`,functional.lua 原样)。包装层契约:decode/
+      decodeAll/encode + `null` 哨兵 + `_VERSION`;null→nil 默认、
+      opts.nullval 替换**只动值不动键**(静默删条目比留哨兵更糟)、
+      数组 null 同落 nil(尾部收缩)、null 文档在 decodeAll 是 nil 槽;
+      替换遍历带访问集(共享锚点与自引用表不重复走、不成环),且
+      **原地替换保共享**;encode 环检测走祖先集(共享兄弟引用各自完整
+      序列化,不误报)。decodeAll **保留**(node-parity 表记"已实现"):
+      同一 pcall(load) 逐文档 substitute,opts 透传。
+- [x] **错误口径**:lyaml 的 Lua 层把 C 消息 gsub 掉 ` at document:`
+      起的一切(含 libyaml 自己的 problem_mark),坐标实为**最后一个
+      成功解析事件**的 1 基起始 mark,列按 UTF-8 字符计——常不在出错
+      行,实测钉住(`a: 1\n  b: 2` 报 line 1, column 4;UTF-8 列用例
+      `ké: v` → column 5);未定义别名恰在别名处。包装层 fail() 把
+      `N:M: 原因` 规整为 `yaml: 原因 at line N, column M`,带
+      file:line 前缀的库错误只留原因。guide/modules.md 错误口径段
+      记此分叉。
+- [x] modules 组 +15 用例(45→60,**门禁首轮全绿零返工**——每条
+      断言先经三轮探针对真二进制钉值,含 flow 上下文里的显式标签与
+      冒号标量):标量家族(bool 六拼写/quoted str/hex/inf/nan)、
+      **YAML 1.1 数值家族**(二进制 0b、前导 0 八进制、六十进制
+      sexagesimal/sexfloat、`_` 分组、各负号臂)、块标量 |/>|-、流式
+      集合、多文档(decode 取首文档、decodeAll 空流/nil 槽/opts 透传/
+      坏输入 fail 腿)、坏输入行列 4 精确钉 + 行号追踪 + UTF-8 列、
+      null 三态、锚点共享(x==y、自引用)、**显式标签**(!!str/!!int/
+      !!bool/!!float/!!null 全臂 + `!!float` maybefloat 各底座 +
+      拒绝值错误腿)、**merge 键**(`<<: *d` 映射合并、`<<: [*a, *b]`
+      序列合并、`!!merge` 正式拼写、两形态坏源错误)、encode 12 精确
+      形状(含 `-.inf`)、富往返 deep-equal、encode 错误(函数值、环)、
+      参数契约(opts 非表 raise、非串 raise)。
+- [x] 覆盖率账:Lua 侧总 **96.32%**(2693/103;批次前 96.46%,首测
+      落 94.53% 后按暗行补 YAML 1.1 数值/显式标签/merge 键/-.inf 四族
+      回升);分文件 init 96.06%(13 暗)、implicit 94.68%(5 暗)、
+      explicit 94.87%(2 暗)、functional 94.74%(1 暗)。余暗全部
+      结构性、不入账为债:implicit 的 tointeger IIFE 自检分支(闭包
+      引用自身 local 时恒为 nil,宿主臂永不可达)、explicit 两行是
+      anyof 构造器尾项的 luacov 归属(resolver 本体已亮)、functional
+      的 `__call` 臂(默认 resolver 表全为普通函数)、init 的发射侧
+      anchors 机件 6 行(**opts.anchors 明确后续批次**,node-parity
+      已记)+ 7 行防御不变量(STREAM_START/DOCUMENT_END 守卫、
+      `opts == true` 兼容臂、非串 msg 兜底)。C 台账口径 src/(deps/ vendor 不入账,libuv/lua 同法):lines 94.8%(2689/2837)、functions 100%(249/249)、branches 77.6%(948/1222),与批次 3 持平——本轮 C 侧增量即 luna_main.c 的声明 + 注册两行,绑定源全在 deps/。
+- [x] 文档同步:guide/modules.md 内置表 yaml 行 + 错误口径段记
+      "last-event mark"分叉;README/architecture/index 三处标准库清单
+      加 yaml;node-parity.md 候选表钉版勘定(零补丁/luaconf.h 宏/
+      VERSION 由 CMake)+ API 三勘定(null 只动值、祖先集环检测、
+      错误 mark 语义)+ 能力表 decodeAll 已实现;cmake/luacov.config.in
+      include 收编 `luna_modules/yaml/`。
+- [x] 门禁:两树 cmake --build + ctest **16 组全绿**(串行)——build
+      441.87s、build-cov 459.64s;期间并行会话负载冲到 100(5 分钟均值
+      83–100,超出"80+ rocks 假挂"警戒窗),rocks 两树均实绿未挂——
+      结果可信,但下次冲 90+ 前值得先歇手。ctest 不重建纪律照旧——
+      先重建后跑。单笔提交,push 前 fetch origin main 核对 SHA;
+      不打 tag、不发版。
+
+
 
 - XML 的 XPath/DTD 验证/libxml2 全家桶面、命名空间前缀展开
   (fast-xml-parser 同款「前缀原样」口径);

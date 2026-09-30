@@ -46,3 +46,9 @@
 [submodule "deps/tomlc17"]
 	path = deps/tomlc17
 	url = https://github.com/cktan/tomlc17
+[submodule "deps/libyaml"]
+	path = deps/libyaml
+	url = https://github.com/yaml/libyaml
+[submodule "deps/lyaml"]
+	path = deps/lyaml
+	url = https://github.com/gvvaughan/lyaml

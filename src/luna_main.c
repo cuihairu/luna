@@ -23,6 +23,7 @@ int luaopen_mime_core(lua_State *L);  /* luasocket mime */
 int luaopen_zlib(lua_State *L);       /* lua-zlib */
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport: attach */
 int luaopen_toml_core(lua_State *L);  /* src/luna_toml.c: tomlc17 binding */
+int luaopen_yaml(lua_State *L);       /* deps/lyaml: libyaml binding */
 
 #ifdef LUNA_HAVE_OPENSSL
 /* luaossl: every submodule Lua layer requires "_openssl.<sub>". */
@@ -162,6 +163,9 @@ static void register_c_modules(lua_State *L)
         /* toml decode core; encode is the wrapper's own Lua face in
          * luna_modules/toml/ (tomlc17 ships no encoder) */
         { "toml.core", luaopen_toml_core },
+        /* lyaml's C face under a dotted name: the user-facing "yaml"
+         * module is the staged wrapper in luna_modules/yaml/ */
+        { "yaml.core", luaopen_yaml },
 #ifdef LUNA_HAVE_OPENSSL
         { "_openssl", luaopen__openssl },
         { "_openssl.compat", luaopen__openssl_compat },

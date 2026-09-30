@@ -41,10 +41,11 @@ luna_modules/hello/
 | `csv` | LPeg | RFC 4180 式 `decode`/`encode`(引号内分隔符/换行/双写引号、`headers` 表键行、`delimiter`)与逐记录 `lines()` 迭代器 |
 | `ini` | LPeg | 经典 `decode`/`encode`(段/段前裸键/两种注释/引号值转义/重复键/`cast` 数字与布尔) |
 | `toml` | tomlc17 | TOML 1.0 `decode`/`encode`;`decode` 走 C 后端,`encode` 是包装层自有实现(标量键先行、`[[表数组]]`、内联数组/日期时间/空表) |
+| `yaml` | libyaml + lyaml | YAML 1.1 `decode`/`decodeAll`/`encode`;null → nil 默认(`opts.nullval = yaml.null` 保留哨兵),anchors/aliases 解为共享表引用,`---` 分隔的多文档走 `decodeAll` |
 | `zlib` | lua-zlib | 流式 `deflate`/`inflate` + 一次性 `compress`/`decompress` 便捷层 |
 | `crypto` | luaossl | `sha256` 系列、`hmac`、`rand.bytes`(需构建期 OpenSSL) |
 
-**格式模块的错误口径**(csv/ini/toml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
+**格式模块的错误口径**(csv/ini/toml/yaml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
 
 ```lua
 local fs = require("fs")

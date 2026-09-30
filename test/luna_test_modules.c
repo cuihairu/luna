@@ -24,6 +24,7 @@ int luaopen_socket_core(lua_State *L);
 int luaopen_mime_core(lua_State *L);
 int luaopen_zlib(lua_State *L);
 int luaopen_toml_core(lua_State *L);
+int luaopen_yaml(lua_State *L);
 #ifdef LUNA_HAVE_OPENSSL
 int luaopen__openssl(lua_State *L);
 int luaopen__openssl_digest(lua_State *L);
@@ -80,6 +81,8 @@ static int setup_modules(void **state)
     luaL_requiref(L, "zlib.core", luaopen_zlib, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "toml.core", luaopen_toml_core, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "yaml.core", luaopen_yaml, 0);
     lua_pop(L, 1);
 #ifdef LUNA_HAVE_OPENSSL
     luaL_requiref(L, "_openssl", luaopen__openssl, 0);
@@ -1168,6 +1171,396 @@ static void test_toml_encode_errors(void **state)
         "false,false,nil");
 }
 
+/* -- yaml module (batch 4, libyaml 0.2.5 + lyaml 6.2.9 vendor) ------ */
+
+static void test_yaml_decode_scalar_family(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local t = y.decode('ints: [42, -7, 0x1F]\\n"
+                    "floats: [2.5, 6.02e23, .inf, .nan]\\n"
+                    "bools: [true, FALSE, yes, off]\\n"
+                    "nulls: [~, null]\\n"
+                    "strs: [\\'123\\', \"123\", \\'yes\\']\\n')\n"
+                    "assert(t.ints[1] == 42 and math.type(t.ints[1]) == 'integer')\n"
+                    "assert(t.ints[2] == -7 and t.ints[3] == 31)\n"
+                    "assert(math.type(t.ints[3]) == 'integer')\n"
+                    "assert(t.floats[1] == 2.5 and math.type(t.floats[1]) == 'float')\n"
+                    "assert(t.floats[2] == 6.02e23 and t.floats[3] == math.huge)\n"
+                    "assert(t.floats[4] ~= t.floats[4]) -- .nan\n"
+                    "assert(t.bools[1] == true and t.bools[2] == false) -- YAML 1.1: FALSE\n"
+                    "assert(t.bools[3] == true and t.bools[4] == false) -- yes / off\n"
+                    "assert(t.strs[1] == '123' and type(t.strs[1]) == 'string')\n"
+                    "assert(t.strs[2] == '123' and t.strs[3] == 'yes')\n"
+                    "assert(t.nulls ~= nil and next(t.nulls) == nil) -- null in a sequence\n"
+                    "assert(y._VERSION:find('6.2.9', 1, true) ~= nil)\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_decode_yaml11_numbers(void **state)
+{
+    (void)state;
+    /* YAML 1.1-only number families: binary/octal/sexagesimal literals
+     * and '_' digit grouping — lyaml's implicit resolvers, none of which
+     * a plain tonumber would accept */
+    assert_string_equal(
+        eval_string("local t = require('yaml').decode("
+                    "'nums: [0b1010, -0b11, 0b1010_1010, 017, -017, -0x1F]\\n"
+                    "sex: [190:20:30, -190:20:30, 190:20:30.15,"
+                    " -190:20:30.15]\\n"
+                    "grouped: 1_000\\ninf: +.inf\\nnan: .NaN\\n')\n"
+                    "assert(t.nums[1] == 10 and math.type(t.nums[1]) == 'integer')\n"
+                    "assert(t.nums[2] == -3 and t.nums[3] == 170)\n"
+                    "assert(t.nums[4] == 15 and t.nums[5] == -15) -- leading-0 octal\n"
+                    "assert(t.nums[6] == -31) -- signed hexadecimal\n"
+                    "assert(t.sex[1] == 685230 and t.sex[2] == -685230) -- base 60\n"
+                    "assert(t.sex[3] == 685230.15 and math.type(t.sex[3]) == 'float')\n"
+                    "assert(t.sex[4] == -685230.15) -- signed sexagesimal float\n"
+                    "assert(t.grouped == 1000) -- grouped digits strip to 1_000\n"
+                    "assert(t.inf == math.huge and t.nan ~= t.nan) -- spelling variants\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_decode_explicit_tags(void **state)
+{
+    (void)state;
+    /* explicit !!tags force the type regardless of the scalar's own
+     * shape — quoted ints, bare y/n booleans, ints under !!float all
+     * resolve through lyaml's explicit resolver table */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local t = y.decode('s: !!str 123\\n"
+                    "ints: [!!int \"42\", !!int 0x2A, !!int 017,"
+                    " !!int -0b11, !!int 190:20:30]\\n"
+                    "b1: !!bool \"yes\"\\nb2: !!bool y\\n"
+                    "f1: !!float 12\\nf2: !!float 017\\nf3: !!float 0x2A\\n"
+                    "f4: !!float 0b101\\nf5: !!float 190:20:30.15\\n"
+                    "f6: !!float .inf\\n')\n"
+                    "assert(t.s == '123' and type(t.s) == 'string')\n"
+                    "assert(t.ints[1] == 42 and t.ints[2] == 42 and t.ints[3] == 15)\n"
+                    "assert(t.ints[4] == -3 and t.ints[5] == 685230)\n"
+                    "assert(math.type(t.ints[5]) == 'integer')\n"
+                    "assert(t.b1 == true and t.b2 == true) -- single-letter y/n\n"
+                    "assert(t.f1 == 12.0 and math.type(t.f1) == 'float')\n"
+                    "assert(t.f2 == 15.0 and t.f3 == 42.0 and t.f4 == 5.0)\n"
+                    "assert(t.f5 == 685230.15 and t.f6 == math.huge)\n"
+                    "assert(y.decode('n1: !!null ~\\n', {nullval = y.null}).n1 == y.null)\n"
+                    "assert(y.decode('n2: !!null whatever\\n',"
+                    " {nullval = y.null}).n2 == y.null) -- body is ignored\n"
+                    "assert(y.decode('n3: !!null ~\\n').n3 == nil) -- default nullval\n"
+                    "return 'ok'"),
+        "ok");
+    /* a tag the resolver rejects names the tag and the offending value */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local _, e1 = y.decode('a: !!int notanumber\\n')\n"
+                    "local _, e2 = y.decode('a: !!float zz\\n')\n"
+                    "return e1 .. ' | ' .. e2"),
+        "yaml: invalid 'tag:yaml.org,2002:int' value: 'notanumber' at line 1, column 4"
+        " | yaml: invalid 'tag:yaml.org,2002:float' value: 'zz' at line 1, column 4");
+}
+
+static void test_yaml_decode_block_scalars(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local t = require('yaml').decode('lit: |\\n  line1\\n  line2\\n"
+                    "fold: >\\n  w1\\n  w2\\nstrip: |-\\n  s1\\n')\n"
+                    "assert(t.lit == 'line1\\nline2\\n') -- literal keeps breaks\n"
+                    "assert(t.fold == 'w1 w2\\n') -- folded joins with spaces\n"
+                    "assert(t.strip == 's1') -- '-' drops the trailing break\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_decode_flow_collections(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local t = require('yaml').decode("
+                    "'seq: [1, a, {b: 2}]\\nmap: {x: [true, ~], y: {z: deep}}\\n')\n"
+                    "assert(t.seq[1] == 1 and t.seq[2] == 'a' and t.seq[3].b == 2)\n"
+                    "assert(t.map.x[1] == true and t.map.x[2] == nil)\n"
+                    "assert(#t.map.x == 1) -- null member drops out of the sequence\n"
+                    "assert(t.map.y.z == 'deep')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_decode_multi_document(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local docs = y.decodeAll('---\\na: 1\\n---\\nb: 2\\n')\n"
+                    "assert(#docs == 2 and docs[1].a == 1 and docs[2].b == 2)\n"
+                    "local first = y.decode('---\\na: 1\\n---\\nb: 2\\n')\n"
+                    "assert(first.a == 1 and first.b == nil) -- decode takes doc one\n"
+                    "assert(#y.decodeAll('') == 0)\n"
+                    "local v, e = y.decode('')\n"
+                    "assert(v == nil and e == nil) -- empty stream: nil, no error\n"
+                    "return 'ok'"),
+        "ok");
+    /* a null document under the default nullval lands as a nil slot */
+    assert_string_equal(
+        eval_string("local mixed = require('yaml').decodeAll("
+                    "'---\\na: null\\n---\\n~\\n')\n"
+                    "return tostring(#mixed) .. ',' .. tostring(mixed[1].a == nil)"
+                    " .. ',' .. tostring(mixed[2] == nil)"),
+        "1,true,true");
+}
+
+static void test_yaml_decode_all_opts_and_errors(void **state)
+{
+    (void)state;
+    /* decodeAll takes the same opts table as decode — the nullval
+     * sentinel reaches every document of the stream */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local docs = y.decodeAll('---\\n~\\n---\\n7\\n',"
+                    " {nullval = y.null})\n"
+                    "assert(#docs == 2 and docs[1] == y.null and docs[2] == 7)\n"
+                    "return 'ok'"),
+        "ok");
+    /* bad input anywhere in the stream fails the whole call, through
+     * the same fail() normalization as decode */
+    assert_string_equal(
+        eval_string("local t, e = require('yaml').decodeAll("
+                    "'a: 1\\n---\\nb: [1, 2\\n')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | yaml: did not find expected ',' or ']' at line 3, column 8");
+}
+
+static void test_yaml_decode_errors(void **state)
+{
+    (void)state;
+    /* lyaml reports the mark of the last event that PARSED (1-based,
+     * UTF-8 character columns — same口径 as csv/ini), normalized to the
+     * stdlib error shape by the wrapper */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local t1, e1 = y.decode('a: 1\\n  b: 2\\n')\n"
+                    "local t2, e2 = y.decode('key: \"unterminated\\nother: 1\\n')\n"
+                    "local t3, e3 = y.decode('a: [1, 2\\n')\n"
+                    "local t4, e4 = y.decode('a: *nope\\n')\n"
+                    "return e1 .. ' | ' .. e2 .. ' | ' .. e3 .. ' | ' .. e4"),
+        "yaml: mapping values are not allowed in this context at line 1, column 4"
+        " | yaml: found unexpected end of stream at line 1, column 1"
+        " | yaml: did not find expected ',' or ']' at line 1, column 8"
+        " | yaml: invalid reference: nope at line 1, column 4");
+    /* the line tracks the document, not just line 1 */
+    assert_string_equal(
+        eval_string("local t, e = require('yaml').decode('a: 1\\nb: 2\\n  c: 3\\n')\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | yaml: mapping values are not allowed in this context at line 2, column 4");
+    /* columns count UTF-8 characters: the marked scalar 'v' sits at
+     * character 4 (byte 5) after the two-byte é — observed 5, not 6 */
+    assert_string_equal(
+        eval_string("local t, e = require('yaml').decode('ké: v\\n  b: 2\\n')\n"
+                    "return e"),
+        "yaml: mapping values are not allowed in this context at line 1, column 5");
+}
+
+static void test_yaml_null_semantics(void **state)
+{
+    (void)state;
+    /* default: null becomes nil — the key is absent, json/dkjson style */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local t = y.decode('a: 1\\nb: null\\nc: ~\\n')\n"
+                    "local keys = 0\n"
+                    "for _ in pairs(t) do keys = keys + 1 end\n"
+                    "assert(t.a == 1 and t.b == nil and t.c == nil and keys == 1)\n"
+                    "assert(y.decode('~') == nil) -- null document decodes to nil\n"
+                    "return 'ok'"),
+        "ok");
+    /* opts.nullval = yaml.null keeps lyaml's sentinel instead */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local n = y.decode('a: 1\\nb: null\\n', {nullval = y.null})\n"
+                    "assert(n.a == 1 and n.b == y.null)\n"
+                    "assert(y.decode('~', {nullval = y.null}) == y.null)\n"
+                    "return 'ok'"),
+        "ok");
+    /* substitution reaches nested values and sequence members */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local nx = y.decode('a:\\n  b: null\\nc: [null, 1]\\n',"
+                    "                    {nullval = y.null})\n"
+                    "assert(nx.a.b == y.null and nx.c[1] == y.null and nx.c[2] == 1)\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_anchors_share_references(void **state)
+{
+    (void)state;
+    /* aliases resolve to the SAME table, not a copy */
+    assert_string_equal(
+        eval_string("local t = require('yaml').decode('x: &a [1, 2]\\ny: *a\\n')\n"
+                    "assert(t.x == t.y)\n"
+                    "local m = require('yaml').decode("
+                    "'base: &b {k: v}\\nuse1: {f: *b}\\n')\n"
+                    "assert(m.use1.f == m.base)\n"
+                    "return 'ok'"),
+        "ok");
+    /* a self-referential anchor must not loop the null-substitution walk */
+    assert_string_equal(
+        eval_string("local s = require('yaml').decode('&a\\nself: *a\\n')\n"
+                    "return tostring(s.self == s)"),
+        "true");
+}
+
+static void test_yaml_decode_merge_keys(void **state)
+{
+    (void)state;
+    /* '<<' merge keys (YAML 1.1): referenced mapping's pairs land in the
+     * target only where no own key occupies the slot */
+    assert_string_equal(
+        eval_string("local t = require('yaml').decode("
+                    "'defaults: &d\\n  a: 1\\n  b: 2\\n"
+                    "item:\\n  <<: *d\\n  b: 3\\n')\n"
+                    "assert(t.item.a == 1 and t.item.b == 3) -- merge fills, own key wins\n"
+                    "assert(t.defaults.a == 1 and t.defaults.b == 2) -- source intact\n"
+                    "return 'ok'"),
+        "ok");
+    /* a merge SEQUENCE folds every mapping in order */
+    assert_string_equal(
+        eval_string("local s = require('yaml').decode("
+                    "'d1: &a\\n  x: 1\\nd2: &b\\n  y: 2\\n"
+                    "m:\\n  <<: [*a, *b]\\n')\n"
+                    "assert(s.m.x == 1 and s.m.y == 2)\n"
+                    "return 'ok'"),
+        "ok");
+    /* '!!merge' is the formal tag spelling of '<<', same behavior */
+    assert_string_equal(
+        eval_string("local g = require('yaml').decode("
+                    "'defaults: &d\\n  a: 1\\n"
+                    "item:\\n  !!merge : *d\\n')\n"
+                    "assert(g.item.a == 1 and #g.item == 0)\n"
+                    "return 'ok'"),
+        "ok");
+    /* merge sources must be mappings — scalars in either shape fail */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local _, e1 = y.decode('m:\\n  <<: [1]\\n')\n"
+                    "local _, e2 = y.decode('m:\\n  <<: str\\n')\n"
+                    "return e1 .. ' | ' .. e2"),
+        "yaml: invalid '<<' sequence element 1: 1 at line 2, column 9"
+        " | yaml: invalid '<<' merge event: str at line 2, column 7");
+}
+
+static void test_yaml_encode_exact_shapes(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("return require('yaml').encode({ok = true})"),
+        "---\nok: true\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode({1, 2, 3})"),
+        "---\n- 1\n- 2\n- 3\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode(42)"),
+        "--- 42\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode('hello')"),
+        "--- hello\n...\n");
+    /* newline-carrying strings take the literal block style, stripped */
+    assert_string_equal(
+        eval_string("return require('yaml').encode({s = 'line1\\nline2'})"),
+        "---\ns: |-\n  line1\n  line2\n...\n");
+    /* the empty table reads as an empty sequence; nil as the empty stream */
+    assert_string_equal(
+        eval_string("return require('yaml').encode({})"),
+        "--- []\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode(nil)"),
+        "");
+    /* strings that would parse as other types stay quoted on the way out */
+    assert_string_equal(
+        eval_string("return require('yaml').encode('123')"),
+        "--- '123'\n...\n");
+    assert_string_equal(
+        eval_string("local y = require('yaml')\nreturn y.encode({a = 'yes'})"),
+        "---\na: 'yes'\n...\n");
+    /* the null sentinel emits ~; inf/nan take YAML spellings (one key
+     * per table: pairs order must not decide the expected text) */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\nreturn y.encode({a = y.null})"),
+        "---\na: ~\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode({a = math.huge})"),
+        "---\na: .inf\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode({a = -math.huge})"),
+        "---\na: -.inf\n...\n");
+    assert_string_equal(
+        eval_string("return require('yaml').encode({a = 0/0})"),
+        "---\na: .nan\n...\n");
+}
+
+static void test_yaml_encode_roundtrip(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local function eq(a, b)\n"
+                    "  if a == b then return true end\n"
+                    "  if type(a) ~= 'table' or type(b) ~= 'table' then return false end\n"
+                    "  local n = 0\n"
+                    "  for k, v in pairs(a) do\n"
+                    "    if not eq(v, b[k]) then return false end\n"
+                    "    n = n + 1\n"
+                    "  end\n"
+                    "  for _ in pairs(b) do n = n - 1 end\n"
+                    "  return n == 0\n"
+                    "end\n"
+                    "local rich = {s = 'x\\ty', n = {1, 2.5, 'a'},\n"
+                    "              deep = {k = 'v'}, flag = true, fl = 0.5}\n"
+                    "assert(eq(rich, y.decode(y.encode(rich))), 'roundtrip mismatch')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_yaml_encode_errors(void **state)
+{
+    (void)state;
+    /* cycles are caught before dumping (lyaml itself would blow the C
+     * stack); shared siblings are NOT cycles and must encode fine */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local cyc = {}\n"
+                    "cyc.self = cyc\n"
+                    "local s1, e1 = y.encode(cyc)\n"
+                    "local s2, e2 = y.encode({f = function() end})\n"
+                    "local shared = {1, 2}\n"
+                    "local s3 = y.encode({x = shared, y = shared})\n"
+                    "return tostring(s1) .. ' | ' .. e2 .. ' | '"
+                    " .. tostring(s3 ~= nil)"),
+        "nil | yaml: cannot dump object of type 'function' | true");
+}
+
+static void test_yaml_args_contract(void **state)
+{
+    (void)state;
+    /* bad ARGUMENTS raise; only bad DATA returns nil, err */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local _, m1 = pcall(y.decode, {})\n"
+                    "local _, m2 = pcall(y.decode, 'a: 1', true)\n"
+                    "local ok3 = pcall(y.decode, 42)\n"
+                    "local ok4 = pcall(y.encode, {1}, 'x')\n"
+                    "local ok5 = pcall(y.decodeAll, {})\n"
+                    "return tostring(m1:find('expected a string', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m2:find('opts must be a table', 1, true) ~= nil)"
+                    " .. ',' .. tostring(ok3) .. ',' .. tostring(ok4)"
+                    " .. ',' .. tostring(ok5)"),
+        "true,true,false,false,false");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1220,6 +1613,21 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_toml_encode_exact_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_encode_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_encode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_scalar_family, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_yaml11_numbers, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_explicit_tags, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_block_scalars, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_flow_collections, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_multi_document, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_all_opts_and_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_null_semantics, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_anchors_share_references, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_decode_merge_keys, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_encode_exact_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_encode_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_encode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_args_contract, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -26,7 +26,7 @@
 | --- | --- | --- | --- |
 | json(已有) | 值 | 串 | — |
 | xml | DOM 表 | 串 | `xml.sax`(SAX 回调透传) |
-| yaml | 值 | 串 | `yaml.decodeAll`(多文档;随批次定) |
+| yaml | 值 | 串 | `yaml.decodeAll`(多文档,已实现) |
 | toml | 表 | 串 | —(单文档格式) |
 | csv | 行数组 | 串 | `csv.lines`(逐行迭代器) |
 | ini | 段表 | 串 | —(单文档格式) |
@@ -87,7 +87,7 @@ p:parse(chunk) p:parse()             -- 增量喂,空参收尾
 
 | 候选 | 结论 |
 | --- | --- |
-| **libyaml + lyaml** | **入选**:libyaml 是 YAML 规范的参考 C 实现(MIT,PyYAML/libyaml 生态共享);lyaml(gvvaughan,MIT,Lua 5.1–5.4,6.2.8)提供 C 侧快速 decode/emit;5.5 适配同上,vendored 小补丁预期 |
+| **libyaml + lyaml** | **入选**:libyaml 是 YAML 规范的参考 C 实现(MIT,PyYAML/libyaml 生态共享);lyaml(gvvaughan,MIT,Lua 5.1–5.4,6.2.8)提供 C 侧快速 decode/emit;5.5 适配同上,vendored 小补丁预期(**实现勘定 2026-09-30**:钉 v6.2.9(最新 release;lukefile 自称支持到 5.5),5.5 下零补丁编译——lyaml.h 的 5.2–5.4 垫片不触发,但 luna 随附 Lua 的 luaconf.h 仍恢复 `lua_objlen`/`lua_strlen` 兼容宏,四个 C 翻译单元原样过;唯 luke 构建系统的 `VERSION` 宏由 CMake 定义) |
 | 纯 Lua(tinyyaml / lua-yaml) | 淘汰:均为子集实现——锚点/别名、块标量缩进、多文档指示器各自缺角;YAML 的歧义输入多,静默错解比报错危险 |
 | js-yaml 移植思路 | 淘汰:规范复杂度不以实现语言转移,理由同上 |
 
@@ -98,14 +98,15 @@ local yaml = require "yaml"
 
 yaml.decode("name: luna\nreleases:\n  - 1\n  - 2\n")
 --   → { name = "luna", releases = { 1, 2 } }
-yaml.encode({ ok = true })           -- → "ok: true\n"
+yaml.encode({ ok = true })           -- → "---\nok: true\n...\n"
 
-yaml.decodeAll(doc)                  -- 多文档流:--- 分隔,返回数组;随实现批次定去留
+yaml.decodeAll(doc)                  -- 多文档流:--- 分隔,返回数组
+yaml.decode(s, { nullval = yaml.null })  -- null 保留哨兵(默认 → nil)
 ```
 
-- **标量类型**:映射→表、序列→数组表、字符串/整数/浮点/布尔→Lua 同名类型;**YAML null → nil**(与 json/dkjson 默认一致);"键在但值为 null"的区分需求用 `opts.nullval = yaml.null`(哨兵表)开启——js-yaml 的 null 语义,但默认关闭,与 json 对齐;
-- **锚点/别名**:decode 把别名解成**共享表引用**;encode 对共享引用报循环错误(同 dkjson 的 self-referential 口径);`opts.anchors = true` 的锚点发射列入后续批次,不进 v1;
-- **错误**:libyaml parser 错误自带 `problem` + `problem_mark`(行列),包装层规整成共同口径 4。
+- **标量类型**:映射→表、序列→数组表、字符串/整数/浮点/布尔→Lua 同名类型;**YAML null → nil**(与 json/dkjson 默认一致);"键在但值为 null"的区分需求用 `opts.nullval = yaml.null`(哨兵表)开启——js-yaml 的 null 语义,但默认关闭,与 json 对齐(**实现勘定**:子替换只动**值**,null 键保持哨兵——静默删条目比留哨兵更糟;数组里的 null 同样落 nil,序列尾部收缩;null 文档在 `decodeAll` 里是 nil 槽);
+- **锚点/别名**:decode 把别名解成**共享表引用**;encode 对共享引用报循环错误(同 dkjson 的 self-referential 口径);`opts.anchors = true` 的锚点发射列入后续批次,不进 v1(**实现勘定**:encode 的环检测走祖先集,共享的**兄弟**引用不是环,各自完整序列化;自引用锚点(`&a` 下 `*a`)decode 出的就是共享自引用表,null 替换的遍历以访问集防环);
+- **错误**:libyaml parser 错误自带 `problem` + `problem_mark`(行列),包装层规整成共同口径 4(**实现勘定**:lyaml 的 Lua 层丢弃了 C 消息里 libyaml 自己的行列子句,坐标改用**最后一个成功解析事件**的起始 mark(1 基,列按 UTF-8 字符计)——常不在出错行,实测如此并已用例钉住,guide/modules.md 记账;未定义别名走 load_alias 的 `invalid reference: <name>`,mark 恰在别名处)。
 
 ### TOML → tomlc17(决策记录:派发单写 tomlc99,本选型改推 tomlc17)
 

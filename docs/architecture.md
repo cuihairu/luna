@@ -4,24 +4,40 @@
 
 ## 分层
 
+排布与 Node.js 官方的依赖分层图同构:你的脚本↔app、`luna_modules/`↔npm modules、标准库↔Node core、C 内核↔Node bindings、底部 vendor 一排↔V8/libuv/zlib/OpenSSL 那一排。
+
 ```
-┌────────────────────────────────────────────┐
-│ 插件(目录,plugin.json + 入口脚本)            │  ← 发现/排序/隔离由 plugins.lua 执行
-├────────────────────────────────────────────┤
-│ 扩展点:magic.register · complete.add_source │
-│         highlight.set · modules 注入        │
-├────────────────────────────────────────────┤
-│ 策略层(纯 Lua,编译期嵌入二进制):             │
-│   repl · complete · highlight · introspect  │
-│   magic · modules · plugins                 │
-├────────────────────────────────────────────┤
-│ C 内核 luna_kernel:exec/write/millis/tty    │
-│   colors/sink/clear_interrupt + 行编辑桥     │
-│   (replxx,附 attach 唤醒线程)+ C 模块注册    │
-│   (lfs/socket/zlib/…)                       │
-├────────────────────────────────────────────┤
-│ Lua 5.5 官方虚拟机 + LPeg + deps 第三方库     │
-└────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                 你的脚本                                 │
+│                  luna script.lua · luna -e · REPL 会话                   │
+├──────────────────────────────────────────────────────────────────────────┤
+│  luna_modules/ 包 —— LuaRocks 装的第三方包 · 项目内模块                  │
+├──────────────────────────────────────────────────────────────────────────┤
+│  标准库(随二进制,require 即得)                                          │
+│    同步面   json fs net http csv ini toml yaml xml zlib crypto           │
+│             path util events stream —— 十六件                            │
+│    异步面   loop:timers fs(+watch) net(+TLS) udp dns signal              │
+│             process os http —— libuv 驱动,opt-in                         │
+├──────────────────────────────────────────────────────────────────────────┤
+│  插件 plugins/(项目 → 用户 → $LUNA_PLUGIN_PATH,失败隔离)                 │
+│    四个扩展点:magic.register · complete.add_source                       │
+│               highlight.set · modules 注入                               │
+├──────────────────────────────────────────────────────────────────────────┤
+│  REPL 策略层(纯 Lua,编译期嵌进二进制)                                    │
+│    repl · complete · highlight · magic · introspect                      │
+│    modules · plugins                                                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│  C 内核(薄:信号 · 毫秒时钟 · isatty · 输出汇聚)                          │
+│    luna_main 入口/CLI · luna_kernel 状态/绑定注册                        │
+│    luna_line replxx 桥/attach 唤醒 · luna_hook 计数钩子                  │
+│    luna_loop libuv 接线 · luna_toml tomlc17 桥                           │
+├──────────────┬──────────────┬──────────────┬──────────────┬──────────────┤
+│Lua 5.5       │libuv         │OpenSSL       │replxx        │luasocket     │
+├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┤
+│LPeg          │lfs           │lua-zlib      │luaossl       │tomlc17       │
+├──────────────────────────────────────────────────────────────────────────┤
+│  libyaml + lyaml · expat + lua-expat · dkjson(纯 Lua vendor)             │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 **分层理由:**
@@ -42,7 +58,7 @@
 | 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
 | 全局注入 | `process`/`Buffer` | `kernel`/`Out`/`In` |
-| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events` 随二进制 |
+| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` 随二进制(`loop` 为异步面);与 Node 逐模块的一一对照见 [node-parity](/node-parity) |
 
 差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。
 

@@ -26,3 +26,24 @@
 - **字符串按字节计**:所有模块对 Lua 字符串不做编码转换;UTF-8 只是"透传并尽量在错误定位里数对"。
 
 事件循环一侧的异步面(TCP/TLS/异步 fs/子进程/定时器)在 [loop](/guide/loop) 与 `loop.http`,不在本区。
+
+## 随二进制分发的底层模块
+
+上表之外,二进制里还注册着一层**上游原样透出**的 C 模块与随发 Lua 库——各包装层的核心(zlib 流式、TOML 解码、expat SAX、luaossl 全家)就踩在它们上面;需要越过包装层时可直接 `require`:
+
+| 模块 | 一句话 | 上游 |
+| --- | --- | --- |
+| `lpeg` | LPeg 模式匹配;高亮、csv/ini 词法的底座 | [LPeg](http://www.inf.puc-rio.br/~roberto/lpeg/) |
+| `socket.core` | luasocket 的 TCP/UDP 原始面 | [luasocket](https://github.com/diegonehab/luasocket) |
+| `socket.unix` | unix 域 socket;attach 通道的传输层 | 同上 |
+| `mime.core` | MIME 编解码(base64、quoted-printable) | 同上 |
+| `zlib.core` | lua-zlib 原始流式面;`zlib` 包装层的一次式 API 在其上 | [lua-zlib](https://github.com/brunoos/luazlib) |
+| `toml.core` | tomlc17 解码核心(无编码,encode 是包装层的 Lua 面) | [tomlc17](https://github.com/cktan/tomlc17) |
+| `yaml.core` | lyaml 的 C 面(仅解码) | [lyaml](https://github.com/jdesgats/lyaml) |
+| `lxp` | expat 的 SAX 面;`xml` 的 DOM 构建在其上 | [lua-expat](https://github.com/tomasguisasola/luaexpat) |
+| `_openssl.*` | luaossl 全家(约 20 个子模块,`crypto` 包装层之下) | [luaossl](https://github.com/wahern/luaossl) |
+| `lfs` | luafilesystem 完整面(`fs` 的透传半边) | [luafilesystem](https://github.com/keplerproject/luafilesystem) |
+| `argparse` | CLI 参数解析(入口自己用,脚本同样可 require) | [argparse](https://github.com/luarocks/argparse) |
+| `linedit` | C 行编辑器;一般经 REPL 使用,自建交互面时可直取 | luna 内置 |
+
+再往上是 `luna.*` 前缀的**内嵌策略模块**(`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve` 等)——REPL 的 Lua 半身,见[架构设计](/architecture#分层)。上游原样面意味着:错误风格与 API 形状随上游(`nil, err` 为主),luna 不做再包装。

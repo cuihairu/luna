@@ -26,7 +26,8 @@ export default defineConfig({
           { text: '模块系统', link: '/guide/modules' },
           { text: '插件开发', link: '/guide/plugins' },
           { text: '包管理', link: '/guide/rocks' },
-          { text: '事件循环', link: '/guide/loop' }
+          { text: '事件循环', link: '/guide/loop' },
+          { text: '全局对象 kernel', link: '/guide/kernel' }
         ]
       },
       {
@@ -54,6 +55,7 @@ export default defineConfig({
         text: '其他',
         items: [
           { text: '配置与环境变量', link: '/other/config' },
+          { text: '错误模型与退出码', link: '/other/errors' },
           { text: '构建与自测', link: '/other/build' },
           { text: 'FAQ', link: '/other/faq' }
         ]

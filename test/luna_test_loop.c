@@ -148,18 +148,57 @@ static int fd_in_use(void)
     return n - 3;
 }
 
+/* /dev/null descriptors t_deny_fds opened to plug sparse-table holes */
+static int g_padded_fds[512];
+static int g_n_padded;
+
 static int t_deny_fds(lua_State *l)
 {
     lua_Integer slack = luaL_checkinteger(l, 1);
-    int used = fd_in_use();
     struct rlimit r;
-    if (used < 0 || getrlimit(RLIMIT_NOFILE, &r) != 0) {
+    if (getrlimit(RLIMIT_NOFILE, &r) != 0) {
         lua_pushboolean(l, 0);
         return 1;
     }
+    /* holes below the highest descriptor would hand socket() a slot
+     * under the new ceiling (CI runners keep stray descriptors at
+     * scattered positions) — fill them first so the ceiling sits
+     * exactly one above a dense table; t_allow_fds closes them back */
+    int max_fd = -1;
+    DIR *d = opendir("/proc/self/fd");
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            int fd = atoi(e->d_name);
+            if (fd > max_fd) {
+                max_fd = fd;
+            }
+        }
+        closedir(d);
+    }
+    if (max_fd < 0) {
+        lua_pushboolean(l, 0);
+        return 1;
+    }
+    g_n_padded = 0;
+    for (;;) {
+        int p = open("/dev/null", O_RDONLY);
+        if (p < 0) {
+            break;
+        }
+        if (p > max_fd) {
+            close(p); /* the slot above the coming ceiling */
+            break;
+        }
+        if (g_n_padded < (int)(sizeof(g_padded_fds) / sizeof(g_padded_fds[0]))) {
+            g_padded_fds[g_n_padded++] = p;
+        } else {
+            close(p); /* pathological hole count: best effort */
+        }
+    }
     saved_nofile = r;
     nofile_saved = 1;
-    r.rlim_cur = (rlim_t)(used + (int)slack);
+    r.rlim_cur = (rlim_t)(max_fd + 1 + (int)slack);
     if (r.rlim_cur > r.rlim_max) {
         r.rlim_cur = r.rlim_max;
     }
@@ -171,6 +210,9 @@ static int t_allow_fds(lua_State *l)
 {
     if (nofile_saved) {
         setrlimit(RLIMIT_NOFILE, &saved_nofile);
+    }
+    while (g_n_padded > 0) {
+        close(g_padded_fds[--g_n_padded]);
     }
     lua_pushboolean(l, 1);
     return 1;

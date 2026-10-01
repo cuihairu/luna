@@ -7,6 +7,58 @@
 
 选型总原则沿用 [架构设计](/architecture) 的既有纪律:**绑定成熟 C 库**(成熟度 = 规范覆盖 + 实战年头 + 错误报告质量,不是"越 C 越好");**纯 Lua 用于逻辑/策略层**(Node 本尊的 path/events/stream 就是纯 JS,luna 对应放 Lua 层);**单二进制不变**(新 C 依赖一律静态链进 deps/,版本钉死)。批次拆解与验收标准在 `todo.md`(第二十轮立项);本文只管"选什么、为什么、API 长什么样"。
 
+## 标准库一一对照(Node ↔ luna)
+
+口径:Node **v24** 标准库全模块逐个对照;luna 侧以源码注册表为准(`register_c_modules` + `lua/modules/*` + REPL 全局),不凭印象。状态三档:**✅ 对应**(同名能力,API 形状贴 Node)、**◐ 部分**(有对应物但面收窄或形态不同)、**❌ 无对等**(登记缺口——是登记,不是否认;补不补见各批规划)。
+
+| Node 模块 | luna 对应 | 状态 |
+| --- | --- | --- |
+| `assert` | 官方 `assert` / `error`(语言原语) | ◐ 无 deepEqual 等断言库 |
+| `async_hooks` | — | ❌ 单线程回调面无对等钩子 |
+| `buffer` | Lua 字符串即 8-bit 串;二进制打包走官方 `string.pack`/`unpack` | ◐ 语言原语覆盖,无独立 Buffer 类型 |
+| `child_process` | `loop.process`:`run`(聚合)/`spawn`(流式,stdio 直交 `loop.net` sock)/`exec`/`execSync` | ✅ |
+| `cluster` | — | ❌ 多进程可用 `loop.process` 自组 |
+| `console` | `print`/`io.write` + REPL 的 `Out[n]` 会话记录 | ◐ |
+| `crypto` | `crypto`(luaossl:digest/hmac/cipher/rand/kdf/pkey/x509 全家族) | ✅ 证书面比 Node 内建更深 |
+| `dgram` | `loop.udp`(bind 常驻收包、send 按包回调) | ✅ |
+| `diagnostics_channel` | — | ❌ |
+| `dns` | `loop.dns`(lookup/reverse,线程池解析)+ 同步 `net.dns`(luasocket) | ✅ |
+| `domain` | — | ❌(Node 本尊已废弃,不追) |
+| `events` | `events`(on/once/off/prepend/listeners/setMaxListeners/'error' 契约) | ✅ 批次 6 |
+| `fs` | 同步 `fs`(lfs + 便捷层)+ `loop.fs`(线程池,回调首参)+ `fs.watch` 目录观察 | ✅ |
+| `http` | 同步 `http`(client + 一行 serve)+ `loop.http`(1.1 客户端跑在 loop.net 上,onHead/onData 流式,重定向/超时状态机;`http.listen` 服务端) | ✅ 1.1 |
+| `http2` | — | ❌ |
+| `https` | `loop.http` 走 `net.connectTls`(TLS 客户端) | ✅ |
+| `inspector` | `luna --attach`(轮询点观测,非 CDP) | ◐ 形态不同 |
+| `module` | 模块系统:`require` + `luna_modules/` 逐级上溯 + 清单 `main` + `luna install`(LuaRocks 包装,`luna.lock` 离线复现) | ✅ npm 的对应物在包管理面 |
+| `net` | 同步 `net`(luasocket)+ `loop.net`(connect/listen/connectTls/listenTls,多地址回退) | ✅ |
+| `os` | 官方 `os` 不遮蔽 + `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/uptime/loadavg/mem/cpus/networkInterfaces/home/tmpdir) | ✅ 批次 8 |
+| `path` | `path`(normalize/resolve/join/relative/parse/format,Node v24 实证钉版) | ✅ posix 面;`win32` ❌(平台面) |
+| `perf_hooks` | `%time` 魔法 + `loop.os` 的 uptime/loadavg | ◐ 无独立高精度计时库面 |
+| `process` | 全局 `arg`/`os.getenv` + `loop.process`(子进程)+ `loop.os`(系统信息) | ◐ 无单一大而全的 process 全局 |
+| `punycode` / `querystring` | — | ❌(URL 面缺口,见 `url` 行) |
+| `readline` | `luna_line`(replxx 桥:编辑/历史/高亮/补全)——REPL 内建,非公共库 | ◐ 形态不同 |
+| `repl` | luna REPL 本体(多行续行/补全/高亮/魔法命令/`In[n]`·`Out[n]`) | ✅ |
+| `stream` | `stream`(Readable/Writable/Duplex/Transform/pipe 背压;sock/chunks/http 适配器) | ✅ 批次 7,v1 面收窄(无 webstreams/异步迭代器/setEncoding/cork) |
+| `string_decoder` | — | —(Lua 字符串原生字节串,无编码流切分问题) |
+| `timers` | `loop.setTimeout/setInterval/setImmediate/clear*` + 脚本尾部自动排水 | ✅ 批次 8(非全局:需 `require "loop"`,REPL 集成推迟) |
+| `tls` | `loop.net.connectTls/listenTls`(OpenSSL 状态机,证书校验默认开启) | ✅ |
+| `trace_events` | — | ❌ |
+| `tty` | 内核 `kernel.tty()` + REPL 的 tty 形态 | ◐ |
+| `url` | — | ❌(`loop.http` 内部解析请求行/重定向,无公共 url 模块) |
+| `util` | `util.inspect`(确定性键序/深度/循环)+ `util.format`(%s %d %f %i %j %%) | ◐ promisify/callbackify/types 无(Lua 无 promise 契约) |
+| `v8` | `luna.introspect` + REPL 的 `?expr` 帮助 | ◐ 形态不同(无堆快照面) |
+| `vm` | 官方 `load`(chunkname/env 参数) | ◐ 语言原语覆盖 |
+| `wasi` | — | ❌ |
+| `worker_threads` | — | ❌(并发模型与 Node 同形:单线程事件循环 + 线程池 IO;Lua 协程只做协作式) |
+| `zlib` | `zlib`(deflate/gzip 一次性便捷层 + 流式 closure) | ✅ |
+
+**Node 全局对象对照**:`process`→◐(`arg`/`os.getenv`/`loop.os`);`Buffer`→❌(`string` + `string.pack`);`console`→`print`;`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
+
+**反向账**:luna 有而 Node 标准库没有的——IPython 式 REPL(`In[n]`/`Out[n]`/魔法命令/实时高亮补全)、目录插件机制(四扩展点)、`luna.lock` 离线复现装包、`--attach` 跨进程观测、单文件二进制随带全部标准库与包管理器。本表只对齐 Node 标准库,不比 npm 生态。
+
+**覆盖哲学**:❌ 行不是欠账清单,是选型记录——每一条都对应一条「不为行数写代码」的判定(见 `todo.md` 明确不做节)或尚未立项的方向;✅ 行的 API 形状以 Node v24 机器实证钉版(批次 6 的探针勘定见下文 path/util/events 节)。
+
 ## A. 格式标准库
 
 ### 共同口径(与 json 对齐)

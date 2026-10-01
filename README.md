@@ -64,5 +64,5 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 
 ## 开发
 
-- 测试:ctest 十六组(repl / cli / complete / introspect / highlight / magic / modules / plugins / kernel / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/other/build);
+- 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/other/build);
 - 推送 main 后 CI 自动构建并发布文档站到 Pages(部署不计为发布)。

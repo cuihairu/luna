@@ -16,7 +16,7 @@ luna 没有配置文件:全部行为开关经**环境变量**与**命令行开�
 | `LUNA_COVERAGE` | 仅 Profiling 覆盖率构建有效:置位后嵌入式策略模块按真实文件名加载以便 luacov 记数 | 未设置 |
 | `PWD` | `path` 模块在取不到进程 cwd 时的回退 | shell 透传 |
 
-`LUNA_*` 之间没有从属关系,逐条独立生效;`NO_COLOR` 遵循 [no-color.org](https://no-color.org) 约定,任何非空值都算置位。
+`LUNA_*` 之间没有从属关系,逐条独立生效;`NO_COLOR` 同名于 [no-color.org](https://no-color.org)——**出现即关**,值为空也算置位;`LUNA_COLOR` 要非空才生效,`0` 关、其余值开。
 
 ## 命令行开关
 
@@ -36,5 +36,8 @@ luna 没有配置文件:全部行为开关经**环境变量**与**命令行开�
 | --- | --- |
 | `~/.luna_history` | 输入历史(带时间戳分隔),重启后 `↑` 召回;TTY 且 `HOME` 可用时才写 |
 | `$LUNA_SOCK_DIR/luna-<pid>.sock` | attach 监听,0600,进程退出自动清理 |
+| `<项目根>/.luna/rocks/` | `luna install` 的依赖树(LuaRocks `--tree`),向上逐级查找 |
+| `<项目根>/luna.lock` | 依赖快照:逐 rock 版本 + 源包 sha256,`--from-lock` 据此复现 |
+| `<项目根>/.luna/cache/` | 下载过的 `.src.rock` 源包缓存(离线复现用) |
 
-除此之外 luna 不在用户机器上写任何状态:没有缓存目录,没有首次运行向导,没有遥测。
+后三行只在用 `luna install` 等包管理子命令时出现,且**只写在项目里**。除此之外 luna 不在用户机器上写任何全局状态:没有全局缓存目录,没有首次运行向导,没有遥测。

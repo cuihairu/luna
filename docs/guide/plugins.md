@@ -107,36 +107,47 @@ plugins/pkg-complete/
 local complete = require("luna.complete")
 local fs = require("fs")
 
--- 扫描 luna_modules/pkg/ 里的 .lua 与 init.lua 目录
-local function pkg_submodules(prefix)
+-- 扫 luna_modules/pkg/ 的 .lua 文件与带 init.lua 的子目录
+local function candidates(sub)
     local base = "luna_modules/pkg"
     local ok, entries = pcall(fs.readdirSync, base)
     if not ok then return {} end
     local out = {}
     for _, e in ipairs(entries) do
-        local name = e:match("^(.+)%.lua$") or e:match("^(.+)/init%.lua$")
-        if name and name:sub(1, #prefix) == prefix then
-            out[#out + 1] = name
+        local name
+        if e:match("%.lua$") then
+            name = (e:gsub("%.lua$", ""))
+        elseif fs.isDirectory(base .. "/" .. e)
+               and fs.exists(base .. "/" .. e .. "/init.lua") then
+            name = e
+        end
+        if name and ("pkg." .. name):sub(1, #("pkg." .. sub)) == "pkg." .. sub then
+            out[#out + 1] = "pkg." .. name
         end
     end
+    table.sort(out)
     return out
 end
 
 complete.add_source(function(line)
-    -- 匹配 require("pkg. 前缀
-    local prefix = line:match('require%s*%(%s*["\']pkg%.([^"\']*)["\']')
-    if not prefix then return {} end
-    return pkg_submodules(prefix)
+    -- 行尾停在引号内才匹配:require("pkg.u  ← 注意没有闭合引号
+    local sub = line:match('require%s*%(%s*["\']pkg%.([%w_]*)$')
+        or line:match('require%s*["\']pkg%.([%w_]*)$')
+    if not sub then return {} end
+    return candidates(sub)
 end)
 
 return {}
 ```
 
-用法(在 `luna_modules/pkg/` 下有 `util.lua`、`core.lua` 时):
+两个要点:**匹配必须锚到行尾且不含闭合引号**——补全发生时行还没写完(`require("pkg.u`),模式里带 `["\']` 收尾就永远匹配不上;**候选是完整模块名**(`pkg.util`)——`require` 引号里的整段前缀(`pkg.u`)都在替换跨度里,只回 `util` 会把 `pkg.` 一起吃掉。
+
+用法(在 `luna_modules/pkg/` 下有 `util.lua`、`core.lua` 与 `io/init.lua` 时):
 
 ```
-In [1]: require("pkg.u<TAB>      ← 补出 util
-In [1]: require("pkg.c<TAB>      ← 补出 core
+In [1]: require("pkg.u<TAB>      ← 补出 pkg.util
+In [1]: require("pkg.i<TAB>      ← 补出 pkg.io(目录包)
+In [1]: require("pkg.<TAB>       ← 空前缀补出全部,table.sort 保序
 ```
 
 ### 3) 语法高亮 — 换一套配色方案(只改色,不换词法器)
@@ -169,7 +180,9 @@ hl.set_style("operator","\27[38;5;250m")   -- 亮灰
 return {}
 ```
 
-> 也可用 `hl.set(fn)` 完全替换词法器(接收 `text`,返回 `{tag, start, finish}` 三元组构成的数组),但大多数场景只需 `set_style` 微调色板。
+> 也可用 `hl.set(fn)` 完全替换高亮器:`fn(text)` 返回**着色后的新文本**——返回非字符串或抛错,渲染就自动退回默认。想整套换着色逻辑时用它,只想换色板则 `set_style` 足够,`hl.reset()` 恢复默认高亮器。
+>
+> 作用面是**回显**:`Out[n]` 的值走 `highlight.render` 着色(上面的 `set_style` 就作用在这条链);输入行的实时着色是另一条链(replxx 的 16 色表 `color_map`,见 [CLI 与 REPL](/guide/cli-repl) 的高亮节),与这套 ANSI 样式表分开,`set_style` 改不到它。
 
 ### 4) 模块注入 — 注入一个带版本号的常量模块
 
@@ -190,9 +203,11 @@ plugins/app-version/
 
 ```lua
 -- init.lua
--- 直接把清单里的 version 透出去
+-- 清单在插件自己旁边:按入口文件位置定位,不依赖工作目录
+local src = debug.getinfo(1, "S").source:sub(2)   -- "@path" → "path"
+local dir = src:match("(.*)/") or "."
 local pkg = require("dkjson").decode(
-    assert(require("fs").readFileSync("plugins/app-version/plugin.json"))
+    assert(require("fs").readFileSync(dir .. "/plugin.json"))
 )
 
 return {
@@ -205,9 +220,11 @@ return {
 用法:
 
 ```lua
-In [1]: require("app.version")
-"1.2.3"
+In [1]: (require("app.version"))
+Out[1]: '1.2.3'
 ```
+
+外层括号把 `require` 截成单值——**新加载**的 `require` 会额外返回搜索器的 loader 数据,两值语义见[模块系统](/guide/modules)。
 
 > 注入的值若是函数则作为 loader 使用(每次 `require` 都调用),若是普通值则包成恒返该值的 loader——行为与 `package.preload` 一致。
 

@@ -18,9 +18,9 @@
 
 ## 为什么不用 LuaRocks?
 
-- luna 追求**单二进制分发**:所有依赖编译进二进制或随 `luna_modules/` 分发,运行零外部依赖
+- 追求**单二进制分发**:所有依赖编译进二进制或随 `luna_modules/` 分发,运行零外部依赖
 - `luna_modules/` 上溯机制与 `node_modules` 一致,心智负担为零
-- 包管理(`rocks` 子命令)是**给作者发包用的**,不是运行时必须;最终用户只需 `git clone` 或解压 zip 即可跑
+- 包管理是 `luna install|search|list|update` 一组子命令(LuaRocks **内嵌在二进制里**,不需要系统 luarocks):装进项目 `.luna/rocks/` 并锁进 `luna.lock`,属开发期可选;运行时与最终用户一行都不用跑——`git clone` 或解压 zip 即可
 
 ## 为什么 `require("crypto")` 报错说没链接 OpenSSL?
 
@@ -35,7 +35,7 @@ dnf install openssl-devel
 brew install openssl
 ```
 
-然后重新 `cmake` 与构建。其他模块(zlib、fs、net、http、csv、ini、toml、yaml、xml、path、util、events、stream)不受影响。
+然后重新 `cmake` 与构建。注意 `loop.net.connectTls`/`listenTls` 同样依赖 OpenSSL——没装时函数仍在,一调用就给出指引性错误;其余模块(zlib、fs、net、http、csv、ini、toml、yaml、xml、path、util、events、stream)不受影响。
 
 ## `luna serve` 与 `http.serve()` 的区别
 
@@ -52,21 +52,29 @@ brew install openssl
 
 ## 为什么 `stream` 里的 `end` 事件要写成 `s:end_(...)` 或 `s["end"](...)`?
 
-`end` 是 Lua 关键字,不能作方法名直接调用。`stream`、socket、loop 的 socket 对象统一约定:关键字冲突的方法拼下划线(`end_`、`close_` 等)或用下标调用。这是 Lua 语言层面的限制,不是 bug。
+`end` 是 Lua 关键字,不能作方法名直接调用。`stream` 统一约定:关键字冲突的方法拼下划线(`end_`),`s["end"](...)` 同效——loop 的 sock 撞过同一条限制,Node 的 `end` 在那里直接改名 `shutdown`(见[事件循环](/guide/loop)的半关闭节)。这是 Lua 语言层面的限制,不是 bug。
 
 ## `csv.lines` 迭代器遇到坏输入直接 raise,怎么安全用?
 
-`csv.lines` 是逐记录迭代器,坏输入(如未闭合引号)只能 raise。喂不可信数据时:
+`csv.lines` 是逐记录迭代器,坏输入(如未闭合引号)只能 raise。**别把它塞进 `for ... in pcall(...)`**——`pcall` 的返回值不是合法的迭代器三元组;把整个循环包进 `pcall`,坏数据来了已收下的行照常可用:
 
 ```lua
 local csv = require("csv")
-for ok, row in pcall(csv.lines, data) do
-    if not ok then break end
-    -- process row
-end
+local data = 'a,b\n1,2\n3,"unclosed\nnext,row\n'
+local rows = {}
+local ok, err = pcall(function()
+    for row in csv.lines(data) do rows[#rows + 1] = row end
+end)
+if not ok then print("stop:", err) end
+print("rows:", #rows)
 ```
 
-或自行 `pcall` 包装。格式模块的 `decode`/`encode` 才是 `nil, err` 口径。
+```text
+stop: csv: unterminated quoted field at line 5, column 1
+rows: 2
+```
+
+格式模块的 `decode`/`encode` 才是 `nil, err` 口径,坏数据不抛。
 
 ## yaml `decode` 返回的 nil 是真 nil 还是哨兵?
 
@@ -102,8 +110,8 @@ p:parse()        -- 收尾,必须调用一次无参 parse
 
 ## `util.inspect` 与 `util.format` 的 `%j` 行为
 
-- `util.inspect`:Lua 语法形态输出(字符串加引号、转义、循环引用标记 `[Circular *N]`,截断 `depth`),键序按 `pairs` 确定性排序
-- `util.format("%j", v)`:等价 `json.encode(v)` 但非法值(函数/循环引用)抛错而非返回 `null`——与 Node v24 一致
+- `util.inspect`:Lua 语法形态输出(字符串加引号与转义、循环引用标 `[Circular *N]`、`depth` 截断);**键排序保确定性**——序列段在前,其余数字升序、字符串按字节序,连跑几次结果一致
+- `util.format("%j", v)`:JSON 序列化。dkjson 比浏览器 `JSON.stringify` 严(后者省略函数字段),函数/NaN/循环引用这类它拒绝的值,**回退 `util.inspect` 渲染而不抛**——`format("%j", {f = f})` 给 `{ f = <function ...> }`,环给 `{ self = [Circular *1] }`。这是勘定过的分叉,见 [Node 方向选型](/node-parity)
 
 ## 如何把 luna 嵌入到自己的 C/C++ 项目?
 
@@ -115,14 +123,12 @@ luna 设计为**单二进制 CLI**,不是库。嵌入场景建议:
 
 ## Windows 支持现状
 
-- 构建:MSVC / MinGW 均可(`cmake --build build --config Debug`)
-- 测试:ctest 全组通过
-- 路径模块:仅实现 `path.posix`(Node v24 语义),win32 面不做
-- 插件 socket:Unix 域 socket,Windows 上需 WSL 或改用命名管道(暂未实现)
-- 推荐 Windows 用户跑 WSL2
+- **不在支持面**:每日构建只有 Linux x64/arm64 与 macOS Apple Silicon——replxx 桥未编 windows.cxx,构建这一步就过不去;attach 的 unix 域 socket、信号/`^C` 口径也是 POSIX 设计(源码里有 `_WIN32` 分支,但从未在 CI 验证)
+- `path` 模块只实现 `path.posix`(Node v24 语义),win32 面不做
+- **推荐 WSL2 或原生 Linux/macOS**;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
 
 ## 如何贡献/报告问题
 
 - GitHub Issues:Bug 报告、功能建议、文档纠错
 - PR 欢迎:先开 Issue 对齐方向,再提 PR;测试全绿、commit 不提 AI 字样
-- 文档站源码在 `docs/`,VitePress 本地预览 `cd docs && npm run docs:dev`
+- 文档站源码在 `docs/`,VitePress 本地预览 `cd docs && pnpm run docs:dev`

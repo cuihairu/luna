@@ -25,7 +25,7 @@ ctest --test-dir build          # 全部测试组应全绿
 
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 
-Windows 用 `cmake --build build --config Debug`,同上。
+**Windows 不在支持面**(replxx 桥未编 windows.cxx),推荐 WSL2——见 [FAQ](/other/faq)。
 
 ## 三十秒上手
 

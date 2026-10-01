@@ -2,7 +2,7 @@
 
 ## 依赖
 
-仅需 **CMake ≥ 3.16** 与 **C 编译器**(gcc/clang/MSVC)。其余全部在 `deps/` 内:
+仅需 **CMake ≥ 3.16** 与 **C 编译器**(gcc/clang)。除 cmocka(FetchContent 拉取,仅测试树用)外,全部在 `deps/` 内:
 
 - Lua 5.5
 - LPeg
@@ -17,9 +17,12 @@
 - tomlc17 (TOML 1.0)
 - lyaml + libyaml (YAML 1.1)
 - lua-expat + expat (XML)
-- cmocka (测试框架,仅测试树)
+- libuv (事件循环后端)
+- LuaRocks (内嵌源码,`luna install` 等子命令用)
+- luacov (覆盖率,Profiling 树专用)
+- cmocka (测试框架,FetchContent 拉取)
 
-`cmake` configure 时自动拉取/编译全部三方库——**无需手动安装任何 LuaRocks 或系统 Lua 包**。
+首次 configure 需要联网(拉取 git 子模块与 cmocka);之后离线可构建——**无需手动安装任何 LuaRocks 或系统 Lua 包**。
 
 ## 构建步骤
 
@@ -30,7 +33,7 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-Windows 用 `cmake --build build --config Debug`,同上。
+**Windows 不在支持面**(replxx 桥未编 windows.cxx、attach 走 unix 域 socket),推荐 WSL2——见 [FAQ](/other/faq)。
 
 ### 可选:启用 crypto 模块
 
@@ -72,14 +75,14 @@ cmake --build build -j
 | `magic` | 内建魔法命令、插件注册命令、`%plugins` |
 | `modules` | require 解析、luna_modules 上溯、包清单、`package.loaded` |
 | `plugins` | 插件发现/优先级/失败隔离、四扩展点注册 |
-| `kernel` | C 内核基础、中断、计数钩子、附着轮询 |
+| `luna` | 入口冒烟:无参启动、stdin EOF 干净退出 |
 | `serve` | `http.serve` 静态/handler 双模式、`luna serve`、`^C` 契约、close 排水 |
 | `loop` | 定时器、TCP/Unix/TLS、异步 fs、信号、子进程、HTTP 客户端/服务端 |
 | `rocks` | 包管理(安装/卸载/搜索/依赖解析) |
 | `line` | 行编辑器基础、光标、杀词 |
 | `linedit` | replxx 绑定、增量检索、历史持久化 |
 | `main` | 入口分发、信号安装、模块嵌入、启动流程 |
-| `covsum` | 覆盖率汇总目标(`gcovr-summary`、`lua_coverage`) |
+| `covsum` | 覆盖率汇总目标(`gcovr_summary`、`lua_coverage`) |
 
 ### 单组跑法
 
@@ -90,7 +93,7 @@ ctest --test-dir build -E loop      # 跑除 loop 外所有组
 
 ### 串行与并行
 
-默认并行(`-j`)。覆盖率测量(`build-cov`)需串行:
+`ctest` 默认**串行**;日常可 `ctest --test-dir build -j"$(nproc)"` 提速。覆盖率测量(`build-cov`)必须串行:
 
 ```bash
 ctest --test-dir build-cov -j1      # 统计文件合并假定无并发写
@@ -108,8 +111,8 @@ cmake -S . -B build-cov -DCMAKE_BUILD_TYPE=Profiling \
       -DCMAKE_SHARED_LINKER_FLAGS_PROFILING="--coverage"
 cmake --build build-cov -j
 ctest --test-dir build-cov           # 串行
-cmake --build build-cov --target gcovr-summary   # C 侧(src/)
-cmake --build build-cov --target lua_coverage    # Lua 侧(lua/)
+cmake --build build-cov --target gcovr_summary    # C 侧(src/)
+cmake --build build-cov --target lua_coverage     # Lua 侧(lua/)
 ```
 
 ### C 侧
@@ -128,9 +131,9 @@ cmake --build build-cov --target lua_coverage    # Lua 侧(lua/)
 
 ```bash
 cd docs
-npm install           # 首次
-npm run docs:dev      # http://localhost:5173/luna/
-npm run docs:build    # 产物在 .vitepress/dist/
+pnpm install           # 首次
+pnpm run docs:dev      # http://localhost:5173/luna/
+pnpm run docs:build    # 产物在 .vitepress/dist/
 ```
 
 VitePress 2.0-alpha,base `/luna/`,中文本地搜索。

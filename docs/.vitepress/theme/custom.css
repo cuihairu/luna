@@ -1,40 +1,209 @@
-/* luna palette, warm forest:
- *   bark   #7a4e20  headings accents, hero name
- *   forest #284331  primary brand (links, buttons)
- *   moss   #6f7f49  hover / secondary
- *   cream  #fff9eb  page background
+/* luna 文档站主题令牌(2026-10 重设计)。
+ *
+ * 配色:单一"森林绿"色相贯穿——深林 #1b3c2b / 中林 #2f6648 / 森林 #24503a
+ * 作唯一强调色(链接、按钮、hero、图标);底色是向绿倾斜的一族灰,浅色克制、
+ * 深色偏炭。旧版 bark 棕与三色渐变退场:一个品牌一个强调色。
+ * 暗色走 .dark 类(VitePress 手动切换也生效),不再用媒体查询——
+ * 修掉"系统暗色 + 手动切亮"时品牌色仍停在暗色值的错乱。
+ *
+ * 字体:系统栈,中文优先。不为西文标题引入 CDN webfont(VitePress 默认
+ * 经 Google Fonts 拉 Inter,境内不可达且 CJK 正文用不到)。
  */
 :root {
-  --vp-c-brand-1: #284331;
-  --vp-c-brand-2: #6f7f49;
-  --vp-c-brand-3: #7a4e20;
-  --vp-c-brand-soft: rgba(111, 127, 73, 0.14);
+  /* 品牌色阶 */
+  --vp-c-brand-1: #24503a;
+  --vp-c-brand-2: #2f6648;
+  --vp-c-brand-3: #1b3c2b;
+  --vp-c-brand-soft: rgba(36, 80, 58, 0.12);
 
-  --vp-c-bg: #fff9eb;
-  --vp-c-bg-alt: #f7f0dd;
-  --vp-c-bg-soft: #f4ecd6;
+  /* 底色族:偏绿的灰阶,同一色相 */
+  --vp-c-bg: #f6f7f3;
+  --vp-c-bg-alt: #eef0e9;
+  --vp-c-bg-elv: #fbfcf9;
+  --vp-c-bg-soft: #e9ece1;
 
-  --vp-button-brand-bg: #284331;
-  --vp-button-brand-hover-bg: #6f7f49;
-  --vp-button-brand-active-bg: #7a4e20;
+  /* 正文墨色与分隔线随底色族 */
+  --vp-c-text-1: #20261f;
+  --vp-c-text-2: #4f5a4f;
+  --vp-c-text-3: #7d877c;
+  --vp-c-divider: rgba(32, 38, 31, 0.1);
+  --vp-c-gutter: rgba(32, 38, 31, 0.08);
 
+  /* 按钮(品牌面) */
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-text: #ffffff;
+  --vp-button-brand-bg: #1b3c2b;
+  --vp-button-brand-hover-border: transparent;
+  --vp-button-brand-hover-text: #ffffff;
+  --vp-button-brand-hover-bg: #2f6648;
+  --vp-button-brand-active-border: transparent;
+  --vp-button-brand-active-text: #ffffff;
+  --vp-button-brand-active-bg: #24503a;
+
+  /* hero 名字:同色相两站渐变,不再三色 */
   --vp-home-hero-name-color: transparent;
   --vp-home-hero-name-background: linear-gradient(
     120deg,
-    #7a4e20 20%,
-    #284331 60%,
-    #6f7f49 95%
+    #1b3c2b 25%,
+    #4d7d5c 90%
   );
 
-  --vp-custom-outline: #6f7f49;
+  /* logo 后面一圈同色晕,代替空白 */
+  --vp-home-hero-image-background-image: radial-gradient(
+    closest-side,
+    rgba(36, 80, 58, 0.18),
+    rgba(36, 80, 58, 0.05) 62%,
+    transparent
+  );
+  --vp-home-hero-image-filter: blur(44px);
+
+  --vp-custom-outline: #2f6648;
+
+  /* 字体:系统栈(中文优先),零外部请求 */
+  --vp-font-family-base:
+    system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif,
+    'Apple Color Emoji', 'Segoe UI Emoji';
 }
 
-/* keep the cream from washing out in dark mode: dark keeps its own
- * background, only brand accents persist */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --vp-c-brand-1: #a9c48f;
-    --vp-c-brand-2: #6f7f49;
-    --vp-c-brand-3: #c89b62;
+/* 暗色:鼠尾草(沿用既有暗色品牌值)作链接色,底色族换成绿炭 */
+.dark {
+  --vp-c-brand-1: #a9c48f;
+  --vp-c-brand-2: #bfd4a8;
+  --vp-c-brand-3: #8fae74;
+  --vp-c-brand-soft: rgba(169, 196, 143, 0.14);
+
+  --vp-c-bg: #141714;
+  --vp-c-bg-alt: #10130f;
+  --vp-c-bg-elv: #1b1f1b;
+  --vp-c-bg-soft: #1b1f1b;
+
+  --vp-c-text-1: #e2e6df;
+  --vp-c-text-2: #9ba598;
+  --vp-c-text-3: #6c766b;
+  --vp-c-divider: rgba(226, 230, 223, 0.12);
+  --vp-c-gutter: rgba(226, 230, 223, 0.1);
+
+  --vp-button-brand-bg: #2f6648;
+  --vp-button-brand-hover-bg: #3f7a58;
+  --vp-button-brand-active-bg: #24503a;
+
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    #a9c48f 20%,
+    #6f8f5a 90%
+  );
+
+  --vp-home-hero-image-background-image: radial-gradient(
+    closest-side,
+    rgba(169, 196, 143, 0.14),
+    rgba(169, 196, 143, 0.04) 62%,
+    transparent
+  );
+
+  --vp-custom-outline: #a9c48f;
+}
+
+/* ---------- 观感微调 ---------- */
+
+/* 首页 hero 与特性卡之间多留一口气(作用于 VPHero 自身,故提权) */
+.VPHero.VPHero {
+  padding-bottom: 5.5rem !important;
+}
+
+/* hero 副标题:像说明,不像口号——字重降一档,行距放宽适配中文 */
+.VPHero .main .tagline {
+  line-height: 1.75;
+  font-weight: 400;
+  max-width: 33rem;
+}
+
+/* 宽屏也用「logo 在上、标题居中」的堆叠式 hero,与 README 的居中母题一致
+ * (默认主题 ≥60rem 会切成左文右图分栏,标题靠左)。
+ * 前缀 .VPHero.VPHero 是刻意提权:scoped 主题规则是 .x[data-v] 特异性 0,2,0+,
+ * 平写会被压住。 */
+@media (min-width: 60rem) {
+  .VPHero.VPHero.has-image .container {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .VPHero.VPHero.has-image .main {
+    width: 100%;
+    max-width: none;
+  }
+
+  .VPHero.VPHero.has-image .name,
+  .VPHero.VPHero.has-image .text,
+  .VPHero.VPHero.has-image .tagline {
+    margin: 0 auto;
+  }
+
+  .VPHero.VPHero.has-image .actions {
+    justify-content: center;
+  }
+
+  .VPHero.has-image .image {
+    order: -1;
+    flex-grow: 0;
+    min-height: 0;
+    margin: -2rem auto -3rem;
+  }
+
+  .VPHero.has-image .image-container {
+    transform: none;
+    width: 16rem;
+    height: 16rem;
+  }
+
+  .VPHero.has-image .image-bg {
+    width: 16rem;
+    height: 16rem;
+  }
+
+  .VPHero.has-image .image-src {
+    max-width: 10.5rem;
+    max-height: 10.5rem;
+  }
+}
+
+/* 标题字距略收紧(Latin 生效,中文不受影响) */
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3 {
+  letter-spacing: -0.01em;
+}
+
+/* 正文行距:中文阅读舒适 */
+.vp-doc p,
+.vp-doc li {
+  line-height: 1.8;
+}
+
+/* 特性卡:图标着品牌色;hover 起浮 + 随底色染色的阴影(不用纯黑) */
+.VPFeature .box .icon {
+  color: var(--vp-c-brand-1);
+  background-color: var(--vp-c-brand-soft);
+}
+
+.VPFeature .box {
+  transition: transform 0.25s, box-shadow 0.25s;
+}
+
+.VPFeature:hover .box {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(27, 60, 43, 0.12);
+}
+
+.dark .VPFeature:hover .box {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .VPFeature .box {
+    transition: none;
+  }
+  .VPFeature:hover .box {
+    transform: none;
   }
 }

@@ -1233,9 +1233,15 @@ struct sock {
     int endref;          /* pending end() callback */
     uv_connect_t conn;
     uv_shutdown_t shut;
+    struct addrinfo *ai_list; /* resolved dial chain, owned until done */
+    struct addrinfo *ai_cur;  /* next address to try (NULL: none left) */
+    int h_closing;            /* a retry uv_close on h is in flight */
+    int last_err;             /* most recent dial status, reported last */
 };
 
 static void sock_close(struct sock *s);
+static void on_retry_closed(uv_handle_t *handle);
+static void ai_chain_free(struct sock *s);
 
 /* deliver cb(err, value) and drop the callback reference; returns 1 if
  * the callback ran. A raising callback is reported, never fatal. */
@@ -1291,7 +1297,24 @@ static void sock_close(struct sock *s)
     s->readref = LUA_NOREF;
     luaL_unref(s->L, LUA_REGISTRYINDEX, s->endref);
     s->endref = LUA_NOREF;
+    ai_chain_free(s);
+    if (s->h_closing) {
+        /* a retry close is still in flight; its callback sees closed
+         * and drops the selfref — a second uv_close would be invalid */
+        return;
+    }
     uv_close((uv_handle_t *)&s->h.tcp, on_sock_closed);
+}
+
+/* the dial chain rides on the sock from resolution to the moment it
+ * is no longer needed: first success, exhaustion, or close */
+static void ai_chain_free(struct sock *s)
+{
+    if (s->ai_list) {
+        uv_freeaddrinfo(s->ai_list);
+        s->ai_list = NULL;
+        s->ai_cur = NULL;
+    }
 }
 
 /* -- connect --------------------------------------------------------- */
@@ -1303,12 +1326,64 @@ static void on_connected(uv_connect_t *req, int status)
         return; /* user closed mid-connect: refs already dropped */
     }
     if (status != 0) {
-        sock_deliver(s, &s->connectref, status, 0, NULL, 0);
+        s->last_err = status;
+        if (s->ai_cur) {
+            /* more resolved addresses remain: a failed stream cannot
+             * take a second connect, so close the handle out and
+             * redial from the close callback */
+            s->h_closing = 1;
+            uv_close((uv_handle_t *)&s->h.tcp, on_retry_closed);
+            return;
+        }
+        ai_chain_free(s);
+        sock_deliver(s, &s->connectref, s->last_err, 0, NULL, 0);
         sock_close(s);
         return;
     }
     s->connected = 1;
+    ai_chain_free(s);
     sock_deliver(s, &s->connectref, 0, 1, NULL, 0);
+}
+
+/* autoSelectFamily-style dial: walk the resolved chain one address per
+ * attempt. Each step pre-advances the cursor, so a later failure knows
+ * whether another address remains. 1 = attempt in flight, 0 = none left. */
+static int tcp_dial_next(struct sock *s)
+{
+    while (s->ai_cur) {
+        struct addrinfo *cur = s->ai_cur;
+        s->ai_cur = cur->ai_next;
+        int rc = uv_tcp_connect(&s->conn, &s->h.tcp, cur->ai_addr,
+                                on_connected);
+        if (rc == 0) {
+            return 1;
+        }
+        s->last_err = rc; /* refused on the spot: try the next address */
+    }
+    return 0;
+}
+
+/* mid-chain failure landing pad: the closed handle becomes reusable
+ * here — re-init it and dial the next resolved address. A user close()
+ * that landed during the close window finishes the teardown instead
+ * (sock_close had to skip its uv_close: the handle was already going). */
+static void on_retry_closed(uv_handle_t *handle)
+{
+    struct sock *s = (struct sock *)handle;
+    if (s->closed) {
+        ai_chain_free(s); /* no-op when sock_close already freed it */
+        on_sock_closed(handle); /* drop the selfref, release keepalive */
+        return;
+    }
+    s->h_closing = 0;
+    uv_tcp_init(&g_loop, &s->h.tcp);
+    if (tcp_dial_next(s)) {
+        return;
+    }
+    int code = s->last_err != 0 ? s->last_err : UV_ECONNREFUSED;
+    ai_chain_free(s);
+    sock_deliver(s, &s->connectref, code, 0, NULL, 0);
+    sock_close(s);
 }
 
 /* malloc'd carrier for the async resolve: ai.data points back at it */
@@ -1333,8 +1408,17 @@ static void on_resolved(uv_getaddrinfo_t *ai, int status, struct addrinfo *res)
         sock_close(s);
         return;
     }
-    uv_tcp_connect(&s->conn, &s->h.tcp, res->ai_addr, on_connected);
-    uv_freeaddrinfo(res);
+    /* the chain stays owned by the sock: the first attempt dials the
+     * head and every later failure walks on to the next address */
+    s->ai_list = res;
+    s->ai_cur = res;
+    if (tcp_dial_next(s)) {
+        return;
+    }
+    int code = s->last_err != 0 ? s->last_err : UV_ECONNREFUSED;
+    ai_chain_free(s);
+    sock_deliver(s, &s->connectref, code, 0, NULL, 0);
+    sock_close(s);
 }
 
 /* allocate, pin, keep-alive — everything but the handle init: spawn's
@@ -2741,12 +2825,19 @@ struct tsock {
     char *pend;          /* pending write payload, owned until flushed */
     size_t pend_len;
     uv_getaddrinfo_t ai; /* only during name resolution */
+    struct addrinfo *ai_list; /* resolved dial chain, owned until done */
+    struct addrinfo *ai_cur;  /* next address to try (NULL: none left) */
+    int h_closing;            /* a retry uv_close on h is in flight */
+    char last_err[128];       /* most recent dial error, reported last */
 };
 
 static void tsock_close(struct tsock *t);
 static void on_tls_event(uv_poll_t *h, int status, int events);
 static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
                             struct addrinfo *res);
+static void tls_dial_failed(struct tsock *t, int soerr);
+static void tls_retry_after_close(uv_handle_t *h);
+static int tls_dial_next(struct tsock *t);
 
 /* shared construction for client and accepted socks: userdata plus
  * metatable plus registry pin, an SSL object over fd, the handshake
@@ -3048,12 +3139,17 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
          * actually happened, and keep the poll status as fallback */
         int soerr = 0;
         socklen_t slen = sizeof(soerr);
-        if (t->fd >= 0 && getsockopt(t->fd, SOL_SOCKET, SO_ERROR,
-                                     &soerr, &slen) == 0 && soerr != 0) {
-            tls_fail(t, uv_strerror(-soerr));
-        } else {
-            tls_fail(t, uv_strerror(status));
+        int have_soerr = t->fd >= 0 &&
+            getsockopt(t->fd, SOL_SOCKET, SO_ERROR,
+                       &soerr, &slen) == 0 && soerr != 0;
+        if (!t->tcp_connected) {
+            /* a dial refusal: walk on to the next resolved address
+             * (tls_dial_failed) — only the last one gets reported */
+            tls_dial_failed(t, have_soerr ? soerr : -status);
+            return;
         }
+        tls_fail(t, have_soerr ? uv_strerror(-soerr)
+                               : uv_strerror(status));
         return;
     }
     if (!t->tcp_connected && (events & UV_WRITABLE)) {
@@ -3063,13 +3159,35 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
         socklen_t slen = sizeof(soerr);
         getsockopt(t->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen);
         if (soerr != 0) {
-                tls_fail(t, uv_strerror(soerr));
+            tls_dial_failed(t, soerr);
             return;
         }
         t->tcp_connected = 1;
         SSL_set_fd(t->ssl, t->fd);
     }
     tls_pump(t);
+}
+
+/* a dial attempt failed asynchronously: keep the error for the
+ * exhaustion report, tear the socket down, and if more resolved
+ * addresses remain close the poll handle out — its memory is only
+ * reusable from the close callback */
+static void tls_dial_failed(struct tsock *t, int soerr)
+{
+    if (soerr != 0) {
+        snprintf(t->last_err, sizeof(t->last_err), "%s",
+                 uv_strerror(-soerr));
+    }
+    if (t->fd >= 0) {
+        close(t->fd);
+        t->fd = -1;
+    }
+    if (!t->ai_cur) {
+        tls_fail(t, t->last_err[0] ? t->last_err : "connect failed");
+        return;
+    }
+    t->h_closing = 1;
+    uv_close((uv_handle_t *)&t->h, tls_retry_after_close);
 }
 
 static void on_tls_closed(uv_handle_t *h)
@@ -3079,6 +3197,24 @@ static void on_tls_closed(uv_handle_t *h)
     luaL_unref(t->L, LUA_REGISTRYINDEX, t->selfref);
     t->selfref = LUA_NOREF;
     keepalive_close();
+}
+
+/* mid-chain failure landing pad: the poll handle is reusable again —
+ * dial the next resolved address over a fresh poll. A user close()
+ * that landed during the close window finishes the teardown instead
+ * (tsock_close had to skip its uv_close: the handle was already going). */
+static void tls_retry_after_close(uv_handle_t *h)
+{
+    struct tsock *t = (struct tsock *)h;
+    if (t->closed) {
+        on_tls_closed(h); /* deliver closeref, drop the selfref */
+        return;
+    }
+    t->h_closing = 0;
+    if (tls_dial_next(t)) {
+        return;
+    }
+    tls_fail(t, t->last_err[0] ? t->last_err : "connect failed");
 }
 
 static void tsock_close(struct tsock *t)
@@ -3120,7 +3256,18 @@ static void tsock_close(struct tsock *t)
             close(t->fd);
         t->fd = -1;
     }
+    if (t->ai_list) {
+        uv_freeaddrinfo(t->ai_list);
+        t->ai_list = NULL;
+        t->ai_cur = NULL;
+    }
     if (t->poll_inited) {
+        if (t->h_closing) {
+            /* the retry close is still in flight; its callback sees
+             * closed and delivers closeref/selfref — a second uv_close
+             * would be invalid */
+            return;
+        }
         uv_close((uv_handle_t *)&t->h, on_tls_closed);
     } else {
         /* resolution failed before any poll existed: finish inline */
@@ -3223,32 +3370,54 @@ static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
                                 : "no address found");
         return;
     }
-    int fd = socket(res->ai_family, SOCK_STREAM, 0);
-    if (fd < 0) {
-        uv_freeaddrinfo(res);
-        tls_fail(t, uv_strerror(-errno));
+    /* the chain stays owned by the tsock: the first attempt dials the
+     * head and every later refusal walks on to the next address */
+    t->ai_list = res;
+    t->ai_cur = res;
+    if (tls_dial_next(t)) {
         return;
     }
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
-    uv_freeaddrinfo(res);
-    if (rc != 0 && errno != EINPROGRESS) {
-        close(fd);
-        tls_fail(t, uv_strerror(-errno));
-        return;
+    tls_fail(t, t->last_err[0] ? t->last_err : "no address found");
+}
+
+/* autoSelectFamily-style dial: walk the resolved chain one address per
+ * attempt. The connect is nonblocking, so a refusal usually surfaces
+ * later through the poll (tls_dial_failed); only an immediate error
+ * moves on synchronously here. 1 = attempt under way, 0 = none left. */
+static int tls_dial_next(struct tsock *t)
+{
+    while (t->ai_cur) {
+        struct addrinfo *cur = t->ai_cur;
+        t->ai_cur = cur->ai_next;
+        int fd = socket(cur->ai_family, SOCK_STREAM, 0);
+        if (fd < 0) {
+            snprintf(t->last_err, sizeof(t->last_err), "%s",
+                     uv_strerror(-errno));
+            continue;
+        }
+        int flags = fcntl(fd, F_GETFL, 0);
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int rc = connect(fd, cur->ai_addr, cur->ai_addrlen);
+        if (rc != 0 && errno != EINPROGRESS) {
+            snprintf(t->last_err, sizeof(t->last_err), "%s",
+                     uv_strerror(-errno));
+            close(fd);
+            continue;
+        }
+        t->fd = fd;
+        uv_poll_init(&g_loop, &t->h, fd);
+        t->poll_inited = 1;
+        if (rc == 0) { /* connected on the spot */
+            t->tcp_connected = 1;
+            SSL_set_fd(t->ssl, fd);
+            uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
+            tls_pump(t);
+        } else {
+            uv_poll_start(&t->h, UV_WRITABLE, on_tls_event);
+        }
+        return 1;
     }
-    t->fd = fd;
-    uv_poll_init(&g_loop, &t->h, fd);
-    t->poll_inited = 1;
-    if (rc == 0) { /* connected on the spot */
-        t->tcp_connected = 1;
-        SSL_set_fd(t->ssl, fd);
-        uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
-        tls_pump(t);
-    } else {
-        uv_poll_start(&t->h, UV_WRITABLE, on_tls_event);
-    }
+    return 0;
 }
 
 /* tsock:write(data, cb(err)?) — payload held until fully flushed */

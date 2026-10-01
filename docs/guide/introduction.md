@@ -11,19 +11,21 @@ Lua 本身把一切留给宿主:没有命令行参数解析、没有包管理、
 
 ```
 $ luna
-luna 0.1.0 · Lua 5.5
+luna 0.1.0 — Lua 5.5 interactive console
+Type ^D to exit.
 In [1]: 6 * 7
 Out[1]: 42
-In [2]: def fib = fn  …          ← 输入未完整时自动续行
-In [2]: | function fib(n)
-In [2]: |   if n < 2 then return n end
-In [2]: |   return fib(n-1) + fib(n-2)
-In [2]: | end
+In [2]: function fib(n)
+...   if n < 2 then return n end
+...   return fib(n-1) + fib(n-2)
+... end
 In [3]: fib(10)
-Out[3]: 55
+Out[2]: 55
 In [4]: %time fib(20)
-Wall time: 0.014 ms
+Wall time: 6.000 ms
 ```
+
+注意 `Out` 计数独立于 `In`:`fib(10)` 在 `In [3]` 求值,但它是本会话第二个产出值,所以是 `Out[2]`;`%time` 只报耗时,不产生 `Out`。
 
 输入行实时着色(基于 scintillua 词法器 + LPeg),未完成块自动续行,`^C` 中断当前块回到提示符,`?expr` 给出帮助。
 

@@ -208,7 +208,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | path | ✅ 批次 6 已落地(`path`,纯 Lua) | — | — | Lua | 6 |
 | util | ✅ 批次 6 已落地(`util`,纯 Lua;`luna.introspect` 仍是 REPL 内省,两者分工见下) | — | — | Lua | 6 |
 | events | ✅ 批次 6 已落地(`events`,纯 Lua) | — | — | Lua | 6 |
-| stream | ❌ 无(`sock:read` 等回调流已有) | Readable/Writable/pipe 抽象 | 纯 Lua,基于 events | Lua | 7 |
+| stream | ✅ 批次 7 已落地(`stream`,纯 Lua,基于 events) | — | — | Lua | 7 |
 
 **"绑定 C 库优先"在这张表上的落法**:timers/child_process/os 的底座已经是 libuv(deps 已在)——B 面的唯一新增 C 代码是 loop.os 的四个 getter(~60 行,仍在既有 `os_funcs` 表里);path/util/events/stream **没有对应的成熟 C 库可绑**(Node 本尊全是纯 JS;libuv 无 path join/EventEmitter),它们落在策略层正合架构分层——"C 内核尽量薄,行为逻辑全是 Lua"。
 
@@ -296,6 +296,16 @@ em:setMaxListeners(20)                  -- 缺省 10(Events.defaultMaxListeners)
 **v1 面收窄**(Node stream 全家桶很大,luna 只做被适配器真正消费的面):Readable(`_read` 源 → `push`,`'data'`/`'end'`/`'readable'`、pause/resume)、Writable(`_write` 汇 → `'drain'`/`'finish'`,`write`/`end`)、Duplex、Transform(`_transform`)、`readable:pipe(writable)`(含背压——write 返回 false 即停 push,等 drain 续推,`unpipe`)、`opts.highWaterMark`(缺省 16KiB,只做记账阈值不做字节精确)。事件与错误传播按 Node 语义(error → destroy → 'close'、pipe 上的错误联动)。
 
 **适配器是 stream 的存在理由**(批次 7 内含 2–3 个,其余按需追加):`sock`(loop.net)→ Duplex(读回调转 push、write 转发)、`fs.readFileSync` 的内存块 → Readable、`loop.http` 的 onData → Readable。**明确不做**:webstreams(`ReadableStream` 家族)、异步迭代器(`for ... in s:lines()` 的 Lua 迭代器形态倒是顺手,记为可选)、`setEncoding`/`cork` 一族小面。
+
+**实现勘定(2026-10-01,批次 7,Node v24 语义对照)**:
+- 构造是工厂函数:`stream.readable/writable/duplex/transform(opts)`(`stream.Readable` 等大写形状是同一函数的别名);`end` 因关键字冲突拼作 `s:end_(chunk, cb)`,**sock 同款**的 `s["end"]` 形状也可用;
+- **开流时机**:首个 `data` 监听(经覆写 `on`/`once`)真正落位后才转流动——events 的 `newListener` 在监听器落位**前**发出,在钩子里开流会把头几块数据丢给空气,这是与 Node(resumeScheduled 延一拍)实现路径不同、语义相同的处理;
+- **拉式源的循环**:`_read` 在内部缓冲空且流动时被调,同步无产出即停、等下一次 `push` 触发;`push` 在 `_read` 里只入账不投递(防递归无底),投递由外层循环收口;`push(nil)` 即 EOF,EOF 后再 `push(chunk)` 发 `error` 事件;
+- **背压双向**:消费侧 `write` 返回 false 即源 `pause`、目标 `drain` 续推;生产侧 `push` 返回 false 即源头收手,缓冲排空时 `_read` 被回调灌——`pushReadable` + 自持队列就是 loop.http onData 的适配形态("视余量"= 这个返回值加这个回灌点);
+- **autoDestroy 两脸判据**:纯流单脸(`end`/`finish`)到位即 `destroy`→`close`;duplex/transform 要 `end` 与 `finish` **都**到齐才 `close`(Node 同款)——sock EOF 后还需 `end_()` 收写脸;transform 的 `finish` 先于读侧 `end`(flush 完成即 finish,缓冲排空才 end);
+- **与 Node 裸 pipe 的有意分叉**:源 `error` 会 `unpipe` 后 `destroy(同错)` 到目标(Node 的裸 pipe 不动目标,那是 `pipeline()` 的契约——luna 把这个契约并进 `pipe`,一个调用管到底);目标 `error` 只 `unpipe`,源不炸;`opts.end == false` 关掉源 `end` → 目标 `end_()` 的联动;
+- **记账简化**:字符串按字节、其余值按 1(objectMode 恒开的合并面),`highWaterMark` 缺省 16384,只做阈值不做字节精确;`destroy` 把未决 write 回调(**在途一笔 + 排队若干**)以 `"stream destroyed"` 结账,`destroy(err)` 无 error 监听时按 events 语义 raise;
+- 适配器三件:`duplexFromSock(sock)`(常驻读回调转 push、write 转发、`_destroy` 关 sock、读错误走 error→destroy 联动)、`readableFromChunks(chunks)`(字符串或块表,一次一块按需推)、`pushReadable(opts)`(纯推式,`push` 公开);modules 组 8 用例 + loop 组 1 个真 sock 回显集成(写转发/EOF→end/autoDestroy→close)钉住。
 
 ### os 补齐(批次 8,C 在 loop.c 内)
 

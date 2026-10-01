@@ -962,7 +962,7 @@
       listenerCount/setMaxListeners/缺省 10 警告/'error' 无监听 raise/
       newListener 内建事件)。**验收**:三模块用例绿;两树全绿;文档
       (guide/modules.md 表 + node-parity.md 状态勾稽)。(实录见下节)
-- [ ] **批次 7:stream(基于 events,纯 Lua)**。Readable/Writable/Duplex/
+- [x] **批次 7:stream(基于 events,纯 Lua)**。Readable/Writable/Duplex/
       Transform + pipe 背压(write false 停推等 drain 续推/unpipe)、
       highWaterMark 记账阈值;适配器至少两个:sock(loop.net)→Duplex、
       内存块→Readable(loop.http onData→Readable 视余量)。用例:背压
@@ -1337,6 +1337,81 @@
   判等族;path 的 win32 面(平台面 Linux/macOS);
 - 全局 setTimeout 与 REPL 集成(维持推迟,启用条件见下轮方向);
 - tomlc99 回退不预设,仅当 tomlc17 vendor 编译受阻时启用(决策记录 1)。
+
+### 批次 7(stream)实录(2026-10-01)
+
+- [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件
+      `lua/modules/stream/init.lua`(690 行),经既有 LUNA_STDLIB_WRAPPERS
+      glob staged 到 `luna_modules/`,零构建接线、零注册代码。
+- [x] **实现**:Stream 基类(destroy 幂等收口:opts._destroy 摘外部
+      资源、err 非 nil 先发 'error'(无监听按 events 语义 raise)、恒发
+      一次 'close';未决 write 回调**在途一笔 + 排队若干**以
+      "stream destroyed" 结账)+ Readable(on/once 覆写——首个 'data'
+      监听真正落位后才开流:events 的 newListener 在落位前发出,在
+      钩子里开流会把头几块丢给空气;拉式 _read 走 _pushseq 干涸检测,
+      _read 里的 push 只入账不投递防递归无底)+ Writable(队头分发
+      _write、drain/finish、end_ 与 s["end"] 双拼、write after end/
+      destroy 发 error 事件)+ Duplex(两脸 mixin)+ Transform(flush
+      完成即 finish、读侧缓冲排空才 end)+ pipe(data→write 返回
+      false 即 pause、drain 续推、unpipe 摘四钩;源 end 默认带
+      dest:end_(),opts["end"]==false 关掉;源 error → unpipe 后
+      destroy(同错)到目标——**与 Node 裸 pipe 的有意分叉**,把
+      pipeline() 的契约并进 pipe;目标 error/close 只 unpipe 源不炸)
+      + autoDestroy 两脸判据(纯流单脸到位即关,duplex/transform 要
+      'end' 与 'finish' 都到齐)。
+- [x] **适配器三件**:duplexFromSock(sock)(write 转发、常驻读回调转
+      push、_destroy 关 sock、读错误走 error→destroy 联动)、
+      readableFromChunks(字符串或块表,一次一块按需推)、pushReadable
+      (loop.http onData 的「视余量」形态:push 返回 false 即收手,
+      缓冲排空时 _read 回灌)。
+- [x] modules 组 +8 用例(83→91):readable_flow(chunks 源顺序收口/
+      暂停态 readable/监听器内 pause 即刻生效/once 开流)、
+      backpressure_roundtrip(hwm 记账与 drain、pipe 慢汇 20 块往返
+      80 字节、unpipe 摘钩后数据与 end 都不再进汇)、error_destroy_
+      close(_read 炸联动/destroy(err) 无监听 raise/write after end
+      +destroy 对在途回调结账/finish→autoDestroy→close)、
+      pipe_error_propagation(源错毁目标/目标错只 unpipe/opts["end"]
+      开关)、transform(中继+flush 尾块 finish→end→close/两跳 pipe
+      全链/cb(err) 联动)、adapters(fake sock 全生命周期:写转发/
+      EOF→end/两脸→close/destroy 恰关一次、读错误、pushReadable 30
+      块视余量+EOF)、edge_legs(非串块按 1 记账、end_ 尾块/finish
+      回调/destroy 后静默、settle 幂等、write cb(err) 与 _write raise
+      两条 destroy 路、write after destroy、push after destroy/EOF、
+      干涸 _read、双 pause/流动中 resume 早退、transform 的 drain/
+      cb 成功/raise/settle 幂等/destroyed 后 settle、flush cb(err)/
+      raise/幂等/flush 内 destroy 守卫、duplexFromSock 写错误与迟到
+      读回调、opts._destroy raise 走 io.stderr 警告)、参数契约 8
+      raise;loop 组 +1 真 sock 回显集成
+      (pthread echo 服务器,写转发/EOF→end/两脸到齐→close,
+      194→195 用例)。**首轮 5 败 + 修复后浮出 1 败 + 边腿用例 2 败,
+      均为测试侧期望值笔误**(同步源上挂 'data' 即开流、双笔 write
+      各结一次才 drain、unpipe 摘不掉已发生的 end_、push 满额提前
+      返回 EOF 要再拉一轮、end_ 尾块会进 sink、error 串带 chunk
+      前缀),库侧仅一处返工:destroy 对**在途** write 回调也结账
+      (原实现只结排队中的;Node 语义在途+排队都结,补 _wflight 记账)。
+- [x] 覆盖率账:Lua 侧总 **97.08%**(3720/112;批次 6 收官 96.87%,
+      **超基线**);stream **98.80%**(413/5)——edge_legs 用例把首轮
+      89.71%(43 暗)的可达腿尽数收掉(非串块记账、两条 destroy 结账
+      路、settle 幂等、EOF/destroy 后 push、干涸 _read、pipe 类型、
+      end_ 三形态、transform/flush 的 raise 与守卫腿、适配器错误面、
+      _destroy raise 走 stderr),余 5 暗全为结构性防御腿登记不强测:
+      _autoclose 的 closed 重入守卫、pipe 尾流启动 body(条件行可达,
+      body 因 `self:on("data")` 经覆写先开流而不可达)、_finish 与
+      _flush_and_finish 两个重入守卫。C 台账与批次 6 持平:lines
+      94.8%(2689/2837)、functions 100%(249/249)、branches 77.6%
+      (948/1222)——本轮零 C 产品代码,只动测试与 Lua/文档。
+- [x] 文档同步:guide/modules.md 内置表 stream 行(后端列「纯 Lua」)
+      + Node 语义模块段补 end_ 拼写注;node-parity.md B 面表 stream
+      行翻 ✅ + stream 节实现勘定块(工厂命名与 end_、开流时机、拉式
+      源循环、背压双向、autoDestroy 两脸判据、pipe 分叉、记账简化、
+      适配器三件与用例清单);README/docs index 标准库清单加 stream;
+      cmake/luacov.config.in include 收编 luna_modules/stream/。
+- [x] 门禁:两树 cmake --build + ctest **16 组全绿**——终轮 build
+      240.67s、build-cov 416.48s 干净全绿。过程中 shield/theseed 并行
+      会话高频跑 ctest,全程等真空档(连续 60s 无外来 ctest)再起跑,
+      cov 树曾见 linedit 一败(并行时段瞬时,单跑 0.19s 实绿、复跑
+      干净 16/16),普通树曾见 rocks 一败同判(单跑 21.08s 实绿)。
+      单笔提交,push 前 fetch origin main 核对 SHA;不打 tag、不发版。
 
 ## 下轮方向
 

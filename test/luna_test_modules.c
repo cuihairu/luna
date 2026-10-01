@@ -2316,6 +2316,564 @@ static void test_events_args_contract(void **state)
         "false,false,false,false,false");
 }
 
+/* -- stream (batch 7) --------------------------------------------------- */
+
+static void test_stream_readable_flow(void **state)
+{
+    (void)state;
+    /* chunks 源: data 顺序、end→close; 挂 data 即开流 (end/close 先挂) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r = s.readableFromChunks{'a','b','c'}\n"
+                    "local got, ev = {}, {}\n"
+                    "r:on('end', function() ev[#ev+1] = 'end' end)\n"
+                    "r:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "r:on('data', function(c) got[#got+1] = c end)\n"
+                    "return table.concat(got) .. ',' .. table.concat(ev, ',')"),
+        "abc,end,close");
+    /* 暂停态: 挂 data 前不投递, push 只入账发 'readable'; 挂 data 即开流
+     * (end 先挂), 随后 push(nil) 走到 'end' */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r = s.pushReadable()\n"
+                    "local got, ev = {}, {}\n"
+                    "r:on('readable', function() ev[#ev+1] = 'readable' end)\n"
+                    "local room = r:push('x')\n"
+                    "local paused = r:isPaused()\n"
+                    "local n0 = #got\n"
+                    "r:on('end', function() ev[#ev+1] = 'end' end)\n"
+                    "r:on('data', function(c) got[#got+1] = c end)\n"
+                    "local n1 = #got\n"
+                    "r:push(nil)\n"
+                    "return tostring(room) .. ',' .. tostring(paused) .. ','\n"
+                    "  .. n0 .. ',' .. n1 .. ',' .. table.concat(ev, ',')"),
+        "true,true,0,1,readable,end");
+    /* 监听器里 pause 即刻生效, resume 续投 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r = s.readableFromChunks{'x','y','z'}\n"
+                    "local n, sawFlowing\n"
+                    "r:on('data', function(c)\n"
+                    "  n = (n or 0) + 1\n"
+                    "  if n == 1 then sawFlowing = not r:isPaused(); r:pause() end\n"
+                    "end)\n"
+                    "r:on('end', function() end)\n"
+                    "local pausedAfterOne = r:isPaused()\n"
+                    "r:resume()\n"
+                    "return tostring(sawFlowing) .. ',' .. tostring(pausedAfterOne)\n"
+                    "  .. ',' .. n"),
+        "true,true,3");
+    /* once('data') 同样开流; 字符串形态的内存块 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r = s.readableFromChunks('solo')\n"
+                    "local got = {}\n"
+                    "r:on('end', function() end)\n"
+                    "r:once('data', function(c) got[#got+1] = c end)\n"
+                    "return table.concat(got)"),
+        "solo");
+}
+
+static void test_stream_backpressure_roundtrip(void **state)
+{
+    (void)state;
+    /* 纯 writable: 到 hwm 返回 false, 排空发一次 'drain' */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local held\n"
+                    "local w = s.writable{ highWaterMark = 4,\n"
+                    "  _write = function(self, c, cb) held = cb end }\n"
+                    "local drains = 0\n"
+                    "w:on('drain', function() drains = drains + 1 end)\n"
+                    "local r1 = w:write('aaaa')\n"
+                    "local r2 = w:write('bbbb')\n"
+                    "held() held()  -- 两笔各结一次, 队列空 + needdrain → drain\n"
+                    "return tostring(r1) .. ',' .. tostring(r2) .. ',' .. drains"),
+        "true,false,1");
+    /* pipe 背压往返: 慢汇掐住源, 逐块放行使 drain 续推, 直到 finish */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local chunks = {}\n"
+                    "for i = 1, 20 do chunks[i] = string.rep('k', 4) end\n"
+                    "local src = s.readableFromChunks(chunks)\n"
+                    "local pending, got, drains = {}, {}, 0\n"
+                    "local sink = s.writable{ highWaterMark = 8,\n"
+                    "  _write = function(self, c, cb)\n"
+                    "    pending[#pending+1] = {chunk = c, cb = cb}\n"
+                    "  end }\n"
+                    "sink:on('drain', function() drains = drains + 1 end)\n"
+                    "sink:on('finish', function() got.finished = true end)\n"
+                    "src:pipe(sink)\n"
+                    "local pausedAtStart = src:isPaused()\n"
+                    "local total, guard = 0, 0\n"
+                    "while not got.finished and guard < 2000 do\n"
+                    "  guard = guard + 1\n"
+                    "  local it = table.remove(pending, 1)\n"
+                    "  if it then\n"
+                    "    total = total + #it.chunk\n"
+                    "    it.cb()\n"
+                    "  elseif src:isPaused() and #sink._bufW == 0 then\n"
+                    "    break\n"
+                    "  end\n"
+                    "end\n"
+                    "return tostring(pausedAtStart) .. ',' .. total .. ','\n"
+                    "  .. tostring(got.finished) .. ',' .. tostring(drains > 0)"),
+        "true,80,true,true");
+    /* unpipe: 摘钩后源的数据不再进汇, 源的 end 不再带动汇; 源暂停收场不毁 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local src = s.pushReadable()\n"
+                    "local got, ended = {}, false\n"
+                    "local sink = s.writable{\n"
+                    "  _write = function(self, c, cb) got[#got+1] = c; cb() end }\n"
+                    "sink:on('finish', function() ended = true end)\n"
+                    "sink:on('close', function() end)\n"
+                    "src:pipe(sink)\n"
+                    "src:push('p')\n"
+                    "src:unpipe(sink)\n"
+                    "src:push('q')\n"
+                    "src:push(nil)\n"
+                    "return #got .. ',' .. tostring(ended) .. ','\n"
+                    "  .. tostring(src._destroyed == true)"),
+        "1,false,false");
+}
+
+static void test_stream_error_destroy_close(void **state)
+{
+    (void)state;
+    /* _read 炸 → error → close 联动; destroy 幂等 (close 恰一次) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r = s.readable{\n"
+                    "  _read = function(self) error('source boom') end }\n"
+                    "local ev = {}\n"
+                    "r:on('error', function(e)\n"
+                    "  ev[#ev+1] = tostring(e):find('source boom', 1, true)\n"
+                    "    and 'err' or ('bad:' .. tostring(e)) end)\n"
+                    "r:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "r:on('data', function() end)\n"
+                    "r:destroy('again')\n"
+                    "return table.concat(ev, ',')"),
+        "err,close");
+    /* destroy(err) 无 error 监听 → raise (events 语义); 有监听不炸 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local ok1, e1 = pcall(function()\n"
+                    "  local w = s.writable{ _write = function() end }\n"
+                    "  w:on('close', function() end)\n"
+                    "  w:destroy('kaboom')\n"
+                    "end)\n"
+                    "local w2 = s.writable{ _write = function() end }\n"
+                    "local sawErr = false\n"
+                    "w2:on('error', function(e) sawErr = (e == 'kaboom') end)\n"
+                    "w2:on('close', function() end)\n"
+                    "w2:destroy('kaboom')\n"
+                    "return tostring(ok1) .. ','\n"
+                    "  .. tostring(tostring(e1):find('kaboom', 1, true) ~= nil)\n"
+                    "  .. ',' .. tostring(sawErr)"),
+        "false,true,true");
+    /* write after end / after destroy: error 事件; 未决 write 回调 (在途一笔 +
+     * 排队一笔) 都被 destroy 以 'stream destroyed' 结账, destroy 后 settle 无害 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local held, errs, cbs = nil, {}, {}\n"
+                    "local w = s.writable{\n"
+                    "  _write = function(self, c, cb) held = cb end }\n"
+                    "w:on('error', function(e) errs[#errs+1] = tostring(e) end)\n"
+                    "w:write('a', function(e) cbs[#cbs+1] = 'a:' .. tostring(e) end)\n"
+                    "w:write('b', function(e) cbs[#cbs+1] = 'b:' .. tostring(e) end)\n"
+                    "w:end_()\n"
+                    "pcall(function() w:write('c') end)\n"
+                    "w:destroy('teardown')\n"
+                    "held()\n"
+                    "return table.concat(errs, ';') .. '|' .. table.concat(cbs, ';')"),
+        "write after end;teardown|a:stream destroyed;b:stream destroyed");
+    /* 'finish' → autoDestroy → 'close' (纯 writable 单脸即关) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local w = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "local ev = {}\n"
+                    "w:on('finish', function() ev[#ev+1] = 'finish' end)\n"
+                    "w:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "w:end_()\n"
+                    "return table.concat(ev, ',')"),
+        "finish,close");
+}
+
+static void test_stream_pipe_error_propagation(void **state)
+{
+    (void)state;
+    /* 源 error → 目标 destroy(同错) + unpipe (与 Node 裸 pipe 的差异) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local src = s.pushReadable()\n"
+                    "local sink = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "local sev, dev = {}, {}\n"
+                    "src:on('error', function(e) sev[#sev+1] = 'src:' .. tostring(e) end)\n"
+                    "sink:on('error', function(e) dev[#dev+1] = 'dst:' .. tostring(e) end)\n"
+                    "sink:on('close', function() dev[#dev+1] = 'close' end)\n"
+                    "src:pipe(sink)\n"
+                    "src:push('a')\n"
+                    "src:destroy('net down')\n"
+                    "return table.concat(sev, ',') .. '|' .. table.concat(dev, ',')\n"
+                    "  .. '|' .. #src._pipes"),
+        "src:net down|dst:net down,close|0");
+    /* 目标 error → 只 unpipe, 源不炸不被 destroy (pushReadable 源不会
+     * 自然收口, 保证 destroy 时 pipe 仍挂着) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local src = s.pushReadable()\n"
+                    "local sink = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "local serr, sclosed = false, false\n"
+                    "sink:on('error', function(e) serr = (e == 'sink broke') end)\n"
+                    "sink:on('close', function() sclosed = true end)\n"
+                    "src:pipe(sink)\n"
+                    "src:push('p')\n"
+                    "sink:destroy('sink broke')\n"
+                    "return tostring(serr) .. ',' .. tostring(sclosed) .. ','\n"
+                    "  .. #src._pipes .. ',' .. tostring(src._destroyed == true)"),
+        "true,true,0,false");
+    /* 源 'end' 默认带 dest:end_(); opts.end == false 关掉 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local sink = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "local fin = false\n"
+                    "sink:on('finish', function() fin = true end)\n"
+                    "sink:on('close', function() end)\n"
+                    "s.readableFromChunks{'z'}:pipe(sink)\n"
+                    "local sink2 = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "local fin2 = false\n"
+                    "sink2:on('finish', function() fin2 = true end)\n"
+                    "s.readableFromChunks{'z'}:pipe(sink2, {['end'] = false})\n"
+                    "return tostring(fin) .. ',' .. tostring(fin2)"),
+        "true,false");
+}
+
+static void test_stream_transform(void **state)
+{
+    (void)state;
+    /* _transform 中继 + _flush 尾块; finish → end → close */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local t = s.transform{\n"
+                    "  _transform = function(self, c, cb)\n"
+                    "    self:push(c:upper()); cb() end,\n"
+                    "  _flush = function(self, cb) self:push('!'); cb() end }\n"
+                    "local out, ev = {}, {}\n"
+                    "t:on('data', function(c) out[#out+1] = c end)\n"
+                    "t:on('finish', function() ev[#ev+1] = 'finish' end)\n"
+                    "t:on('end', function() ev[#ev+1] = 'end' end)\n"
+                    "t:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "t:write('a'); t:write('b'); t:end_()\n"
+                    "return table.concat(out) .. ',' .. table.concat(ev, ',')"),
+        "AB!,finish,end,close");
+    /* 全链: chunks → transform → sink, pipe 两跳背压不断链 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local up = s.transform{\n"
+                    "  _transform = function(self, c, cb)\n"
+                    "    self:push('[' .. c .. ']'); cb() end }\n"
+                    "local acc, fin = {}, false\n"
+                    "local sink = s.writable{\n"
+                    "  _write = function(self, c, cb) acc[#acc+1] = c; cb() end }\n"
+                    "sink:on('finish', function() fin = true end)\n"
+                    "s.readableFromChunks{'x','y'}:pipe(up):pipe(sink)\n"
+                    "return table.concat(acc) .. ',' .. tostring(fin)"),
+        "[x][y],true");
+    /* _transform 里 cb(err) → destroy 联动 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local t = s.transform{\n"
+                    "  _transform = function(self, c, cb) cb('bad chunk') end }\n"
+                    "local ev = {}\n"
+                    "t:on('error', function(e) ev[#ev+1] = 'err:' .. tostring(e) end)\n"
+                    "t:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "t:write('x')\n"
+                    "return table.concat(ev, ',')"),
+        "err:bad chunk,close");
+}
+
+static void test_stream_adapters(void **state)
+{
+    (void)state;
+    /* duplexFromSock: write 转发、常驻读回调转 push、EOF → end,
+     * 两脸到齐才 close, destroy 恰关 sock 一次 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local writes, readcb, closed = {}, nil, 0\n"
+                    "local fake = {\n"
+                    "  write = function(self, d, cb)\n"
+                    "    writes[#writes+1] = d; if cb then cb() end end,\n"
+                    "  read = function(self, cb) readcb = cb end,\n"
+                    "  close = function(self) closed = closed + 1 end }\n"
+                    "local d = s.duplexFromSock(fake)\n"
+                    "local got, ev = {}, {}\n"
+                    "d:on('data', function(c) got[#got+1] = c end)\n"
+                    "d:on('end', function() ev[#ev+1] = 'end' end)\n"
+                    "d:on('finish', function() ev[#ev+1] = 'finish' end)\n"
+                    "d:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "d:write('hello')\n"
+                    "readcb(nil, 'c1'); readcb(nil, 'c2')\n"
+                    "local beforeClose = #ev\n"
+                    "readcb(nil, nil)\n"
+                    "d:end_()\n"
+                    "d:destroy()\n"
+                    "return table.concat(writes) .. ',' .. table.concat(got)\n"
+                    "  .. ',' .. beforeClose .. ',' .. table.concat(ev, ',')\n"
+                    "  .. ',' .. closed"),
+        "hello,c1c2,0,end,finish,close,1");
+    /* sock 读错误 → error → close, 且写侧未决回调被结账 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local readcb, wclosed = nil, 0\n"
+                    "local fake = {\n"
+                    "  write = function(self, d, cb) cb() end,\n"
+                    "  read = function(self, cb) readcb = cb end,\n"
+                    "  close = function(self) wclosed = wclosed + 1 end }\n"
+                    "local d = s.duplexFromSock(fake)\n"
+                    "local ev = {}\n"
+                    "d:on('error', function(e) ev[#ev+1] = 'err:' .. tostring(e) end)\n"
+                    "d:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "readcb('ECONNRESET')\n"
+                    "return table.concat(ev, ',') .. ',' .. wclosed"),
+        "err:ECONNRESET,close,1");
+    /* pushReadable 视余量 (loop.http onData 模式): 队列回灌,
+     * 慢消费下每轮只放 hwm 以内的量; 30 块全量到达后 EOF 要再拉一轮
+     * (最后一轮 push 满额提前返回, eof 的 push(nil) 在下一轮 _read 才到) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local queue, eof = {}, false\n"
+                    "local r = s.pushReadable{ highWaterMark = 12,\n"
+                    "  _read = function(self)\n"
+                    "    while queue[1] do\n"
+                    "      if not self:push(table.remove(queue, 1)) then return end\n"
+                    "    end\n"
+                    "    if eof then self:push(nil) end\n"
+                    "  end }\n"
+                    "local function onData(chunk) queue[#queue+1] = chunk end\n"
+                    "for i = 1, 30 do onData(('c'):rep(4)) end\n"
+                    "eof = true\n"
+                    "local collected = {}\n"
+                    "r:on('data', function(c)\n"
+                    "  collected[#collected+1] = c\n"
+                    "  r:pause()\n"
+                    "end)\n"
+                    "r:on('end', function() collected.eof = true end)\n"
+                    "r:resume()\n"
+                    "local guard = 0\n"
+                    "while (#collected < 30 or not collected.eof) and guard < 3000 do\n"
+                    "  guard = guard + 1\n"
+                    "  r:resume()\n"
+                    "end\n"
+                    "return #collected .. ',' .. tostring(collected.eof) .. ','\n"
+                    "  .. tostring(guard < 3000)"),
+        "30,true,true");
+}
+
+static void test_stream_args_contract(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local o1 = pcall(s.readable, {_read = 42})\n"
+                    "local o2 = pcall(s.writable, {_write = 'x'})\n"
+                    "local o3 = pcall(s.transform, {})\n"
+                    "local o4 = pcall(s.duplexFromSock, 'notasock')\n"
+                    "local r = s.readableFromChunks{'a'}\n"
+                    "local o5 = pcall(function() r:pipe({}) end)\n"
+                    "local o6 = pcall(s.readable, {highWaterMark = 'x'})\n"
+                    "local o7 = pcall(function() r:pipe(42) end)\n"
+                    "local o8 = pcall(s.readableFromChunks, 42)\n"
+                    "return tostring(o1) .. ',' .. tostring(o2) .. ','\n"
+                    "  .. tostring(o3) .. ',' .. tostring(o4) .. ','\n"
+                    "  .. tostring(o5) .. ',' .. tostring(o6) .. ','\n"
+                    "  .. tostring(o7) .. ',' .. tostring(o8)"),
+        "false,false,false,false,false,false,false,false");
+}
+
+/* 边腿收口: 记账/结账/幂等/适配器错误面 (主路径用例之外的暗腿) */
+static void test_stream_edge_legs(void **state)
+{
+    (void)state;
+    /* writable: 非串块按 1 记账、write cb 成功结账、end_ 尾块 + finish
+     * 回调、destroy 后 end_ 静默、settle 幂等 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local got, cbok = {}, false\n"
+                    "local w1 = s.writable{\n"
+                    "  _write = function(self, c, cb) got[#got+1] = c; cb() end }\n"
+                    "w1:write(42, function() cbok = true end)\n"
+                    "w1:write({t = 1})\n"
+                    "local fin = false\n"
+                    "w1:end_('tail', function() fin = true end)\n"
+                    "local w2 = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "w2:on('close', function() end)\n"
+                    "w2:destroy()\n"
+                    "local late = pcall(function() return w2:end_('late') end)\n"
+                    "local cnt, held = 0\n"
+                    "local w3 = s.writable{\n"
+                    "  _write = function(self, c, cb) held = cb; cnt = cnt + 1 end }\n"
+                    "w3:write('a')\n"
+                    "held() held()\n"
+                    "return tostring(#got) .. ',' .. tostring(got[1] == 42)\n"
+                    "  .. ',' .. tostring(cbok) .. ','\n"
+                    "  .. tostring(got[2] ~= nil and got[2].t == 1) .. ','\n"
+                    "  .. tostring(got[3] == 'tail') .. ',' .. tostring(fin)\n"
+                    "  .. ',' .. tostring(late) .. ',' .. cnt"),
+        "3,true,true,true,true,true,true,1");
+    /* 错误结账面: _write cb(err) → destroy、_write 本身 raise、
+     * destroy 后 write 发 error 事件 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local e1 = {}\n"
+                    "local w1 = s.writable{\n"
+                    "  _write = function(self, c, cb) cb('werr') end }\n"
+                    "w1:on('error', function(e) e1[#e1+1] = tostring(e) end)\n"
+                    "w1:on('close', function() end)\n"
+                    "w1:write('x')\n"
+                    "local e2 = {}\n"
+                    "local w2 = s.writable{ _write = function() error('sink boom') end }\n"
+                    "w2:on('error', function(e) e2[#e2+1] = tostring(e) end)\n"
+                    "w2:on('close', function() end)\n"
+                    "pcall(function() w2:write('y') end)\n"
+                    "local e3, wr = {}, nil\n"
+                    "local w3 = s.writable{ _write = function(self, c, cb) cb() end }\n"
+                    "w3:on('error', function(e) e3[#e3+1] = tostring(e) end)\n"
+                    "w3:on('close', function() end)\n"
+                    "w3:destroy()\n"
+                    "wr = w3:write('z')\n"
+                    "return table.concat(e1, ',') .. '|'\n"
+                    "  .. tostring(e2[1]:find('sink boom', 1, true) ~= nil) .. '|'\n"
+                    "  .. table.concat(e3, ',') .. ',' .. tostring(wr)"),
+        "werr|true|write after destroy,false");
+    /* readable 边腿: destroy 后 push 静默 false、EOF 后 push 发 error、
+     * 干涸 _read 停转不炸、双 pause / 流动中 resume 早退 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local r1 = s.pushReadable()\n"
+                    "r1:on('close', function() end)\n"
+                    "r1:destroy()\n"
+                    "local pd = r1:push('x')\n"
+                    "local r2 = s.pushReadable()\n"
+                    "local eoferr = nil\n"
+                    "r2:on('error', function(e) eoferr = tostring(e) end)\n"
+                    "r2:push('a') r2:push(nil) r2:push('b')\n"
+                    "local dry = true\n"
+                    "local r3 = s.readable{ _read = function(self) end }\n"
+                    "r3:on('data', function() dry = false end)\n"
+                    "local r4 = s.readableFromChunks{'a','b'}\n"
+                    "r4:pause() r4:pause()\n"
+                    "local r5 = s.readableFromChunks{'a'}\n"
+                    "r5:on('data', function() end)\n"
+                    "r5:resume()\n"
+                    "return tostring(pd == false) .. ','\n"
+                    "  .. tostring(eoferr == 'push after EOF') .. ','\n"
+                    "  .. tostring(dry and r3._started) .. ','\n"
+                    "  .. tostring(r4._flowing == false) .. ','\n"
+                    "  .. tostring(r5._flowing == true)"),
+        "true,true,true,true,true");
+    /* transform 边腿: hwm 记账 drain、write cb 成功、_transform raise、
+     * settle 幂等 (cb 双发只结一次) + destroyed 后 settle 无害、
+     * flush cb(err)/raise、flush 内 destroy 后 cb 走 destroyed 守卫 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local helds = {}\n"
+                    "local t1 = s.transform{ highWaterMark = 4,\n"
+                    "  _transform = function(self, c, cb)\n"
+                    "    helds[#helds+1] = cb end }\n"
+                    "local drained = false\n"
+                    "t1:on('drain', function() drained = true end)\n"
+                    "local ta = t1:write('aaaa')\n"
+                    "local tb = t1:write('bbbb')\n"
+                    "helds[1]() helds[2]()\n"
+                    "local cbok = false\n"
+                    "local t2 = s.transform{\n"
+                    "  _transform = function(self, c, cb) cb() cb() end }\n"
+                    "t2:write('q', function() cbok = true end)\n"
+                    "local ev = {}\n"
+                    "local t3 = s.transform{\n"
+                    "  _transform = function() error('tboom') end }\n"
+                    "t3:on('error', function(e) ev[#ev+1] = tostring(e) end)\n"
+                    "t3:on('close', function() ev[#ev+1] = 'close' end)\n"
+                    "pcall(function() t3:write('x') end)\n"
+                    "local heldt\n"
+                    "local t4 = s.transform{\n"
+                    "  _transform = function(self, c, cb) heldt = cb end }\n"
+                    "t4:on('close', function() end)\n"
+                    "t4:write('x') t4:destroy() heldt()\n"
+                    "local f1, f2 = nil, nil\n"
+                    "local t5 = s.transform{ _transform = function(self, c, cb) cb() end,\n"
+                    "  _flush = function(self, cb) cb('ferr') end }\n"
+                    "t5:on('error', function(e) f1 = tostring(e) end)\n"
+                    "t5:on('close', function() end)\n"
+                    "t5:write('x') t5:end_()\n"
+                    "local t6 = s.transform{ _transform = function(self, c, cb) cb() end,\n"
+                    "  _flush = function() error('fboom') end }\n"
+                    "t6:on('error', function(e) f2 = tostring(e) end)\n"
+                    "t6:on('close', function() end)\n"
+                    "pcall(function() t6:write('x') t6:end_() end)\n"
+                    "local fincnt = 0\n"
+                    "local t7 = s.transform{ _transform = function(self, c, cb) cb() end,\n"
+                    "  _flush = function(self, cb) cb() cb() end }\n"
+                    "t7:on('finish', function() fincnt = fincnt + 1 end)\n"
+                    "t7:write('x') t7:end_()\n"
+                    "local closed8 = false\n"
+                    "local t8 = s.transform{ _transform = function(self, c, cb) cb() end,\n"
+                    "  _flush = function(self, cb) self:destroy() cb() end }\n"
+                    "t8:on('close', function() closed8 = true end)\n"
+                    "t8:write('x') t8:end_()\n"
+                    "return tostring(ta and not tb) .. ',' .. tostring(drained)\n"
+                    "  .. ',' .. tostring(cbok) .. ','\n"
+                    "  .. tostring(ev[1]:find('tboom', 1, true) ~= nil\n"
+                    "    and ev[2] == 'close') .. ','\n"
+                    "  .. tostring(f1 == 'ferr') .. ','\n"
+                    "  .. tostring(f2 and f2:find('fboom', 1, true) ~= nil)\n"
+                    "  .. ',' .. tostring(fincnt == 1) .. ',' .. tostring(closed8)"),
+        "true,true,true,true,true,true,true,true");
+    /* duplexFromSock 边腿: 写转发错误 → destroy, destroy 后迟到的
+     * 常驻读回调静默丢弃 */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local derr = nil\n"
+                    "local fk1 = {\n"
+                    "  write = function(self, d, cb) cb('EWRITE') end,\n"
+                    "  read = function(self, cb) end,\n"
+                    "  close = function(self) end }\n"
+                    "local d1 = s.duplexFromSock(fk1)\n"
+                    "d1:on('error', function(e) derr = tostring(e) end)\n"
+                    "d1:on('close', function() end)\n"
+                    "d1:write('x')\n"
+                    "local readcb = nil\n"
+                    "local fk2 = {\n"
+                    "  write = function(self, d, cb) cb() end,\n"
+                    "  read = function(self, cb) readcb = cb end,\n"
+                    "  close = function(self) end }\n"
+                    "local d2 = s.duplexFromSock(fk2)\n"
+                    "d2:on('close', function() end)\n"
+                    "d2:destroy()\n"
+                    "readcb(nil, 'late')\n"
+                    "return tostring(derr == 'EWRITE') .. ','\n"
+                    "  .. tostring(d2._destroyed == true)"),
+        "true,true");
+    /* opts._destroy 自身 raise: pcall 兜住, 警告写 io.stderr (本体替换捕获) */
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local saved, warned = io.stderr, nil\n"
+                    "io.stderr = { write = function(_, m) warned = m end }\n"
+                    "local closed = false\n"
+                    "local ok = pcall(function()\n"
+                    "  local r = s.readable{ _read = function(self) end,\n"
+                    "    _destroy = function(self) error('zzz') end }\n"
+                    "  r:on('close', function() closed = true end)\n"
+                    "  r:destroy()\n"
+                    "end)\n"
+                    "io.stderr = saved\n"
+                    "return tostring(ok) .. ',' .. tostring(closed) .. ','\n"
+                    "  .. tostring(warned ~= nil\n"
+                    "    and warned:find('stream: _destroy error', 1, true) ~= nil)"),
+        "true,true,true");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -2406,6 +2964,14 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_events_builtin_events, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_error_and_maxlisteners, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_readable_flow, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_backpressure_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_error_destroy_close, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_pipe_error_propagation, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_transform, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_adapters, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_edge_legs, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

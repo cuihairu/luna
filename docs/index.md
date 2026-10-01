@@ -26,7 +26,7 @@ features:
     details: 相对 require、沿 luna_modules/ 逐级上溯的裸名解析、package.json 式清单,配 package.loaded 缓存语义。
   - icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M12 3 6 12h4l-3 6h10l-3-6h4L12 3z"/><path d="M12 18v3"/></svg>'
     title: 现代标准库
-    details: fs / net / http / json / csv / ini / toml / yaml / xml / zlib / crypto 绑定成熟 C 库或 LPeg,path / util / events 纯 Lua 按 Node 语义,随二进制一体分发。
+    details: fs / net / http / json / csv / ini / toml / yaml / xml / zlib / crypto 绑定成熟 C 库或 LPeg,path / util / events / stream 纯 Lua 按 Node 语义,随二进制一体分发。
   - icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" width="24" height="24"><path d="M9 3v5"/><path d="M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0V8z"/><path d="M12 17v4"/></svg>'
     title: 目录插件
     details: ./plugins 就近发现,plugin.json 清单,魔法命令、补全源、高亮规则、模块注入四个扩展点,失败隔离不致命。

@@ -27,7 +27,7 @@ luna 面向的就是这个场景:内核是官方 Lua 5.5,单二进制,克隆下�
 | REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
 | 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
-| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events 纯 Lua 按 Node 语义;随二进制一体分发 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
+| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
 | 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |
 | 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/architecture) |
 

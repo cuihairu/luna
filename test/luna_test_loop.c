@@ -11,7 +11,9 @@
  * Location, the whole-request timeout, url validation) and its server
  * face (self-served roundtrips, handler errors as 500, malformed
  * requests as 400), plus streaming bodies through onData/onHead
- * (content-length, unframed EOF and redirect hops staying internal).
+ * (content-length, unframed EOF and redirect hops staying internal), and
+ * the pure-Lua stream module's sock → Duplex adapter echoing through a
+ * real TCP server (write forwarding, EOF → 'end', autoDestroy → 'close').
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
@@ -1421,6 +1423,44 @@ static void test_net_pipe_echo(void **state)
         "return log"), "hello");
     pthread_join(th, NULL);
     unlink(path);
+}
+
+/* -- stream: sock → Duplex over a real echo server --------------------- */
+/* the pure-Lua stream module (batch 7) adapting loop.net: write forwards
+ * to the wire, the standing read callback pushes into the readable face,
+ * EOF ends it, and autoDestroy closes the sock so the loop drains */
+static void test_stream_duplex_sock_echo(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+
+    char code[896];
+    snprintf(code, sizeof code,
+        "local stream = require('stream')\n"
+        "body, endf, finf, clof = '', false, false, false\n"
+        "loop.net.connect('127.0.0.1', %d, function(e, sock)\n"
+        "  if e then body = 'connect:' .. e return end\n"
+        "  local d = stream.duplexFromSock(sock)\n"
+        "  local sink = stream.writable{\n"
+        "    _write = function(self, c, cb) body = body .. c; cb() end }\n"
+        "  d:on('end', function() endf = true end)\n"
+        "  d:on('finish', function() finf = true end)\n"
+        "  d:on('close', function() clof = true end)\n"
+        "  d:pipe(sink)\n"
+        "  d:write('hello')\n"
+        "  d:end_()\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return body .. ',' .. tostring(endf) .. ',' .. tostring(finf)\n"
+        "  .. ',' .. tostring(clof)", tcp_port_of(listener));
+    /* the echo lands through the pipe, the server's close is EOF → 'end',
+     * both faces settle ('finish' from end_, 'end' from EOF) → 'close',
+     * and _destroy closed the sock so run() returns on its own */
+    assert_string_equal(eval_string(code), "hello,true,true,true");
+    pthread_join(th, NULL);
 }
 
 #ifdef LUNA_LOOP_HAVE_OPENSSL
@@ -5725,6 +5765,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_stream_duplex_sock_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_listen_on_taken_port_fails, setup_loop, teardown_loop),

@@ -30,6 +30,27 @@ export default defineConfig({
         ]
       },
       {
+        text: '标准库',
+        items: [
+          { text: '总览', link: '/stdlib/' },
+          { text: 'json', link: '/stdlib/json' },
+          { text: 'fs', link: '/stdlib/fs' },
+          { text: 'path', link: '/stdlib/path' },
+          { text: 'util', link: '/stdlib/util' },
+          { text: 'events', link: '/stdlib/events' },
+          { text: 'stream', link: '/stdlib/stream' },
+          { text: 'net', link: '/stdlib/net' },
+          { text: 'http', link: '/stdlib/http' },
+          { text: 'crypto', link: '/stdlib/crypto' },
+          { text: 'zlib', link: '/stdlib/zlib' },
+          { text: 'csv', link: '/stdlib/csv' },
+          { text: 'ini', link: '/stdlib/ini' },
+          { text: 'toml', link: '/stdlib/toml' },
+          { text: 'yaml', link: '/stdlib/yaml' },
+          { text: 'xml', link: '/stdlib/xml' }
+        ]
+      },
+      {
         text: '设计',
         items: [
           { text: '架构设计', link: '/architecture' },

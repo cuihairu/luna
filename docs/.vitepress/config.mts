@@ -51,6 +51,14 @@ export default defineConfig({
         ]
       },
       {
+        text: '其他',
+        items: [
+          { text: '配置与环境变量', link: '/other/config' },
+          { text: '构建与自测', link: '/other/build' },
+          { text: 'FAQ', link: '/other/faq' }
+        ]
+      },
+      {
         text: '设计',
         items: [
           { text: '架构设计', link: '/architecture' },

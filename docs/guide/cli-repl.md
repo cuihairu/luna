@@ -10,6 +10,7 @@ REPL 是 luna 的入口形态,CLI 的三种模式都是它的变体。本页按"
 | `luna script.lua a b` | 跑脚本后退出;`a b` 成为 chunk 的 `...`,`arg[0]` 为脚本路径 | `lua script.lua` |
 | `luna -i script.lua` | 跑脚本后落入控制台(脚本的 globals 仍在) | `python -i` |
 | `luna -e 'code'` | 求值后退出;表达式按 `Out[n]` 回显,未完整代码报错 | `node -e` |
+| `luna serve [dir] [port]` | 静态文件服务到 `^C`(默认当前目录、8000 端口);退出码 130 同 `^C` 契约 | `python -m http.server` |
 | `luna --attach <pid>` | 交互式连到另一个运行中的 luna 进程 | gdb attach / ipython `%connect_info` |
 
 模式可组合通用开关 `--no-color` 与 `--no-plugins`;插件对**每种**启动模式都生效——脚本可能 `require` 插件注入的模块。

@@ -1,0 +1,40 @@
+# 配置与环境变量
+
+luna 没有配置文件:全部行为开关经**环境变量**与**命令行开关**控制,默认值开箱即用,每条都可单独覆盖。
+
+## 环境变量
+
+| 变量 | 作用 | 默认 |
+| --- | --- | --- |
+| `NO_COLOR` / `LUNA_NO_COLOR` | 关闭一切 ANSI 着色(输入行与回显同进同退,见[CLI 与 REPL](/guide/cli-repl)) | 未设置 |
+| `LUNA_COLOR` | `1` 强制开色、`0` 强制关色;优先级低于上面的关闭变量 | 未设置 |
+| `TERM` | 为 `dumb` 时自动降级为纯文本 | — |
+| `HOME` | 决定历史文件 `~/.luna_history` 与用户插件目录 `~/.luna/plugins` 的位置;为空时历史不落盘、用户目录跳过 | — |
+| `LUNA_PLUGIN_PATH` | 冒号分隔的额外插件目录,依次参与发现,优先级排在 `./plugins` 与 `~/.luna/plugins` 之后 | 未设置 |
+| `LUNA_SOCK_DIR` | attach 监听 socket(`luna-<pid>.sock`,0600)的存放目录 | `/tmp` |
+| `LUNA_VENDOR_DIR` | 内嵌 LuaRocks 的 vendor 目录覆盖(一般不需要动,构建期已定) | 构建期定值 |
+| `LUNA_COVERAGE` | 仅 Profiling 覆盖率构建有效:置位后嵌入式策略模块按真实文件名加载以便 luacov 记数 | 未设置 |
+| `PWD` | `path` 模块在取不到进程 cwd 时的回退 | shell 透传 |
+
+`LUNA_*` 之间没有从属关系,逐条独立生效;`NO_COLOR` 遵循 [no-color.org](https://no-color.org) 约定,任何非空值都算置位。
+
+## 命令行开关
+
+| 开关 | 作用 |
+| --- | --- |
+| `--no-color` | 本次会话关闭着色(与 `NO_COLOR` 同效,范围仅本次) |
+| `--no-plugins` | 跳过整个插件发现过程;排查"装了插件之后行为变了"先加这个复现 |
+| `--no-serve` | 不建 attach 监听 socket(目标端关闭被接入能力;客户端自身本来就不建) |
+| `--attach <pid>` | 接入另一个运行中的 luna 进程,见 [CLI 与 REPL](/guide/cli-repl) 的 attach 节 |
+| `--help` | 用法与示例 |
+
+`luna serve` 另有自己的参数面(目录/端口不限顺序),见[标准库 · http](/stdlib/http)。
+
+## 落盘文件
+
+| 路径 | 内容 |
+| --- | --- |
+| `~/.luna_history` | 输入历史(带时间戳分隔),重启后 `↑` 召回;TTY 且 `HOME` 可用时才写 |
+| `$LUNA_SOCK_DIR/luna-<pid>.sock` | attach 监听,0600,进程退出自动清理 |
+
+除此之外 luna 不在用户机器上写任何状态:没有缓存目录,没有首次运行向导,没有遥测。

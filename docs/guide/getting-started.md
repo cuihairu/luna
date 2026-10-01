@@ -1,8 +1,18 @@
 # 快速上手
 
-## 构建
+## 获取 luna
 
-依赖:CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
+两条路,按需选:
+
+**每日构建产物**(免编译,每 UTC 01:23 自动出一份):到 [Actions 的 Daily Build 工作流](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml)取最新一次成功 run,页面底部 Artifacts 区下载固定名 **`daily-build`**——里面是三平台 zip(Linux x64 / Linux arm64 / macOS Apple Silicon)+ `BUILD_INFO.txt`(commit 与时间)+ `VERIFY.md`(验证步骤);只要某个平台就直取 `pkg-linux-x64` / `pkg-linux-arm64` / `pkg-macos-arm64`。解压后:
+
+```bash
+./luna -e '6*7'      # 应答 Out[1]: 42
+```
+
+macOS 包未做签名,首次运行先 `xattr -cr luna` 清隔离属性(包内 PLATFORM-NOTES.txt 有同款说明)。这是 CI 构建产物分发,不对应任何 tag 或 Release。
+
+**源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
 
 ```bash
 # Linux / macOS
@@ -11,47 +21,43 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
+测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
+
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 
 Windows 用 `cmake --build build --config Debug`,同上。
 
-## 覆盖率
-
-两棵树各自全绿是提交前置条件;覆盖率测量用独立的 Profiling 插桩树,同一套测试
-原样跑一遍:
+## 三十秒上手
 
 ```bash
-cmake -S . -B build-cov -DCMAKE_BUILD_TYPE=Profiling \
-      -DCMAKE_C_FLAGS_PROFILING="-O0 -g --coverage" \
-      -DCMAKE_CXX_FLAGS_PROFILING="-O0 -g --coverage" \
-      -DCMAKE_EXE_LINKER_FLAGS_PROFILING="--coverage" \
-      -DCMAKE_SHARED_LINKER_FLAGS_PROFILING="--coverage"
-cmake --build build-cov -j
-ctest --test-dir build-cov           # 串行:统计文件的合并假定无并发写
-
-cmake --build build-cov --target gcovr-summary   # C 侧(src/)
-cmake --build build-cov --target lua_coverage    # Lua 侧(lua/)
+luna                          # ① 交互控制台(像 node)
+luna hello.lua                # ② 跑一个脚本(像 lua)
+luna serve ./docs 8000        # ③ 秒起一个静态文件服务(像 python -m http.server)
 ```
 
-- **C 侧**由 gcov/gcovr 计数;被 SIGTERM 杀掉的进程不写 `.gcda`,所以测试夹具
-  都以正常退出收尾。
-- **Lua 侧**由内置的 luacov 接线计数(仅 Profiling 树自动生效):测试与二进制
-  在 `LUNA_COVERAGE=1` 下把嵌入式策略模块按真实文件名加载,行级命中合并进
-  `build-cov/luacov.stats.out`,`lua_coverage` 目标渲染报告并把汇总表打到构建
-  输出。普通构建与交互行为不受影响(报错里的 `'=(luna/x)'` 块名原样保留)。
-- 合并 hook 的分工:每个 Lua 态只有一个 debug 钩子槽位,覆盖率接管该槽位后按
-  事件分发——行事件给 luacov 记数,行事件与 count 事件都转发一步 `kernel.count_hook()`
-  (`^C` 中断检查与 attach 轮询)。转发不挑事件种类是刻意的:luacov 的逐行记账
-  本身也消耗 count 预算,紧凑循环里 count 事件可能只落在钩子帧内而永远到不了
-  用户代码,行事件每迭代必发,从它驱动不依赖指令预算的落点。
+第 ③ 步不需要任何脚本:浏览器打开 `http://localhost:8000` 就是目录列表或 index.html。要接口服务,一行也够:
 
-## 三种启动方式
+```bash
+luna -e 'require("http").serve(function(req, res)
+  res:json({ hello = "luna", path = req.path }) end)'
+```
+
+```bash
+$ curl http://localhost:8000/api?name=cui
+{"hello":"luna","path":"/api"}          # 键序以运行时为准
+^C                                       # ^C 即停,退出码 130
+```
+
+细节见[标准库 · http](/stdlib/http)。
+
+## 启动方式
 
 ```bash
 luna                     # 交互控制台(像 node)
 luna script.lua a b      # 跑脚本后退出,a b 成为脚本的 `...`(像 lua)
 luna -i script.lua       # 跑脚本后落入控制台
 luna -e 'print(6 * 7)'   # 求值后退出(像 node -e),表达式按 Out[n] 回显
+luna serve [dir] [port]  # 静态文件服务,^C 停止(见上「三十秒上手」)
 ```
 
 通用开关:

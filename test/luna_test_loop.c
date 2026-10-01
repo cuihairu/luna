@@ -49,6 +49,10 @@
 #include "luna_cov.h"
 #include "luna_kernel.h"
 
+int luaopen_socket_core(lua_State *L); /* http.serve cases need socket.http */
+int luaopen_mime_core(lua_State *L);   /* ...and socket.http pulls mime */
+int luaopen_lfs(lua_State *L);         /* ...and the static face pulls fs */
+
 static lua_State *L;
 
 /* eval(code) -> one string from the stack */
@@ -200,6 +204,16 @@ static int setup_loop(void **state)
         "package.path = '" LUNA_TEST_MODULES_DIR "/?.lua;"
         LUNA_TEST_MODULES_DIR "/?/init.lua;' .. package.path\n"
         "return type(require('loop.http').get)"), "function");
+    /* the stdlib http face (socket.http delegate) needs luasocket's
+     * C core staged the way luna_main does */
+    luaL_requiref(L, "socket.core", luaopen_socket_core, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "mime.core", luaopen_mime_core, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lfs", luaopen_lfs, 0);
+    lua_pop(L, 1);
+    assert_string_equal(eval_string(
+        "return type(require('http').serve)"), "function");
     expose_rlimit_helpers();
     /* a previous case must not leave anything ticking */
     assert_string_equal(eval_string("return loop.run()"), "true");
@@ -5815,6 +5829,99 @@ static void test_maybe_drain_contract(void **state)
         "return 'returned'"), "returned");
 }
 
+/* -- http.serve: the stdlib http module's one-line server face ------
+ * Static, handler and CLI-contract legs; each runs on port 0 so the
+ * resolved port comes back through srv.port. The client side is
+ * loop.http (the stdlib face delegates to luasocket, which has no
+ * get sugar). Every leg closes its server before the final assert so
+ * a mismatch never leaks live handles into the next case. */
+
+static void test_serve_static_face(void **state)
+{
+    (void)state;
+    /* the staged module tree doubles as the served directory: a real
+     * file with its content type, a missing path, a traversal attempt
+     * (any ".." segment is refused outright) and the root listing */
+    assert_string_equal(eval_string(
+        "local http = require('http')\n"
+        "local lhttp = require('loop.http')\n"
+        "local srv = http.serve('" LUNA_TEST_MODULES_DIR "', 0)\n"
+        "local base = 'http://127.0.0.1:' .. srv.port\n"
+        "out = tostring(srv.port > 0) .. ','\n"
+        "lhttp.get(base .. '/loop/http.lua', function(e1, r1)\n"
+        "  out = out .. tostring(e1) .. ',' ..\n"
+        "        tostring(r1 and r1.status) .. ','\n"
+        "      .. tostring(r1 and r1.headers['content-type']) .. ','\n"
+        "      .. tostring(r1 and #r1.body > 100) .. ';'\n"
+        "  lhttp.get(base .. '/no/such/file.lua', function(e2, r2)\n"
+        "    out = out .. tostring(r2 and r2.status) .. ';'\n"
+        "    lhttp.get(base .. '/../etc/passwd', function(e3, r3)\n"
+        "      out = out .. tostring(r3 and r3.status) .. ';'\n"
+        "      lhttp.get(base .. '/', function(e4, r4)\n"
+        "        out = out .. tostring(r4 and r4.status) .. ','\n"
+        "            .. tostring(r4 and r4.body:find('Index of /',\n"
+        "                        1, true) ~= nil)\n"
+        "        srv:close()\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true,nil,200,text/plain; charset=utf-8,true;404;403;200,true");
+}
+
+static void test_serve_handler_face(void **state)
+{
+    (void)state;
+    /* programmable mode: query parsed off the path, res:json sets the
+     * content type and the body, res.status steers the code; srv.url
+     * carries the resolved port */
+    assert_string_equal(eval_string(
+        "local http = require('http')\n"
+        "local lhttp = require('loop.http')\n"
+        "local srv = http.serve(function(req, res)\n"
+        "  if req.path == '/api' then\n"
+        "    res:json({hello = req.query.name})\n"
+        "  else\n"
+        "    res.status = 404\n"
+        "    res:json({err = req.path})\n"
+        "  end\n"
+        "end, 0)\n"
+        "local base = 'http://127.0.0.1:' .. srv.port\n"
+        "out = tostring(srv.port > 0\n"
+        "  and srv.url:find(':' .. srv.port .. '/', 1, true) ~= nil)\n"
+        "lhttp.get(base .. '/api?name=luna', function(e1, r1)\n"
+        "  out = out .. ',' .. tostring(e1) .. ','\n"
+        "      .. tostring(r1 and r1.status) .. ','\n"
+        "      .. tostring(r1 and r1.body) .. ','\n"
+        "      .. tostring(r1 and r1.headers['content-type']) .. ';'\n"
+        "  lhttp.get(base .. '/zzz', function(e2, r2)\n"
+        "    out = out .. tostring(r2 and r2.status) .. ','\n"
+        "        .. tostring(r2 and r2.body)\n"
+        "    srv:close()\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "true,nil,200,{\"hello\":\"luna\"},"
+        "application/json; charset=utf-8;404,{\"err\":\"/zzz\"}");
+}
+
+static void test_serve_cli_contracts(void **state)
+{
+    (void)state;
+    /* serveCli's parse legs without ever listening: --help exits 0,
+     * a missing directory 1, an unknown flag 2 */
+    assert_string_equal(eval_string(
+        "local http = require('http')\n"
+        "assert(http.serveCli({ '--help' }) == 0)\n"
+        "assert(http.serveCli({ '/no/such/dir-xyz' }) == 1)\n"
+        "assert(http.serveCli({ '--bogus' }) == 2)\n"
+        "return 'ok'"),
+        "ok");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -6023,6 +6130,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_process_exec_shell_sugar, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_process_exec_sync_face, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_maybe_drain_contract, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_serve_static_face, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_serve_handler_face, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_serve_cli_contracts, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

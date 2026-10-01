@@ -111,7 +111,9 @@ add_test(NAME serve COMMAND luna_test_serve)
 
 # Opt-in event loop: timers/immediates, keep-alive, serve poll, ^C
 add_executable(luna_test_loop luna_test_loop.c)
-target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel Threads::Threads)
+# luasocket/lfs feed require "http" (socket.http delegate + the static
+# face's fs use) in the serve cases
+target_link_libraries(luna_test_loop PRIVATE cmocka-static lualib luna_loop luna_kernel luasocket lfs Threads::Threads)
 # the staged module tree feeds require "loop.http" in the Lua-side cases
 target_compile_definitions(luna_test_loop PRIVATE
         LUNA_TEST_MODULES_DIR="${CMAKE_BINARY_DIR}/luna_modules")

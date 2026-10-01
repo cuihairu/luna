@@ -300,7 +300,17 @@ static void coverage_shutdown(lua_State *L)
 
 int main(int argc, char *argv[])
 {
-    signal(SIGINT, luna_on_sigint);
+    /* SIGINT without SA_RESTART (glibc's signal() would restart the
+     * blocked syscall): a ^C landing while loop.run() blocks in epoll
+     * must EINTR it, or the flag luna_on_sigint sets is never seen —
+     * the loop has to turn before its prepare hook can check it. Same
+     * reasoning as install_sigusr1 below. */
+    struct sigaction sa_int;
+    memset(&sa_int, 0, sizeof(sa_int));
+    sa_int.sa_handler = luna_on_sigint;
+    sigemptyset(&sa_int.sa_mask);
+    sa_int.sa_flags = 0; /* EINTR is the point */
+    sigaction(SIGINT, &sa_int, NULL);
     /* writing a socket whose peer died must surface as an EPIPE error
      * (luasocket's send, the attach frame) — never as a process-killing
      * signal: pcall can't catch SIGPIPE */

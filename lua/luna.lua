@@ -48,7 +48,9 @@ examples:
   luna                          interactive console (like `node`)
   luna script.lua a b           run script.lua with args a b (like `lua`)
   luna -i script.lua            run script.lua, then drop into the console
-  luna -e 'print(("x"):rep(3))' evaluate code and exit (like `node -e`)]])
+  luna -e 'print(("x"):rep(3))' evaluate code and exit (like `node -e`)
+  luna serve [dir] [port]       serve a directory over http (like
+                                `python -m http.server`)]])
 
 parser:flag("-i --interactive",
     "after the script (or instead of it), start the interactive console")
@@ -72,6 +74,15 @@ parser:argument("largs", "arguments passed to the script"):args("*")
 local ROCKS_CMDS = { install = true, search = true, list = true, update = true }
 if arg[1] and ROCKS_CMDS[arg[1]] then
     os.exit(require("luna.rocks").dispatch(arg))
+end
+
+-- One-line static file server: `luna serve [dir] [port]` rides the
+-- http module's serveCli (its flags are that usage's own, not this
+-- parser's), intercepted before argparse like the rocks commands. The
+-- attach socket never opens here — a file server has no live state to
+-- attach to.
+if arg[1] == "serve" then
+    os.exit(require("http").serveCli({ table.unpack(arg, 2) }))
 end
 
 local opts = parser:parse(arg)

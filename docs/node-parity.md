@@ -205,9 +205,9 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in) | 脚本尾部自动排水、全局化未决 | 见下节 | C 入口 + Lua 收尾 | 8 |
 | child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式) | `exec` 糖、同步面 | `process.exec` = `run("sh",{"-c",…})` 糖;`execSync` 走 `io.popen`(已启用) | Lua | 8 |
 | os | ✅ `loop.os`(hostname/type/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | `arch`/`release`/`EOL`/`userInfo` | libuv `uv_os_uname`/`uv_os_get_passwd` 接进 loop.os | C(loop.c 内) | 8 |
-| path | ❌ 无 | 全部 | 纯 Lua 新模块(POSIX 语义) | Lua | 6 |
-| util | ⚠️ `luna.introspect` 是 REPL 内省(签名/help/suggest),不是值格式化 | `util.inspect`/`util.format` | 纯 Lua 新模块 | Lua | 6 |
-| events | ❌ 无 | EventEmitter | 纯 Lua 新模块 | Lua | 6 |
+| path | ✅ 批次 6 已落地(`path`,纯 Lua) | — | — | Lua | 6 |
+| util | ✅ 批次 6 已落地(`util`,纯 Lua;`luna.introspect` 仍是 REPL 内省,两者分工见下) | — | — | Lua | 6 |
+| events | ✅ 批次 6 已落地(`events`,纯 Lua) | — | — | Lua | 6 |
 | stream | ❌ 无(`sock:read` 等回调流已有) | Readable/Writable/pipe 抽象 | 纯 Lua,基于 events | Lua | 7 |
 
 **"绑定 C 库优先"在这张表上的落法**:timers/child_process/os 的底座已经是 libuv(deps 已在)——B 面的唯一新增 C 代码是 loop.os 的四个 getter(~60 行,仍在既有 `os_funcs` 表里);path/util/events/stream **没有对应的成熟 C 库可绑**(Node 本尊全是纯 JS;libuv 无 path join/EventEmitter),它们落在策略层正合架构分层——"C 内核尽量薄,行为逻辑全是 Lua"。
@@ -241,14 +241,30 @@ path.sep                          -- "/"
 path.delimiter                    -- ":"
 ```
 
-Node 语义按其文档钉死(resolve 的 cwd 锚定、normalize 保留双前导斜杠、trailing sep 的处理)——每个函数的 Node 行为对照进用例;~150 行纯 Lua,零依赖,**不用 C 的理由:Node 本尊纯 JS,libuv 无对应物**。
+Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边界行为对照进用例);~170 行纯 Lua,零依赖,**不用 C 的理由:Node 本尊纯 JS,libuv 无对应物**。
+
+**实现勘定(2026-10-01,批次 6)**:
+- **normalize/resolve 折叠连续斜杠**——本节初稿写的「normalize 保留双前导斜杠」与 v24 实测不符:`normalize("//a")` → `"/a"`、`resolve("//a","b")` → `"/a/b"`(旧版 Node 的双斜杠保留已不成立);normalize 与 resolve 在尾斜杠上分叉——normalize 保留(`"foo/"` → `"foo/"`),resolve 剥掉(`resolve("/a/b/")` → `"/a/b"`);
+- **dirname 是文本操作**:斜杠原样保留(`"a//b"` → `"a/"`、`"//a//b"` → `"//a/"`);parse 的 dir 同样原样(`parse("//x/y").dir == "//x"`);
+- **extname 的「全点前缀」规则**:`".."` 与 `".bashrc"` 无扩展名,`"a.."` → `"."`——最后一个点之前必须存在非点字符;
+- **format 的拼接规则**:`dir` 非空则原样接 `dir .. "/" .. file`(`dir="/a/b/"` → `"/a/b//x"`,不吸收尾斜杠),仅 root 无 dir 时不加分隔符;`ext` 无前导点会补点(`{name="x", ext="lua"}` → `"x.lua"`,`{ext="lua"}` → `".lua"`);字段空串视为缺席(JS 真值口径);
+- **relative 先 resolve 再段差**——同路径(含尾斜杠差异)返回 `""`;
+- 参数类型错 raise(消息 `path.<fn>: ...`),cwd 锚定经 lfs(`luna` 随附恒在;脱离宿主时回退 `$PWD`/`"/"`,该两腿 lfs 在场不可达,覆盖账记结构性)。
 
 ### util(批次 6,纯 Lua)
 
-- **`util.inspect(value, opts?)`**:值格式化——`depth`(默认 2,`math.huge` 全展开)、循环引用 `[Circular *1]`(表登记)、长数组截断 `… N more items`(Node 的 breakLength 语义简化为 opts.maxArray/opts.maxString 的个数截断,折行不进 v1)、字符串带引号与转义、函数 `<function: shortsrc>`(经 debug.info)、线程/udata 用 tostring 兜底、键 `["a b"]` 形式按 Lua 语法合法名规则;
+- **`util.inspect(value, opts?)`**:值格式化——`depth`(默认 2,`math.huge` 全展开,负数顶层即塌缩)、循环引用 `[Circular *1]`(表登记)、长数组截断 `... N more items`(Node 的 breakLength 语义简化为 opts.maxArrayLength/opts.maxStringLength 的个数截断,折行不进 v1)、字符串带引号与转义、函数 `<function: shortsrc:line>`(经 debug.info;C 函数 tostring 兜底)、线程/udata 用 tostring 兜底、键 `["a b"]` 形式按 Lua 语法合法名规则(Lua 关键字加方括号);
 - **`util.format(fmt, ...)`**:`%s`/`%d`/`%i`/`%f`/`%x`/`%X`/`%o`(走 util.inspect,Node 的 %o)/`%j`(JSON,后端 dkjson,同树可 require)/`%%`;无格式符时全参数空格连接(Node 同款);超参尾接;
 - **与 `luna.introspect` 的分工**:introspect 是 REPL 的**内省**(函数签名、help、doc_for、suggest——查"这个函数怎么用");util.inspect 是**值格式化**(把任意值印成人话——查"这个数据长什么样")。不合并;REPL 的 `Out[n]` 表格回显改用 inspect 是可选的后续打磨(记入 todo,不承诺批次)。
 - **不做**:`promisify`/`callbackify`(Lua 无 promise,契约无锚)、`types`(isDeepStrictEqual 一族)。
+
+**实现勘定(2026-10-01,批次 6,Node v24.21.0 机器实证)**:
+- **`%d`/`%f` 不截断**(v24 实测 `format("%d", 3.7)` → `"3.7"`),只有 `%i` 向零截断(`-3.7` → `-3`);转换走 JS `Number()` 收窄——整合法数字串转数、其余一律 `"NaN"`(`"42abc"` → `"NaN"`,布尔按 1/0);`NaN`/`Infinity` 按原词拼写(非 Lua 的 `nan`/`inf`);
+- **`%x`/`%X` 是本模块扩展**:Node v24 的 util.format **没有** `%x`/`%X`(实测留原样不消费参数)——todo 契约点名要求,故按十六进制实现(向零截整、负数 `-` 前缀),此为有意分叉;
+- **`%c` 消费参数但不产出**(无终端样式层);未知转换符 `%` 原样保留且不消费(`format("%y", "x")` → `"%y x"`);
+- **`%%` 只在发生格式化时折叠**:`format("100%%")` 单串无参走快路径原样返回 `"100%%"`,`format("50%% and %s", "x")` → `"50% and x"`;
+- **`%j` 的 dkjson 分叉**:dkjson 比浏览器 JSON.stringify 严——函数值直接报错而非省略,失败回退 util.inspect(不抛);
+- inspect 的 **Lua 语法适配**:表一律 `{}` 形态(JS 的 `[]`/`{}` 在 Lua 无对应)、键值 `k = v` 而非 `k: v`;**键排序保确定性**(序列段在前,其余数字升序、字符串字节序、他类按 tostring;pairs 序不定,无法对齐 Node 插入序——适配而非分叉);深度塌缩标记 `[Object]`/`[Array]`(按 `#t` 判);截断省略号用 ASCII `...`;共享(非环)引用各自完整渲染,只有祖先链上的重访标 `[Circular *N]`。
 
 ### events(批次 6,纯 Lua)
 
@@ -266,6 +282,14 @@ em:setMaxListeners(20)                  -- 缺省 10(Events.defaultMaxListeners)
 ```
 
 ~150 行纯 Lua;**不用 C 的理由**同 path(无 C 库可绑,Node 纯 JS);它是 stream 的地基,先于 stream 一个批次。
+
+**实现勘定(2026-10-01,批次 6,Node v24.21.0 机器实证)**:
+- `events.new()` 构造,`require("events").EventEmitter` 是模块表别名(`.defaultMaxListeners = 10` 可改,影响此后所有添加判定);
+- **newListener 在添加前发出**(其回调里 `listenerCount` 不含新者),**removeListener 在移除后发出**;`removeAllListeners(ev)` 按 Node 源码同序 **LIFO 逐个**发 removeListener,无参调用全清不发;
+- **超限警告**写 io.stderr,文本照抄 Node(含计数单复数与 `emitter:setMaxListeners()` 的 Lua 冒号拼写),每 (emitter, 事件名) 一次,监听移除或 `setMaxListeners` 后**重臂**可再发;`0`/负上限 = 不限;
+- **emit('error') 无监听 → raise**:表负载原样 `error(payload)`(JS Error 对应物),标量包 `Unhandled error. (...)`(字符串带 `'...'` 引号,数字走 inspect),无负载报 `Unhandled 'error' event`;错误消息 `error(..., 0)` 不带 chunk 位置前缀(与 xml 环错误同口径);
+- emit 按监听快照分发——回调内自移除本轮照常调用、once 内重挂的新监听下轮生效;`listeners()` 返回副本且 once 项以**原函数**入表(off 匹配的是原函数);`removeListener` 只移除首个匹配;
+- **eventNames 不做**(依赖插入序,Lua pairs 序不定,返回序无法对齐 Node——登记而非实现);`emitter once` 与 `setMaxListeners` 均返回 self 可链式。
 
 ### stream(批次 7,纯 Lua,基于 events)
 

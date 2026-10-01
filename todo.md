@@ -954,14 +954,14 @@
       转义 + opts.indent;xml.sax 透传 lxp handler(流式面)。用例:实体/
       CDATA/嵌套/属性、坏输入行列(mismatched tag 等)、encode 往返、SAX
       增量喂。**验收**:同上。(实录见下节)
-- [ ] **批次 6:path + util + events(纯 Lua,零依赖)**。path 按 Node
+- [x] **批次 6:path + util + events(纯 Lua,零依赖)**。path 按 Node
       path.posix 逐函数对照钉死(resolve/normalize/join/relative/parse/
       format 的 Node 边界语义各配用例);util.inspect(depth/循环 [Circular]/
       截断/键引号规则)+ util.format(%s %d %f %x %X %o %j %%,无符连接,
       超参尾接);events 全 API(on/once/off/prepend/listeners/
       listenerCount/setMaxListeners/缺省 10 警告/'error' 无监听 raise/
       newListener 内建事件)。**验收**:三模块用例绿;两树全绿;文档
-      (guide/modules.md 表 + node-parity.md 状态勾稽)。
+      (guide/modules.md 表 + node-parity.md 状态勾稽)。(实录见下节)
 - [ ] **批次 7:stream(基于 events,纯 Lua)**。Readable/Writable/Duplex/
       Transform + pipe 背压(write false 停推等 drain 续推/unpipe)、
       highWaterMark 记账阈值;适配器至少两个:sock(loop.net)→Duplex、
@@ -1268,7 +1268,65 @@
       纪律照旧——先重建后跑。单笔提交,push 前 fetch origin main
       核对 SHA;不打 tag、不发版。
 
+### 批次 6(path + util + events)实录(2026-10-01)
 
+- [x] **vendor:无**(纯 Lua 零依赖,与派发一致)。三模块落
+      `lua/modules/{path,util,events}/init.lua` 单文件,经既有
+      LUNA_STDLIB_WRAPPERS glob(CONFIGURE_DEPENDS)staged 到
+      `luna_modules/`,零构建接线、零注册代码——新目录需重 configure
+      才进构建树(file(COPY) 只在 configure 跑),本轮以 staging 与源
+      逐文件 diff 核对防副本过期。
+- [x] **语义钉版:Node v24.21.0 机器实证,探针先行**(四轮
+      /tmp/probe_node_*.js 对真二进制钉值),推翻三处文档级假设:
+      normalize/resolve **折叠**前导双斜杠(旧「保留双前导斜杠」不成立,
+      normalize 与 resolve 在尾斜杠上分叉——前者保留后者剥掉);
+      util.format 的 **%d/%f 不截断**(3.7→"3.7",仅 %i 向零截断,
+      转换走 JS Number() 收窄,"42abc"→NaN);**%x/%X Node v24 没有**
+      (原样留白不消费参数)——todo 契约点名要求,按十六进制做记档扩展。
+      其余:dirname 是文本操作、extname 全点前缀规则、format 的 dir
+      原样拼接与空串缺席(JS 真值)、inspect 深度塌缩 [Object]/[Array]
+      与 ASCII 三点、events 的 newListener 前/removeListener 后/LIFO
+      清除/emit('error') 四形态。
+- [x] **实现**:path 段栈 normalize + resolve 右起拼接(cwd 经 lfs 带
+      缓存、回退 $PWD→"/")+ parse/format 的 JS 真值口径,参数类型错
+      raise(`path.<fn>: ...`);util 的 inspect 确定性键序(序列段
+      在前,数字升序、字符串字节序)与祖先链环检测 `[Circular *N]`,
+      format 走转换符表 + CONSUMING(未知符原样不消费、%% 仅格式化时
+      折叠、%j 经 dkjson 失败退 inspect);events 快照分发(自移除本轮
+      照常、once 内重挂下轮生效)、超限警告照抄 Node 文本写 io.stderr
+      每 (emitter, 事件名) 一次、移除/setMaxListeners 后重臂、0/负
+      上限不限,emit('error') 无监听一律 error(..., 0) 不带位置前缀
+      (与 xml 环错误同口径)。
+- [x] modules 组 +14 用例(69→83):path 5 个(normalize/join/
+      isAbsolute、resolve+relative+cwd 锚定、dirname/basename/extname、
+      parse/format、参数契约 7 raise)、util 5 个(转换符全谱、快路径
+      与超参尾接、inspect 形状/转义/键序/函数/深度、截断与环、参数
+      契约)、events 4 个(分发与快照/prepend 序/自移除/once 重挂、
+      内建事件前后置与 LIFO、error 四形态+警告文本精确断言+重臂+
+      0 上限、参数契约 5 raise)。警告文本断言经 **io.stderr 全局字段
+      替换**捕获(零产品 API 污染)。首轮 5 败全为测试侧期望值笔误,
+      库侧仅三处返工:resolve 剥尾斜杠、inspect 负 depth 不钳
+      (maxArrayLength/maxStringLength 才钳 0)、error level 0。
+- [x] 覆盖率账:Lua 侧总 **96.87%**(3307/107;批次 5 收官 96.42%,
+      **超基线**);events 100%(127/0)、util 99.53%(1 暗 = `return
+      "%" .. spec` 死防御,CONSUMING 表全覆盖后不可达)、path 98.82%
+      (2 暗 = lfs 缺席回退 $PWD 与 "/" 两腿,luna 随附恒在 lfs,
+      结构性登记不入债)。C 台账与批次 4/5 持平:lines 94.8%
+      (2689/2837)、functions 100%(249/249)、branches 77.6%
+      (948/1222)——本轮零 C 产品代码,只动测试与 Lua/文档。
+- [x] 文档同步:guide/modules.md 内置表三行(后端列「纯 Lua」)+
+      表后 Node 语义模块说明段(非格式模块,无 nil,err 口径,参数
+      类型错一律 raise,行为按 v24 钉版,分叉见 node-parity);
+      node-parity.md B 面表三行翻 ✅ + path/util/events 三节实现
+      勘定块;README/architecture/index 三处标准库清单加三模块
+      (README 与 index 的编辑被并行会话 logo 提交 8174e5f 顺带
+      收走,内容完好);cmake/luacov.config.in include 收编三目录。
+- [x] 门禁:两树 cmake --build + ctest **16 组全绿**(串行)——build
+      196.70s、build-cov 321.71s(rocks 103.97s 实绿,负载 34 无假挂)。
+      同窗顺手完成用户点名的 CI 修复(cmocka FetchContent 换
+      gitlab.com/cmocka/cmocka 镜像,tag 56eb3a18 双源核对一致,全新
+      scratch 树实测从镜像拉取成功),已单独提交。单笔提交,push 前
+      fetch origin main 核对 SHA;不打 tag、不发版。
 
 - XML 的 XPath/DTD 验证/libxml2 全家桶面、命名空间前缀展开
   (fast-xml-parser 同款「前缀原样」口径);

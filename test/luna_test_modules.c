@@ -1760,6 +1760,562 @@ static void test_xml_args_contract(void **state)
         "true,true,false,false");
 }
 
+/* -- path (Node path.posix, batch 6) ------------------------------------- */
+
+static void test_path_normalize_join(void **state)
+{
+    (void)state;
+    /* v24 实证: normalize 折叠连续斜杠 (含前导 //), 尾斜杠保留,
+     * '.' 与 '..' 消解 (绝对路径下 .. 到根为止)。 */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.normalize('//a') .. ',' .. p.normalize('//') .. ','\n"
+                    "  .. p.normalize('a//b') .. ',' .. p.normalize('a/..') .. ','\n"
+                    "  .. p.normalize('foo/') .. ',' .. p.normalize('./') .. ','\n"
+                    "  .. p.normalize('../') .. ',' .. p.normalize('/a/../..') .. ','\n"
+                    "  .. p.normalize('a/./b/./c') .. ',' .. p.normalize('./a') .. ','\n"
+                    "  .. p.normalize('a/../..') .. ',' .. p.normalize('') .. ','\n"
+                    "  .. p.normalize('.')"),
+        "/a,/,a/b,.,foo/,./,../,/,a/b/c,a,..,.,.");
+    /* join 忽略空段后走 normalize; 无参 → '.' */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.join('a','b/','../c') .. ',' .. p.join('a','','b') .. ','\n"
+                    "  .. p.join() .. ',' .. p.join('/foo','bar','./baz') .. ','\n"
+                    "  .. p.join('..','x') .. ',' .. p.join('a','/b') .. ','\n"
+                    "  .. p.join('.','b') .. ',' .. p.join('a','//b') .. ','\n"
+                    "  .. p.join('','')"),
+        "a/c,a/b,.,/foo/bar/baz,../x,a/b,b,a/b,.");
+    /* isAbsolute: 仅根斜杠起头 */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return tostring(p.isAbsolute('/')) .. ','\n"
+                    "  .. tostring(p.isAbsolute('//a')) .. ','\n"
+                    "  .. tostring(p.isAbsolute('a/b')) .. ','\n"
+                    "  .. tostring(p.isAbsolute('./a')) .. ','\n"
+                    "  .. tostring(p.isAbsolute(''))"),
+        "true,true,false,false,false");
+}
+
+static void test_path_resolve_relative(void **state)
+{
+    (void)state;
+    /* resolve: 右起拼接至绝对段, 折叠斜杠, 剥尾斜杠 */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.resolve('/a','b','c') .. ',' .. p.resolve('//a','b') .. ','\n"
+                    "  .. p.resolve('a','/b') .. ',' .. p.resolve('/a/../b','c') .. ','\n"
+                    "  .. p.resolve('/','a') .. ',' .. p.resolve('/a/b/')"),
+        "/a/b/c,/a/b,/b,/b/c,/a,/a/b");
+    /* 无绝对段时锚定 cwd; 二次命中 cwd 缓存 */
+    char cwdbuf[384];
+    assert_non_null(getcwd(cwdbuf, sizeof(cwdbuf)));
+    char expect[1024];
+    snprintf(expect, sizeof(expect), "%s/a/b,%s/x", cwdbuf, cwdbuf);
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.resolve('a','./b') .. ',' .. p.resolve('x')"),
+        expect);
+    /* relative: 段差 + 上跳; 同路径 (含尾斜杠差异) → '' */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.relative('/a/b','/a/c/d') .. ','\n"
+                    "  .. tostring(p.relative('/a/b','/a/b') == '') .. ','\n"
+                    "  .. tostring(p.relative('/a/b','/a/b/') == '') .. ','\n"
+                    "  .. p.relative('/a/b/c','/a/b') .. ','\n"
+                    "  .. p.relative('/a/b','/a/b/c/d') .. ','\n"
+                    "  .. p.relative('/a/x','/b/y') .. ','\n"
+                    "  .. p.relative('/','/a') .. ',' .. p.relative('/a','/')"),
+        "../c/d,true,true,..,c/d,../../b/y,a,..");
+}
+
+static void test_path_dirname_basename_extname(void **state)
+{
+    (void)state;
+    /* dirname 是文本操作: a//b → a/, //a//b → //a/ (斜杠原样保留) */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.dirname('/a/b/luna.lua') .. ',' .. p.dirname('luna.lua') .. ','\n"
+                    "  .. p.dirname('/luna.lua') .. ',' .. p.dirname('/a/b/') .. ','\n"
+                    "  .. p.dirname('a//b') .. ',' .. p.dirname('/') .. ','\n"
+                    "  .. p.dirname('//a//b') .. ',' .. p.dirname('a') .. ','\n"
+                    "  .. p.dirname('./a') .. ',' .. p.dirname('../a') .. ','\n"
+                    "  .. p.dirname('a/') .. ',' .. p.dirname('')"),
+        "/a/b,.,/,/a,a/,/,//a/,.,.,..,.,.");
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.basename('/a/b/luna.lua') .. ','\n"
+                    "  .. p.basename('/a/b/luna.lua','.lua') .. ','\n"
+                    "  .. p.basename('/a/b/') .. ','\n"
+                    "  .. tostring(p.basename('.lua','.lua') == '') .. ','\n"
+                    "  .. p.basename('a.lua.lua','.lua') .. ','\n"
+                    "  .. tostring(p.basename('/') == '') .. ','\n"
+                    "  .. tostring(p.basename('') == '') .. ','\n"
+                    "  .. p.basename('/a/b/','.x') .. ','\n"
+                    "  .. p.basename('/a/b/', '')"),
+        "luna.lua,luna,b,true,a.lua,true,true,b,b");
+    /* extname 的全点前缀规则: '..' 与 '.bashrc' 无扩展名 */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.extname('luna.tar.gz') .. ','\n"
+                    "  .. tostring(p.extname('luna') == '') .. ','\n"
+                    "  .. tostring(p.extname('.bashrc') == '') .. ','\n"
+                    "  .. p.extname('a..') .. ',' .. p.extname('foo.') .. ','\n"
+                    "  .. p.extname('.a.b') .. ',' .. p.extname('a.b.') .. ','\n"
+                    "  .. tostring(p.extname('/a/.c') == '') .. ','\n"
+                    "  .. tostring(p.extname('..') == '')"),
+        ".gz,true,true,.,.,.b,.,true,true");
+}
+
+static void test_path_parse_format(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local function s(o)\n"
+                    "  return o.root..'|'..o.dir..'|'..o.base..'|'..o.name..'|'..o.ext\n"
+                    "end\n"
+                    "return s(p.parse('/a/b/luna.lua')) .. ',' .. s(p.parse('.')) .. ','\n"
+                    "  .. s(p.parse('/')) .. ',' .. s(p.parse('a/b/')) .. ','\n"
+                    "  .. s(p.parse('//x/y')) .. ',' .. s(p.parse('..')) .. ','\n"
+                    "  .. s(p.parse('/luna.lua'))"),
+        "/|/a/b|luna.lua|luna|.lua,||.|.|,/|/|||,|a|b|b|,/|//x|y|y|,||..|..|,"
+        "/|/|luna.lua|luna|.lua");
+    /* format: dir 原样拼接 (尾斜杠不吸收), 仅 root 无 dir 时不加分隔符,
+     * ext 无点补点, 空串视为缺席 (JS 真值口径) */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.format{root='/',dir='/a/b',base='luna.lua',name='luna',ext='.lua'} .. ','\n"
+                    "  .. p.format{dir='/a/b',name='luna',ext='.lua'} .. ','\n"
+                    "  .. p.format{root='/',base='x'} .. ',' .. p.format{base='x'} .. ','\n"
+                    "  .. p.format{name='x',ext='lua'} .. ',' .. p.format{name='x'} .. ','\n"
+                    "  .. p.format{dir='/a/b/',name='x'} .. ','\n"
+                    "  .. p.format{dir='',name='x',ext='.y'} .. ','\n"
+                    "  .. p.format{dir='/',name='x'} .. ','\n"
+                    "  .. p.format{dir='/a/b/',base='y'} .. ','\n"
+                    "  .. tostring(p.format{} == '') .. ',' .. p.format{ext='lua'} .. ','\n"
+                    "  .. p.format{name='x',ext=''} .. ',' .. p.format{dir='a',name='x'} .. ','\n"
+                    "  .. p.format{root='/',name='x'}"),
+        "/a/b/luna.lua,/a/b/luna.lua,/x,x,x.lua,x,/a/b//x,x.y,//x,/a/b//y,true,.lua,x,a/x,/x");
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "return p.sep .. p.delimiter .. ',' .. tostring(p.posix == p)"),
+        "/:,true");
+    /* format 的字段类型错 raise (JS 只校验对象本身, 这里收紧到字段) */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local _, m = pcall(p.format, {base = 42})\n"
+                    "return tostring(m:find('path.format: base must be a string', 1, true) ~= nil)"),
+        "true");
+}
+
+static void test_path_args_contract(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local _, m1 = pcall(p.join, 'a', 42)\n"
+                    "local _, m2 = pcall(p.basename, true)\n"
+                    "local _, m3 = pcall(p.format, 'notatable')\n"
+                    "local _, m4 = pcall(p.parse, {})\n"
+                    "local _, m5 = pcall(p.resolve, '/a', nil)\n"
+                    "local _, m6 = pcall(p.basename, 'a', 42)\n"
+                    "local _, m7 = pcall(p.isAbsolute, 42)\n"
+                    "return tostring(m1:find('path.join', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m2:find('path.basename', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m3:find('expects a table', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m4:find('path.parse', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m5:find('path.resolve', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m6:find('path.basename', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m7:find('path.isAbsolute', 1, true) ~= nil)"),
+        "true,true,true,true,true,true,true");
+}
+
+/* -- util (Node util.format/inspect, batch 6) ----------------------------- */
+
+static void test_util_format_conversions(void **state)
+{
+    (void)state;
+    /* v24 实证: %d/%f 不截断, %i 向零截断; 非数串 → NaN;
+     * NaN/Infinity 按原词。%x/%X 为本模块扩展 (Node v24 无此对)。 */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%s %s','a','b') .. ','\n"
+                    "  .. f('%d',42) .. ',' .. f('%d','42') .. ','\n"
+                    "  .. f('%d','42abc') .. ',' .. f('%d','abc') .. ','\n"
+                    "  .. f('%d',3.7) .. ',' .. f('%d',-3.7) .. ','\n"
+                    "  .. f('%i',3.7) .. ',' .. f('%i',-3.7) .. ','\n"
+                    "  .. f('%i','7.9')"),
+        "a b,42,42,NaN,NaN,3.7,-3.7,3,-3,7");
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%f',3) .. ',' .. f('%f',3.0) .. ','\n"
+                    "  .. f('%f','2.5') .. ',' .. f('%f',0/0) .. ','\n"
+                    "  .. f('%f',math.huge) .. ','\n"
+                    "  .. f('%x',255) .. ',' .. f('%X',255) .. ','\n"
+                    "  .. f('%x',255.9) .. ',' .. f('%x',-26) .. ','\n"
+                    "  .. f('%x','nope') .. ',' .. f('%x',math.huge) .. ','\n"
+                    "  .. f('%d',true) .. ',' .. f('%i','abc') .. ','\n"
+                    "  .. f('%o',255) .. ',' .. f('%o',{a=1})"),
+        "3,3,2.5,NaN,Infinity,ff,FF,ff,-1a,NaN,Infinity,1,NaN,255,{ a = 1 }");
+    /* %j 的 dkjson 失败回退: 函数值无法序列化, 退 inspect */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "local s = f('%j', {f = print})\n"
+                    "return tostring(s:find('{ f = function: 0x', 1, true) ~= nil)"),
+        "true");
+    /* %j 走 json.encode (dkjson); %% 成对折叠, 单串无参原样返回 */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%j',{a={1,2}}) .. ','\n"
+                    "  .. f('100%%') .. ','\n"
+                    "  .. f('%%','x') .. ',' .. f('50%% and %s','x')"),
+        "{\"a\":[1,2]},100%%,% x,50% and x");
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%s',3.0) .. ',' .. f('%s',true) .. ','\n"
+                    "  .. f('%s',0/0) .. ',' .. f('%s',math.huge) .. ','\n"
+                    "  .. f('%s',-math.huge)"),
+        "3,true,NaN,Infinity,-Infinity");
+}
+
+static void test_util_format_no_fmt_and_extras(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%s') .. ',' .. f('a','b','c') .. ','\n"
+                    "  .. f('%s:%s','a','b','extra') .. ',' .. f('%s %s','x')"),
+        "%s,a b c,a:b extra,x %s");
+    /* 未知转换符: '%' 原样保留且不消费参数 */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f('%','x') .. ',' .. f('%y','x') .. ','\n"
+                    "  .. f('%10s','x') .. ',' .. f('%c','x') .. '|end'"),
+        "% x,%y x,%10s x,|end");
+    /* 首参非串: 全参空格连接; 单参非串 inspect */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f(42,'x') .. ',' .. f(42) .. ',' .. f({a=1}) .. ','\n"
+                    "  .. f('x',{a=1}) .. ',' .. f('%s',{1,2})"),
+        "42 x,42,{ a = 1 },x { a = 1 },{ 1, 2 }");
+}
+
+static void test_util_inspect_shapes(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i({1,2,3}) .. ',' .. i({a=1}) .. ',' .. i({}) .. ','\n"
+                    "  .. i(true) .. ',' .. i(nil) .. ',' .. i(1.5) .. ','\n"
+                    "  .. i(3.0) .. ',' .. i(0/0) .. ','\n"
+                    "  .. i(math.huge) .. ',' .. i(-math.huge) .. ','\n"
+                    "  .. i('héllo→')"),
+        "{ 1, 2, 3 },{ a = 1 },{},true,nil,1.5,3,NaN,Infinity,-Infinity,"
+        "\"héllo→\"");
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i('quo\"te\\nnl\\ttab\\\\slash')"),
+        "\"quo\\\"te\\nnl\\ttab\\\\slash\"");
+    /* \r 与其余控制字节按 \\r / \\ddd 逃逸 */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i('a\\rb\\0c')"),
+        "\"a\\rb\\000c\"");
+    /* thread 走 tostring; rank-2 键 (布尔/函数) 括号表示并按 tostring 定序 */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "local th = coroutine.create(function() end)\n"
+                    "local t = i({[print] = 1, [true] = 2})\n"
+                    "return tostring(i(th):find('thread: 0x', 1, true) ~= nil) .. ','\n"
+                    "  .. tostring(t:find('[true] = 2', 1, true) ~= nil) .. ','\n"
+                    "  .. tostring(t:find('[function: 0x', 1, true) ~= nil)"),
+        "true,true,true");
+    /* 深度: 默认 2; 超深塌缩 [Object]/[Array]; 负数顶层即塌缩 */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i({a={b={c={d=1}}}}) .. ','\n"
+                    "  .. i({a={b={c={d=1}}}},{depth=4}) .. ','\n"
+                    "  .. i({a={b={c={d=1}}}},{depth=math.huge}) .. ','\n"
+                    "  .. i({a={b=1}},{depth=0}) .. ','\n"
+                    "  .. i({a={b=1}},{depth=-1}) .. ','\n"
+                    "  .. i({1,{2}},{depth=0}) .. ','\n"
+                    "  .. i({1,{2}},{depth=-1})"),
+        "{ a = { b = { c = [Object] } } },"
+        "{ a = { b = { c = { d = 1 } } } },"
+        "{ a = { b = { c = { d = 1 } } } },"
+        "{ a = [Object] },[Object],{ 1, [Array] },[Array]");
+    /* 键: 标识符裸、Lua 关键字与特殊字符加引号; 序列段在前,
+     * 非序列数字键升序、字符串键字节序 (确定性适配) */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i({['a b']=1, ok=2, ['1']=3, ['end']=4, [10]=5, [-1]=6})"),
+        "{ [-1] = 6, [10] = 5, [\"1\"] = 3, [\"a b\"] = 1, [\"end\"] = 4, ok = 2 }");
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "local s = i(function() end)\n"
+                    "local c = i(print)\n"
+                    "return tostring(s:find('<function ', 1, true) ~= nil) .. ','\n"
+                    "  .. tostring(c:find('function: 0x', 1, true) ~= nil)"),
+        "true,true");
+}
+
+static void test_util_inspect_truncation_circular(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "return i({1,2,3,4,5},{maxArrayLength=2}) .. ','\n"
+                    "  .. i({1,2,3},{maxArrayLength=0}) .. ','\n"
+                    "  .. i('abcdefghijklmnop',{maxStringLength=5})"),
+        "{ 1, 2, ... 3 more items },{ ... 3 more items },"
+        "\"abcde\"... 11 more characters");
+    /* 默认上限: 数组 100 / 字符串 10000; 负上限钳 0 */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "local big = {}\n"
+                    "for j = 1, 105 do big[j] = j end\n"
+                    "local s = i(big)\n"
+                    "local long = string.rep('x', 10005)\n"
+                    "return s:match('%.%.%. (%d+) more items') .. ','\n"
+                    "  .. i(long):match('%.%.%. (%d+) more characters') .. ','\n"
+                    "  .. i({7,8,9}, {maxArrayLength = -1})"),
+        "5,5,{ ... 3 more items }");
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "local circ = {name='c'}\n"
+                    "circ.self = circ\n"
+                    "return i(circ)"),
+        "{ name = \"c\", self = [Circular *1] }");
+    /* 共享 (非环) 引用各自完整渲染, 不误标 */
+    assert_string_equal(
+        eval_string("local i = require('util').inspect\n"
+                    "local shared = {1,2}\n"
+                    "return i({a=shared, b=shared})"),
+        "{ a = { 1, 2 }, b = { 1, 2 } }");
+}
+
+static void test_util_args_contract(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local _, m1 = pcall(u.inspect, {1}, true)\n"
+                    "local _, m2 = pcall(u.inspect, {1}, {depth='x'})\n"
+                    "return tostring(m1:find('opts must be a table', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m2:find('opts.depth must be a number', 1, true) ~= nil)"),
+        "true,true");
+}
+
+/* -- events (Node EventEmitter, batch 6) ---------------------------------- */
+
+static void test_events_dispatch(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local log = {}\n"
+                    "em:on('t', function(x, y) log[#log+1] = x .. y end)\n"
+                    "local a = em:emit('t', '1', '2')\n"
+                    "local b = em:emit('nope')\n"
+                    "return tostring(a) .. ',' .. tostring(b) .. ',' .. table.concat(log, ';')"),
+        "true,false,12");
+    /* once 一次即除, 返回 self */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local n = 0\n"
+                    "local r = em:once('o', function() n = n + 1 end)\n"
+                    "em:emit('o')\n"
+                    "em:emit('o')\n"
+                    "return tostring(r == em) .. ',' .. n .. ',' .. em:listenerCount('o')"),
+        "true,1,0");
+    /* prepend 族插队; prependOnce 首发后即除 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local order = {}\n"
+                    "em:on('e', function() order[#order+1] = 'a' end)\n"
+                    "em:prependListener('e', function() order[#order+1] = 'p' end)\n"
+                    "em:prependOnceListener('e', function() order[#order+1] = 'po' end)\n"
+                    "em:emit('e')\n"
+                    "em:emit('e')\n"
+                    "return table.concat(order, ',')"),
+        "po,p,a,p,a");
+    /* emit 期间自移除: 本轮照常调用, 下轮不再 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local seen = {}\n"
+                    "local function h() seen[#seen+1] = 'in'; em:off('r', h) end\n"
+                    "em:on('r', h)\n"
+                    "em:emit('r')\n"
+                    "em:emit('r')\n"
+                    "return #seen"),
+        "1");
+    /* once 内重挂: 新 once 在下次 emit 生效 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local n = 0\n"
+                    "em:once('o', function() n = n + 1\n"
+                    "  em:once('o', function() n = n + 10 end) end)\n"
+                    "em:emit('o')\n"
+                    "em:emit('o')\n"
+                    "return n"),
+        "11");
+    /* listeners 返回副本且 once 以原函数入表; removeListener 只移首个匹配 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local orig = function() end\n"
+                    "em:once('x', orig)\n"
+                    "local l = em:listeners('x')\n"
+                    "local identity = l[1] == orig\n"
+                    "l[1] = nil\n"
+                    "local fa, fb = function() end, function() end\n"
+                    "em:on('m', fa)\n"
+                    "em:on('m', fa)\n"
+                    "em:on('m', fb)\n"
+                    "em:removeListener('m', fa)\n"
+                    "return tostring(identity and em:listenerCount('x') == 1) .. ','\n"
+                    "  .. em:listenerCount('m') .. ','\n"
+                    "  .. tostring(em:listeners('m')[1] == fa)"),
+        "true,2,true");
+    /* removeAllListeners(ev) 清空并返回 self; 无参全清 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "em:on('a', function() end)\n"
+                    "em:on('b', function() end)\n"
+                    "local r = em:removeAllListeners('a')\n"
+                    "local x = em:emit('a')\n"
+                    "local y = em:emit('b')\n"
+                    "em:removeAllListeners()\n"
+                    "return tostring(r == em) .. ',' .. tostring(x) .. ','\n"
+                    "  .. tostring(y) .. ',' .. em:listenerCount('b')"),
+        "true,false,true,0");
+}
+
+static void test_events_builtin_events(void **state)
+{
+    (void)state;
+    /* newListener 在添加前发出 (计数不含新者); removeListener 在移除后 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local log = {}\n"
+                    "em:on('newListener', function(ev, fn)\n"
+                    "  log[#log+1] = 'new:' .. ev .. ':' .. em:listenerCount(ev)\n"
+                    "end)\n"
+                    "em:on('removeListener', function(ev, fn)\n"
+                    "  log[#log+1] = 'rm:' .. ev\n"
+                    "end)\n"
+                    "local f = function() end\n"
+                    "em:on('x', f)\n"
+                    "em:off('x', f)\n"
+                    "return table.concat(log, ',')"),
+        "new:removeListener:0,new:x:0,rm:x");
+    /* removeAllListeners(ev) 逐个 (LIFO) 发 removeListener */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local seq = {}\n"
+                    "local f1 = function() end\n"
+                    "local f2 = function() end\n"
+                    "em:on('removeListener', function(ev, fn)\n"
+                    "  seq[#seq+1] = fn == f1 and 'f1' or (fn == f2 and 'f2' or '?')\n"
+                    "end)\n"
+                    "em:on('e', f1)\n"
+                    "em:on('e', f2)\n"
+                    "em:removeAllListeners('e')\n"
+                    "return table.concat(seq, ',')"),
+        "f2,f1");
+}
+
+static void test_events_error_and_maxlisteners(void **state)
+{
+    (void)state;
+    /* emit('error') 无监听: 表负载原样 raise; 标量包 Unhandled error.;
+     * 无负载报 Unhandled 'error' event */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local _, e1 = pcall(function() E.new():emit('error', 'boomstr') end)\n"
+                    "local _, e2 = pcall(function() E.new():emit('error', 42) end)\n"
+                    "local terr = setmetatable({}, {__tostring = function() return 'boom' end})\n"
+                    "local _, e3 = pcall(function() E.new():emit('error', terr) end)\n"
+                    "local _, e4 = pcall(function() E.new():emit('error') end)\n"
+                    "local _, e5 = pcall(function() E.new():emit('error', true) end)\n"
+                    "return tostring(e1) .. ',' .. tostring(e2) .. ','\n"
+                    "  .. tostring(e3 == terr) .. ',' .. tostring(e4) .. ','\n"
+                    "  .. tostring(e5)"),
+        "Unhandled error. ('boomstr'),Unhandled error. (42),true,"
+        "Unhandled 'error' event,Unhandled error. (true)");
+    /* 有监听则正常分发 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local got\n"
+                    "em:on('error', function(m) got = m end)\n"
+                    "local ok = em:emit('error', 'x')\n"
+                    "return tostring(ok) .. ',' .. got"),
+        "true,x");
+    /* 超限警告: 首个超限 add 一次, 计数为该次添加后的值; 移除后重臂;
+     * 0/负上限不限。io.stderr 是普通全局表的字段, 可替换捕获。 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local msgs = {}\n"
+                    "local saved = io.stderr\n"
+                    "io.stderr = { write = function(_, m) msgs[#msgs+1] = m end }\n"
+                    "local em = E.new()\n"
+                    "em:setMaxListeners(1)\n"
+                    "local g1, g2 = function() end, function() end\n"
+                    "em:on('w', g1)\n"
+                    "em:on('w', g2)\n"
+                    "em:on('w', function() end)\n"
+                    "em:removeListener('w', g2)\n"
+                    "em:on('w', function() end)\n"
+                    "local em2 = E.new()\n"
+                    "em2:setMaxListeners(0)\n"
+                    "for j = 1, 20 do em2:on('u', function() end) end\n"
+                    "io.stderr = saved\n"
+                    "return (msgs[1] or 'NONE') .. '#' .. #msgs"),
+        "MaxListenersExceededWarning: Possible EventEmitter memory leak"
+        " detected. 2 w listeners added to [EventEmitter]. MaxListeners is"
+        " 1. Use emitter:setMaxListeners() to increase limit\n#2");
+    /* defaultMaxListeners 可调, 影响此后添加判定 */
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local saved = io.stderr\n"
+                    "local n = 0\n"
+                    "io.stderr = { write = function() n = n + 1 end }\n"
+                    "E.defaultMaxListeners = 2\n"
+                    "local em = E.new()\n"
+                    "for j = 1, 3 do em:on('q', function() end) end\n"
+                    "E.defaultMaxListeners = 10\n"
+                    "io.stderr = saved\n"
+                    "return E.defaultMaxListeners .. ',' .. n"),
+        "10,1");
+}
+
+static void test_events_args_contract(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local E = require('events')\n"
+                    "local em = E.new()\n"
+                    "local ok1 = pcall(function() em:on(42, print) end)\n"
+                    "local ok2 = pcall(function() em:on('x', 'notfn') end)\n"
+                    "local ok3 = pcall(function() em:setMaxListeners('x') end)\n"
+                    "local ok4 = pcall(function() em:emit(1) end)\n"
+                    "local ok5 = pcall(function() em:listeners({}) end)\n"
+                    "return tostring(ok1) .. ',' .. tostring(ok2) .. ','\n"
+                    "  .. tostring(ok3) .. ',' .. tostring(ok4) .. ','\n"
+                    "  .. tostring(ok5)"),
+        "false,false,false,false,false");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1836,6 +2392,20 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_xml_encode_errors, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_xml_sax_streaming, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_xml_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_normalize_join, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_resolve_relative, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_dirname_basename_extname, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_parse_format, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_format_conversions, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_format_no_fmt_and_extras, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_inspect_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_inspect_truncation_circular, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_events_dispatch, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_events_builtin_events, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_events_error_and_maxlisteners, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_events_args_contract, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -43,10 +43,15 @@ luna_modules/hello/
 | `toml` | tomlc17 | TOML 1.0 `decode`/`encode`;`decode` 走 C 后端,`encode` 是包装层自有实现(标量键先行、`[[表数组]]`、内联数组/日期时间/空表) |
 | `yaml` | libyaml + lyaml | YAML 1.1 `decode`/`decodeAll`/`encode`;null → nil 默认(`opts.nullval = yaml.null` 保留哨兵),anchors/aliases 解为共享表引用,`---` 分隔的多文档走 `decodeAll` |
 | `xml` | expat + lua-expat | DOM 三件套 `decode`/`encode`(元素 = `{tag, attrs, kids}`,文本节点是 kids 里的字符串,属性恒字符串,命名空间前缀原样)+ `xml.sax` 流式透传(lxp handler 模型) |
+| `path` | 纯 Lua | Node `path.posix` 语义:`join`/`resolve`/`normalize`/`relative`/`dirname`/`basename`/`extname`/`isAbsolute`/`parse`/`format` + `sep`/`delimiter`(按 Node v24 实证钉版,win32 面不做) |
+| `util` | 纯 Lua | `util.inspect`(depth/循环 `[Circular *N]`/截断/键引号,Lua 语法形态)与 `util.format`(`%s %d %i %f %o %j %%` + 扩展 `%x %X`;无符连接、超参尾接,Node v24 口径) |
+| `events` | 纯 Lua | `events.new()` EventEmitter:`on`/`once`/`off`/`prepend*`/`listeners`/`listenerCount`/`setMaxListeners`/`emit`(缺省 10 超限警告、`'error'` 无监听 raise、newListener/removeListener 内建事件) |
 | `zlib` | lua-zlib | 流式 `deflate`/`inflate` + 一次性 `compress`/`decompress` 便捷层 |
 | `crypto` | luaossl | `sha256` 系列、`hmac`、`rand.bytes`(需构建期 OpenSSL) |
 
 **格式模块的错误口径**(csv/ini/toml/yaml/xml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
+
+**path/util/events 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序等)在 [Node 方向选型](/node-parity) 逐条勘定。
 
 ```lua
 local fs = require("fs")

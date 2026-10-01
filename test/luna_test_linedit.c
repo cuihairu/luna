@@ -176,18 +176,43 @@ static void test_wake_channel_survives_a_full_descriptor_table(void **state)
     /* start_wake_thread() fails its pipe() when no descriptor is free:
      * the attach bell then stays unavailable instead of taking the
      * session down. Forced by dropping the soft RLIMIT_NOFILE onto the
-     * number of descriptors already open. */
+     * highest open descriptor — and by first FILLING every hole below
+     * it: a sparse table would leave a free slot under the new ceiling
+     * for pipe() to slip into (CI runners keep stray descriptors open
+     * at scattered positions). */
     struct rlimit saved, tight;
     assert_int_equal(getrlimit(RLIMIT_NOFILE, &saved), 0);
     rlim_t ceiling = saved.rlim_cur;
     if (ceiling > 4096)
         ceiling = 4096;
-    int open_fds = 0;
+    int max_fd = -1;
     for (rlim_t fd = 0; fd < ceiling; fd++)
         if (fcntl((int)fd, F_GETFD) != -1)
-            open_fds++;
+            max_fd = (int)fd;
+    if (max_fd < 0) {
+        return; /* no descriptors at all: the -1 asserts hold trivially */
+    }
+    /* open() always takes the LOWEST free slot, so this pass leaves
+     * [0, max_fd] dense; the slot above the ceiling is closed again */
+    int filled[256];
+    int n_filled = 0;
+    for (;;) {
+        int p = open("/dev/null", O_RDONLY);
+        if (p < 0) {
+            break;
+        }
+        if (p > max_fd) {
+            close(p);
+            break;
+        }
+        if (n_filled < (int)(sizeof(filled) / sizeof(filled[0]))) {
+            filled[n_filled++] = p;
+        } else {
+            close(p); /* pathological hole count: best effort */
+        }
+    }
     tight = saved;
-    tight.rlim_cur = (rlim_t)open_fds;
+    tight.rlim_cur = (rlim_t)(max_fd + 1);
     /* nothing between the two setrlimit calls may assert: failing to
      * restore the limit would break every later open() in this group */
     if (setrlimit(RLIMIT_NOFILE, &tight) == 0) {
@@ -195,6 +220,9 @@ static void test_wake_channel_survives_a_full_descriptor_table(void **state)
         g_wake_wfd = -1;
         start_wake_thread();
         setrlimit(RLIMIT_NOFILE, &saved);
+    }
+    while (n_filled > 0) {
+        close(filled[--n_filled]);
     }
     assert_int_equal(g_wake_fd, -1);
     assert_int_equal(g_wake_wfd, -1);

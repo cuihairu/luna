@@ -4865,16 +4865,19 @@ static void test_tls_client_rejects_a_broken_ca_file(void **state)
 static void test_tls_client_dials_by_hostname(void **state)
 {
     (void)state;
-    /* the dial goes through the async resolver ('localhost'); insecure
-     * keeps the handshake deterministic — the baked-in cert carries an
-     * IP SAN, not a localhost DNS name */
+    /* the dial goes through the async resolver ('localhost'); the
+     * listener is dual-stack ('::' binds with V6ONLY off) because RFC
+     * 6724 puts ::1 first on many runners and a v4-only bind would
+     * refuse the dial there (see test_net_connect_hostname_via_resolver
+     * for the same call). insecure keeps the handshake deterministic —
+     * the baked-in cert carries an IP SAN, not a localhost DNS name */
     const char *cert = tls_cert_file();
     const char *key = tls_key_file();
     char code[1152];
     snprintf(code, sizeof code,
         "local net = loop.net\n"
         "log = {}\n"
-        "srv = net.listenTls('127.0.0.1', 0,"
+        "srv = net.listenTls('::', 0,"
         " {cert = '%s', key = '%s'}, function(e, c)\n"
         "  if e then log[1] = 'conn:' .. e return end\n"
         "  c:read(function(e2, chunk)\n"
@@ -4885,7 +4888,11 @@ static void test_tls_client_dials_by_hostname(void **state)
         "end)\n"
         "net.connectTls('localhost', srv:port(), {insecure = true},\n"
         "  function(e, s)\n"
-        "    if e then log[1] = 'connect:' .. e return end\n"
+        "    if e then\n"
+        "      log[1] = 'connect:' .. e\n"
+        "      srv:close() -- 错误腿也要收口:活句柄会把 run() 撑成静默挂\n"
+        "      return\n"
+        "    end\n"
         "    s:write('ping', function(e3)\n"
         "      if e3 then log[1] = 'write:' .. e3 return end\n"
         "      s:read(function(e4, chunk)\n"

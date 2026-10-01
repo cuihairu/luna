@@ -9,6 +9,7 @@ export default defineConfig({
   description:
     'IPython 式的 Lua 交互环境,按 Node.js 运行时的方式生长:模块、插件、标准库',
   themeConfig: {
+    logo: '/logo.svg',
     siteTitle: '🌙 luna',
     nav: [
       { text: '指南', link: '/guide/introduction' },

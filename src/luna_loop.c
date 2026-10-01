@@ -506,7 +506,11 @@ static void fs_finish(struct fsop *op)
             lua_createtable(L, 0, 4);
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_size);
             lua_setfield(L, -2, "size");
-            lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mtime);
+            /* st_mtim directly: glibc/macOS both macro st_mtime onto a
+             * system struct stat member that libuv's uv_stat_t does not
+             * have (st_mtim.tv_sec on glibc, st_mtimespec.tv_sec on
+             * Apple) — the portable member is st_mtim on every platform */
+            lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mtim.tv_sec);
             lua_setfield(L, -2, "mtime");
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mode);
             lua_setfield(L, -2, "mode");

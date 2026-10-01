@@ -202,7 +202,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | Node 能力 | luna 现状 | 缺口 | 补法 | 层 | 批次 |
 | --- | --- | --- | --- | --- | --- |
 | fs | ✅ 同步 `fs`(lfs + 便捷层)+ 异步 `loop.fs` | — | — | — | — |
-| net | ✅ `loop.net.connect/listen/connectTls/listenTls`(异步) | **connect/connectTls 只拨首地址,无 Happy Eyeballs 多地址回退**(CI `test_tls_client_dials_by_hostname` 因 `localhost` 先解析 `::1` 导致挂起已用双栈监听绕过,产品面仍需补) | 加地址迭代:解析出 addrinfo 列表后逐个拨号,成功即止、失败试下一条(参考 Node `net.connect` 语义) | Lua(策略层,`loop.net` 内) | 后续批次 |
+| net | ✅ `loop.net.connect/listen/connectTls/listenTls`(异步)+ **多地址回退(2026-10-01 勘定,见下节)** | — | — | C(luna_loop.c) | 2026-10-01 ✅ |
 | timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in)+ **脚本尾部自动排水(批次 8 已启用)** | 全局化未决(REPL 集成维持推迟) | 见下节 | C 入口 + Lua 收尾 | 8 ✅ |
 | child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式)+ `exec`/`execSync`(批次 8) | — | — | C(loop.c 内) | 8 ✅ |
 | os | ✅ `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | — | — | C(loop.c 内) | 8 ✅ |
@@ -212,6 +212,15 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | stream | ✅ 批次 7 已落地(`stream`,纯 Lua,基于 events) | — | — | Lua | 7 |
 
 **"绑定 C 库优先"在这张表上的落法**:timers/child_process/os 的底座已经是 libuv(deps 已在)——B 面的唯一新增 C 代码是 loop.os 的四个 getter(~60 行,仍在既有 `os_funcs` 表里);path/util/events/stream **没有对应的成熟 C 库可绑**(Node 本尊全是纯 JS;libuv 无 path join/EventEmitter),它们落在策略层正合架构分层——"C 内核尽量薄,行为逻辑全是 Lua"。
+
+### net:connect/connectTls 多地址回退(2026-10-01 勘定)
+
+**实现勘定(2026-10-01)**:表中原记「Lua 策略层」的预估不成立——addrinfo 链与句柄生命周期都在 C 侧,回退落 `luna_loop.c` 直修:
+
+- 两条拨号路径解析结果**留链**(挂 sock/tsock,首次成功/全败/关闭三处释放),connect 失败换下一条,全败才把**最后一条**错误交回调(Node `net.connect` 的 autoSelectFamily 语义;单地址路径行为与旧码一致);
+- plain 侧:libuv 不许对失败句柄二次 connect——`uv_close` 后在 close 回调里重初始化句柄再拨;
+- TLS 侧:拒绝经 poll 的 SO_ERROR **异步**浮出,poll 句柄必须随 fd 一起关掉、在 close 回调里重开新 fd 再拨;连接成功之后的错误(如握手失败)不重拨——回退只覆盖 connect 层,与 Node 口径一致;
+- 回归用例 `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 + `localhost` 拨号必须成功,plain/TLS 一条用例两腿同盖。`test_tls_client_dials_by_hostname` 的 `'::'` 双栈监听**保留不动**——它现在钉的是双栈监听语义,不再承担绕病职责。
 
 ### timers:事件循环现状核实与建议
 

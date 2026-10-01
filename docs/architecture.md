@@ -42,7 +42,7 @@
 | 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
 | 全局注入 | `process`/`Buffer` | `kernel`/`Out`/`In` |
-| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`zlib`/`crypto` 随二进制 |
+| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto` 随二进制 |
 
 差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。
 
@@ -113,7 +113,7 @@ C 库怎么接进 Lua?luna 的答案一直是同一个:手写 `luaopen_*`(官方
 `register_c_modules` 进 `package.loaded`(luna_main.c,glob off),纯 Lua 便捷层放
 `lua/modules/*/init.lua`。lfs / luasocket / lua-zlib / luaossl / loop 五族绑定全是这
 个模式:单模块 50–300 行,类型映射显式、栈操作所见即所得、错误路径逐行可审——格式
-模块要求的「错误带行列」口径正落在这层。规划中的 xml/yaml/toml(见
+模块要求的「错误带行列」口径正落在这层。已落地的 xml/yaml/toml(见
 [Node 方向选型](/node-parity))沿用。
 
 | 候选 | 结论 |

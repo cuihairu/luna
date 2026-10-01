@@ -69,11 +69,11 @@ xml.encode(doc)                      -- 紧凑;opts.indent = 2 给美化输出
 
 -- 流式:SAX 回调透传(lxp 的 handler 模型原样;decode 内部就是用它攒 DOM)
 local p = xml.sax {
-    StartElement = function(name, attrs) ... end,
-    CharacterData = function(text) ... end,
-    EndElement   = function(name) ... end,
+    StartElement = function(self, name, attrs) ... end,  -- 首参 self(lxp docall 约定)
+    CharacterData = function(self, text) ... end,
+    EndElement   = function(self, name) ... end,
 }
-p:parse(chunk) p:parse()             -- 增量喂,空参收尾
+p:parse(chunk) p:parse()             -- 增量喂,空参收尾(lxp 的 parse(s) 不终结流)
 
 -- 错误:xml.decode("<a><b></a>")
 --   → nil, "xml: mismatched tag at line 1, column 9"(行列来自 expat,经包装层规整)
@@ -82,6 +82,16 @@ p:parse(chunk) p:parse()             -- 增量喂,空参收尾
 - **DOM 形状的取舍**:fast-xml-parser 用"标签名做键"的形状,对 Lua 的数组/哈希混合表是歧义源(同名兄弟元素、属性与子元素撞名);`{tag, attrs, kids}` 三件套无歧义、可往返、遍历就是走 `kids`,编码器不用猜。属性值**恒为字符串**(XML 没有类型);
 - **命名空间**:前缀原样保留(`<x:a>` 的 tag 是 `"x:a"`),不做解析展开——fast-xml-parser 同款口径,展开版列入"明确不做";
 - **流式**:SAX 透传是免费的大文档面(decode 攒 DOM 的同一机制);`xml.sax` 不做第二套抽象,handler 表就是 lxp 的形状。
+
+**实现勘定(2026-09-30)**:
+
+- **handler 首参是 self**:lxp 的 docall 把 parser userdata 作首参推栈,`StartElement = function(self, name, attrs)`——上方 API 草案的 `function(name, attrs)` 漏了 self,以实现为准(草案其余部分已用例钉住);
+- **decode 保留空白文本节点**:元素间的空白(如 `<r> <a/> </r>`)是 kids 里的普通字符串——标准 DOM 行为,美化 XML 的往返靠它;声明/注释/DOCTYPE 不进 DOM;
+- **相邻文本片段在元素边界合并**:实体展开(`a&amp;b`)与 CDATA 边界会把文本分片送达,decode 在 StartElement/EndElement 处合并成单字符串——往返后 `&` 不会被双重转义;
+- **错误列按 UTF-8 字符计**(与 yaml 同口径):`<r>张三<x></r>` 的 mismatched tag 报 column 11(字符),不是字节 15;
+- **encode 的容错面**:`attrs`/`kids` 为 nil 按空处理;标量 kid(数字/布尔)走 tostring 当文本;属性值强制 tostring;属性序 = pairs 序(不承诺插入序,与 toml encode 同口径);
+- **encode 环检测**:元素是自身祖先 → `nil, "xml: cyclic table reference"`(error level 0,消息不带 file:line 前缀);共享兄弟引用不是环,各自完整序列化;
+- **expat 的 parse(s) 不终结流**:final 标志是 `s == NULL`——decode 必须 `p:parse(s)` 后再 `p:parse()` 收尾,未闭合标签的错误只在收尾时浮现;收尾失败时 close 会再抛一次,decode 用 pcall 兜住(坏输入不 raise)。
 
 ### YAML → libyaml(经 lyaml)
 

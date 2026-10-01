@@ -25,6 +25,7 @@ int luaopen_mime_core(lua_State *L);
 int luaopen_zlib(lua_State *L);
 int luaopen_toml_core(lua_State *L);
 int luaopen_yaml(lua_State *L);
+int luaopen_lxp(lua_State *L);
 #ifdef LUNA_HAVE_OPENSSL
 int luaopen__openssl(lua_State *L);
 int luaopen__openssl_digest(lua_State *L);
@@ -83,6 +84,8 @@ static int setup_modules(void **state)
     luaL_requiref(L, "toml.core", luaopen_toml_core, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "yaml.core", luaopen_yaml, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lxp", luaopen_lxp, 0);
     lua_pop(L, 1);
 #ifdef LUNA_HAVE_OPENSSL
     luaL_requiref(L, "_openssl", luaopen__openssl, 0);
@@ -1561,6 +1564,202 @@ static void test_yaml_args_contract(void **state)
         "true,true,false,false,false");
 }
 
+/* -- xml module (batch 5, expat 2.8.5 + lua-expat 1.5.2 vendor) ------- */
+
+static void test_xml_decode_dom_shape(void **state)
+{
+    (void)state;
+    /* DOM 三件套: 元素 = {tag, attrs, kids}, 文本节点是 kids 里的普通字符串,
+     * 属性值恒为字符串; lxp 的数字键 (属性文档序) 是绑定层细节, 不进 DOM */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local d = x.decode('<person id=\"7\"><name>Ada</name><age>36</age></person>')\n"
+                    "assert(d.tag == 'person')\n"
+                    "assert(d.attrs.id == '7' and type(d.attrs.id) == 'string')\n"
+                    "assert(#d.kids == 2)\n"
+                    "assert(d.kids[1].tag == 'name' and next(d.kids[1].attrs) == nil)\n"
+                    "assert(d.kids[1].kids[1] == 'Ada' and type(d.kids[1].kids[1]) == 'string')\n"
+                    "assert(d.kids[2].tag == 'age' and d.kids[2].kids[1] == '36')\n"
+                    "local n = 0\n"
+                    "for k, v in pairs(d.attrs) do n = n + 1 end\n"
+                    "assert(n == 1) -- numeric order keys dropped\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_decode_entities_cdata(void **state)
+{
+    (void)state;
+    /* 实体展开 (&amp;/&lt;/&gt;)、CDATA 段、相邻文本片段 (实体/CDATA 边界
+     * 会分片送达) 在元素边界合并; 声明/注释/DOCTYPE 不进 DOM */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local d = x.decode('<r a=\"1&amp;2\">x&lt;y<![CDATA[raw <>&\"]]></r>')\n"
+                    "assert(d.attrs.a == '1&2')\n"
+                    "assert(d.kids[1] == 'x<yraw <>&\"') -- merged text run\n"
+                    "local d2 = x.decode('<?xml version=\"1.0\"?><!-- c --><!DOCTYPE r><r><a/></r>')\n"
+                    "assert(d2.tag == 'r' and #d2.kids == 1 and d2.kids[1].tag == 'a')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_decode_namespaces(void **state)
+{
+    (void)state;
+    /* 命名空间前缀原样保留 (<x:a> 的 tag 是 "x:a"), 不做解析展开;
+     * xmlns 声明就是普通属性 */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local d = x.decode('<x:a xmlns:x=\"urn:x\"><x:b/></x:a>')\n"
+                    "assert(d.tag == 'x:a')\n"
+                    "assert(d.attrs['xmlns:x'] == 'urn:x')\n"
+                    "assert(d.kids[1].tag == 'x:b')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_decode_errors(void **state)
+{
+    (void)state;
+    /* 坏输入 → nil, err; 错误带行列 (expat 坐标, 列按 UTF-8 字符计 1 基) */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local function e(s) local _, err = x.decode(s) return err end\n"
+                    "assert(e('<a><b></a>') == 'xml: mismatched tag at line 1, column 9')\n"
+                    "assert(e('<a></b>') == 'xml: mismatched tag at line 1, column 6')\n"
+                    "assert(e('<a><b>') == 'xml: no element found at line 1, column 7')\n"
+                    "assert(e('<a>') == 'xml: no element found at line 1, column 4')\n"
+                    "assert(e('') == 'xml: no element found at line 1, column 1')\n"
+                    "assert(e('<a>text</a><b/>') == 'xml: junk after document element at line 1, column 12')\n"
+                    "assert(e('<a x=1></a>') == 'xml: not well-formed (invalid token) at line 1, column 6')\n"
+                    "assert(e('<a>&undefined;</a>') == 'xml: undefined entity at line 1, column 4')\n"
+                    "assert(e('<a><![CDATA[unclosed</a>') == 'xml: unclosed CDATA section at line 1, column 25')\n"
+                    "assert(e('<r x=\"1\" x=\"2\"/>') == 'xml: duplicate attribute at line 1, column 10')\n"
+                    "assert(e('<a>\\n  <b>\\n</a>') == 'xml: mismatched tag at line 3, column 3')\n"
+                    "assert(e('<r>张三<x></r>') == 'xml: mismatched tag at line 1, column 11')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_encode_exact_shapes(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local doc = { tag = 'person', attrs = { id = '7' }, kids = {\n"
+                    "  { tag = 'name', attrs = {}, kids = { 'Ada' } },\n"
+                    "  { tag = 'age', attrs = {}, kids = { 36 } },\n"
+                    "  { tag = 'bio', attrs = {}, kids = { 'a<b', '&c' } },\n"
+                    "  { tag = 'empty', attrs = {}, kids = {} },\n"
+                    "} }\n"
+                    "assert(x.encode(doc) == '<person id=\"7\"><name>Ada</name><age>36</age>"
+                    "<bio>a&lt;b&amp;c</bio><empty></empty></person>')\n"
+                    "assert(x.encode(doc, { indent = 2 }) == '<person id=\"7\">\\n  <name>Ada</name>\\n"
+                    "  <age>36</age>\\n  <bio>a&lt;b&amp;c</bio>\\n  <empty/>\\n</person>')\n"
+                    "assert(x.encode({ tag = 'r', attrs = { n = 42 }, kids = {} }) == '<r n=\"42\"></r>')\n"
+                    "assert(x.encode({ tag = 'r', attrs = { b = true }, kids = {} }) == '<r b=\"true\"></r>')\n"
+                    "assert(x.encode({ tag = 'r' }) == '<r></r>') -- nil attrs/kids\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_encode_roundtrip(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local src = '<person id=\"7\"><name>Ada</name><bio>a&lt;b</bio></person>'\n"
+                    "assert(x.encode(x.decode(src)) == src)\n"
+                    "local d = x.decode('<a><b><c>x</c></b><b><c>y</c></b></a>')\n"
+                    "assert(x.encode(d, { indent = 2 }) == '<a>\\n  <b>\\n    <c>x</c>\\n  </b>\\n"
+                    "  <b>\\n    <c>y</c>\\n  </b>\\n</a>')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_xml_encode_errors(void **state)
+{
+    (void)state;
+    /* 环引用 (元素是自身的祖先) → nil, err; 共享兄弟不是环, 照常编码;
+     * 参数类型错才 raise; 坏 DOM 形状 (嵌套面) 也是 nil, err 不 raise */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local cyc = { tag = 'a', attrs = {}, kids = {} }\n"
+                    "cyc.kids[1] = cyc\n"
+                    "local s1, e1 = x.encode(cyc)\n"
+                    "assert(s1 == nil and e1 == 'xml: cyclic table reference')\n"
+                    "local shared = { tag = 's', attrs = {}, kids = {} }\n"
+                    "assert(x.encode({ tag = 'r', attrs = {}, kids = { shared, shared } }) ~= nil)\n"
+                    "assert(pcall(x.encode, 'str') == false)\n"
+                    "assert(pcall(x.encode, { tag = 'a' }, { indent = '2' }) == false)\n"
+                    "local t1, m1 = x.encode({ tag = 123, attrs = {}, kids = {} })\n"
+                    "assert(t1 == nil and m1 == 'xml: element tag must be a string')\n"
+                    "local t2, m2 = x.encode({ tag = 'a', attrs = 5, kids = {} })\n"
+                    "assert(t2 == nil and m2 == 'xml: attrs must be a table')\n"
+                    "local t3, m3 = x.encode({ tag = 'a', attrs = {}, kids = 5 })\n"
+                    "assert(t3 == nil and m3 == 'xml: kids must be a table')\n"
+                    "return 'ok'"),
+        "ok");
+    /* 混合 kid (标量 + 元素) 的美化输出: 标量 kid 独占一行 */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "return x.encode({ tag = 'r', attrs = {}, kids ="
+                    " { 't', { tag = 'a', attrs = {}, kids = {} } } }, { indent = 2 })"),
+        "<r>\n  t\n  <a/>\n</r>");
+}
+
+static void test_xml_sax_streaming(void **state)
+{
+    (void)state;
+    /* SAX 透传: handler 表就是 lxp 的形状 (首参 self), 增量喂 + 空参收尾。
+     * 默认 bufferCharData 下文本在 chunk 边界/下一事件处成片交付:
+     * 'he' 在 chunk1 末尾, 'llo' 在 </a> 事件前 —— 分片是缓冲的产物,
+     * 语义 (事件序列与内容) 稳定 */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local ev = {}\n"
+                    "local p = x.sax {\n"
+                    "  StartElement = function(_, n) ev[#ev+1] = 'S:' .. n end,\n"
+                    "  EndElement = function(_, n) ev[#ev+1] = 'E:' .. n end,\n"
+                    "  CharacterData = function(_, t) ev[#ev+1] = 'T:' .. t end,\n"
+                    "}\n"
+                    "p:parse('<a x=\"1\">he')\n"
+                    "p:parse('llo</a>')\n"
+                    "p:parse() -- finalize\n"
+                    "return table.concat(ev, '|')"),
+        "S:a|T:he|T:llo|E:a");
+    /* 单 chunk 完整文档: 文本在 EndElement 事件前一次性交付 */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local ev = {}\n"
+                    "local p = x.sax {\n"
+                    "  StartElement = function(_, n) ev[#ev+1] = 'S:' .. n end,\n"
+                    "  EndElement = function(_, n) ev[#ev+1] = 'E:' .. n end,\n"
+                    "  CharacterData = function(_, t) ev[#ev+1] = 'T:' .. t end,\n"
+                    "}\n"
+                    "p:parse('<a>hello</a>')\n"
+                    "p:parse()\n"
+                    "return table.concat(ev, '|')"),
+        "S:a|T:hello|E:a");
+}
+
+static void test_xml_args_contract(void **state)
+{
+    (void)state;
+    /* bad ARGUMENTS raise; only bad DATA returns nil, err. sax 的 handler
+     * 键校验与无参调用由 lxp 自己报 (checkcallbacks / checktype) */
+    assert_string_equal(
+        eval_string("local x = require('xml')\n"
+                    "local _, m1 = pcall(x.decode, 42)\n"
+                    "local _, m2 = pcall(x.encode, { tag = 'a' }, true)\n"
+                    "local ok3 = pcall(x.sax, { Bogus = function() end })\n"
+                    "local ok4 = pcall(x.sax)\n"
+                    "return tostring(m1:find('expects a string', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m2:find('opts must be a table', 1, true) ~= nil)"
+                    " .. ',' .. tostring(ok3) .. ',' .. tostring(ok4)"),
+        "true,true,false,false");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -1628,6 +1827,15 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_yaml_encode_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_yaml_encode_errors, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_yaml_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_decode_dom_shape, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_decode_entities_cdata, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_decode_namespaces, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_decode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_encode_exact_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_encode_roundtrip, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_encode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_sax_streaming, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_xml_args_contract, setup_modules, teardown_modules),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

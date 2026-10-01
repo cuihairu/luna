@@ -172,6 +172,35 @@ target_compile_definitions(luna_yaml PRIVATE
         VERSION="${LUNA_LYAML_VERSION}")
 target_link_libraries(luna_yaml PUBLIC lualib yaml)
 
+# xml -> expat 2.8.5 + lua-expat 1.5.2 (both submodules pinned by SHA):
+# the reference SAX parser behind lxp's Lua binding. expat's upstream
+# CMake comes in EXCLUDE_FROM_ALL like libuv; every public build knob
+# (tests/tools/examples/docs/pkgconfig) is forced off before
+# add_subdirectory so the xmlwf tool and expat's own ctest targets stay
+# out of ours — expat_shy_set is shy toward pre-defined variables, so
+# plain set() lands (no cache FORCE needed). EXPAT_SHARED_LIBS off
+# pins the static lib (its default follows BUILD_SHARED_LIBS, which a
+# fresh tree may not have defined — a shared expat would be a system
+# dependency luna must not gain). EXPAT_ENABLE_INSTALL off keeps
+# vendored install rules out of `cmake --install`.
+set(EXPAT_SHARED_LIBS OFF)
+set(EXPAT_BUILD_TESTS OFF)
+set(EXPAT_BUILD_TOOLS OFF)
+set(EXPAT_BUILD_EXAMPLES OFF)
+set(EXPAT_BUILD_DOCS OFF)
+set(EXPAT_BUILD_PKGCONFIG OFF)
+set(EXPAT_ENABLE_INSTALL OFF)
+add_subdirectory("${PROJECT_SOURCE_DIR}/deps/expat/expat" EXCLUDE_FROM_ALL)
+
+# lua-expat's C face (luaopen_lxp): lxplib.c over expat's headers, which
+# the expat target exposes (lib/ + the generated expat_config.h dir).
+# Registered bare as "lxp" — the C module's own name; the user-facing
+# "xml" module is the staged wrapper in luna_modules/xml/.
+add_library(luna_xml STATIC deps/luaexpat/src/lxplib.c)
+target_include_directories(luna_xml PRIVATE
+        "${PROJECT_SOURCE_DIR}/deps/luaexpat/src")
+target_link_libraries(luna_xml PUBLIC lualib expat)
+
 # embed the entry plus policy modules into the binary (raw strings)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
@@ -217,7 +246,7 @@ list(APPEND luna_sources
 
 add_executable(luna ${luna_sources})
 target_link_libraries(luna lualib lpeg luna_line luna_kernel luna_loop
-        lfs luasocket lua_zlib luna_toml luna_yaml)
+        lfs luasocket lua_zlib luna_toml luna_yaml luna_xml)
 if(LUNA_HAVE_OPENSSL)
     target_link_libraries(luna luaossl)
 endif()

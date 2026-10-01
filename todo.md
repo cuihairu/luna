@@ -949,11 +949,11 @@
       报错;decodeAll(多文档)批内定去留。用例:标量类型家族、块标量、
       流式集合、多文档、坏输入行列、encode 循环。**验收**:同上;Lua 5.5
       适配若需小补丁,vendor 内登记改动点。(实录见下节)
-- [ ] **批次 5:xml(expat + lua-expat vendor)**。DOM 三件套 {tag, attrs,
+- [x] **批次 5:xml(expat + lua-expat vendor)**。DOM 三件套 {tag, attrs,
       kids}、文本节点为字符串、属性恒字符串、命名空间前缀原样;encode
       转义 + opts.indent;xml.sax 透传 lxp handler(流式面)。用例:实体/
       CDATA/嵌套/属性、坏输入行列(mismatched tag 等)、encode 往返、SAX
-      增量喂。**验收**:同上。
+      增量喂。**验收**:同上。(实录见下节)
 - [ ] **批次 6:path + util + events(纯 Lua,零依赖)**。path 按 Node
       path.posix 逐函数对照钉死(resolve/normalize/join/relative/parse/
       format 的 Node 边界语义各配用例);util.inspect(depth/循环 [Circular]/
@@ -1189,6 +1189,84 @@
       结果可信,但下次冲 90+ 前值得先歇手。ctest 不重建纪律照旧——
       先重建后跑。单笔提交,push 前 fetch origin main 核对 SHA;
       不打 tag、不发版。
+
+### 批次 5(xml)实录(2026-09-30)
+
+- [x] **vendor 与钉版**:deps/expat 钉 **R_2_8_5**(4b3f0b0,tag 核实)、
+      deps/luaexpat 钉 **1.5.2**(947d2e9),双双 .gitmodules 登记。
+      expat 上游 CMake 在**嵌套目录** deps/expat/expat(顶层只是包装),
+      接线 add_subdirectory(EXCLUDE_FROM_ALL):五个公开开关全灭
+      (EXPAT_BUILD_TESTS/TOOLS/EXAMPLES/DOCS/PKGCONFIG)+
+      EXPAT_ENABLE_INSTALL off——expat_shy_set 对预定义变量害羞,
+      plain set() 即落(同 libyaml 段);cmake_minimum_required(3.17)
+      靠 libuv 段的 CMAKE_POLICY_VERSION_MINIMUM 3.5 放行(段序同
+      yaml)。**EXPAT_SHARED_LIBS 显式 off**:其缺省跟随
+      BUILD_SHARED_LIBS,新树缓存无它时默认 ON——共享 expat 即系统
+      依赖,违背"零新增系统依赖";新树 configure 核实 libexpat.a +
+      ctest -N 仍 16 组。luaexpat 取绑定源 lxplib.c 编入 luna_xml
+      静态库。submodule add 索引陷阱第三次实录(分支 HEAD vs tag)——
+      本批先 checkout tag 再 git add 钉索引,零返工。
+- [x] **Lua 5.5 适配:零补丁**。lxplib.c 通篇 5.2+ API
+      (luaL_setfuncs/luaL_Buffer/luaL_checkudata/lua_setuservalue),
+      连 lua_objlen/lua_strlen 都不出现——lyaml 的 luaconf.h 宏
+      问题在这里根本不存在。vendor 内零改动。
+- [x] **注册与包装层**:`lxp`(luaopen_lxp)裸名进 register_c_modules
+      (luna_main.c mods[])——C 模块自己的名字;用户面 `xml` 是
+      staged 包装层(lua/modules/xml/init.lua 单文件)。包装层契约:
+      decode/encode/sax + 共同口径(坏数据 nil,err、参数类型错
+      raise)。DOM 三件套 {tag, attrs, kids},文本节点是 kids 里的
+      普通字符串;lxp attrs 的数字键(文档序)不进 DOM;相邻文本片段
+      (实体/CDATA 边界分片)在元素边界合并——往返后 & 不双重转义;
+      空白文本节点保留(标准 DOM 行为,美化 XML 往返靠它);声明/
+      注释/DOCTYPE 不进 DOM。encode:属性值强制 tostring、文本
+      转义 &<>、属性转义 &<>"、opts.indent=N 美化(纯文本子节点
+      内联、含元素子节点逐行、混合 kid 标量独占一行)、nil attrs/
+      kids 按空、标量 kid 走 tostring;环检测祖先集 → nil,
+      "xml: cyclic table reference"(error level 0,消息不带
+      file:line 前缀),共享兄弟不误报;坏 DOM 形状(非串 tag/非表
+      attrs/kids)同走 nil, err。sax = lxp.new 裸别名(不做第二套
+      抽象,handler 键校验由 lxp checkcallbacks 白送)。
+- [x] **错误口径**:expat 的 XML_ErrorString + 行列经 reporterror
+      (nil, errmsg, line, col, byteindex)规整为 `xml: 原因 at line N,
+      column M`;**列按 UTF-8 字符计**(与 yaml 同口径,
+      `<r>张三<x></r>` 报 column 11 而非字节 15);草案钉的
+      `mismatched tag at line 1, column 9` 实测逐字吻合。decode
+      必须 parse(s) 后再空参 parse() 收尾(lxp 的 final 标志是
+      s==NULL)——未闭合标签的错误只在收尾时浮现;收尾失败的
+      parser 上 close 会再抛,pcall 兜住(坏输入不 raise)。
+- [x] 用例:modules 组 +9(60→69),探针先钉值再写断言。首轮 5 条
+      失败**全是测试侧问题**、库只动一行:C 串里 `\n` 变 Lua 源
+      原始换行致短字符串跨行(三处,改 `\\n`)、CDATA 期望值多引号、
+      cycle 错误消息带 file:line 前缀(库侧改 error level 0 修掉)。
+      修复后全绿。覆盖:DOM 三件套/数字键丢弃、实体+CDATA+文本合并、
+      声明注释 DOCTYPE 不进 DOM、NS 前缀原样、坏输入 12 钉
+      (mismatched/no element found/junk after doc/invalid token/
+      undefined entity/unclosed CDATA/duplicate attribute + 多行
+      行号追踪 + UTF-8 列)、encode 精确形状(紧凑/indent/自闭合/
+      转义/tostring/nil 容错)、往返(紧凑+深 indent)、encode 错误
+      (环/共享兄弟/坏形状/参数 raise)、SAX 增量喂(分片交付序列 +
+      单 chunk 整文档)、参数契约(decode 非串/encode 非表/opts 非表
+      raise、sax 坏键与无参由 lxp 报)。
+- [x] 覆盖率账:Lua 侧总 **96.42%**(2801/104;批次 4 收官 96.32%,
+      首测落 96.25% 后按暗行补坏形状三臂 + 混合 kid 美化臂回升,
+      **超批次 4**);xml/init.lua 99.08%(108 语句 1 暗,余暗是
+      fmt_err 的非数字行列兜底——lxp 报错恒带数字坐标,公开 API
+      不可达,结构性)。C 台账口径 src/(deps/ vendor 不入账,libuv/
+      lua 同法):lines 94.8%(2681/2829)、functions 100%(249/249)、
+      branches 77.6%(948/1222),与批次 4 持平——本轮 C 侧增量即
+      luna_main.c 的声明 + 注册两行,绑定源全在 deps/。
+- [x] 文档同步:guide/modules.md 内置表 xml 行 + 错误口径段加 xml;
+      README/architecture/index 三处标准库清单加 xml;node-parity.md
+      API 草案勘定(handler 首参 self——草案漏了)+ 7 条实现勘定
+      (空白文本保留/文本合并/UTF-8 列/encode 容错面/环检测/parse
+      收尾语义/EXPAT_SHARED_LIBS 钉静态);cmake/luacov.config.in
+      include 收编 luna_modules/xml/。
+- [x] 门禁:两树 cmake --build + ctest **16 组全绿**(串行)——build
+      419.71s;build-cov 410.80s 时 loop 组假挂两处(并发窗口负载高,
+      OOM 注入未触发 + 证书加载异常,同"80+ 假挂"家族),负载回落后
+      单跑 loop 组 294.63s **实绿**——结果可信。ctest 不重建
+      纪律照旧——先重建后跑。单笔提交,push 前 fetch origin main
+      核对 SHA;不打 tag、不发版。
 
 
 

@@ -24,6 +24,7 @@ int luaopen_zlib(lua_State *L);       /* lua-zlib */
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport: attach */
 int luaopen_toml_core(lua_State *L);  /* src/luna_toml.c: tomlc17 binding */
 int luaopen_yaml(lua_State *L);       /* deps/lyaml: libyaml binding */
+int luaopen_lxp(lua_State *L);        /* deps/luaexpat: expat binding */
 
 #ifdef LUNA_HAVE_OPENSSL
 /* luaossl: every submodule Lua layer requires "_openssl.<sub>". */
@@ -166,6 +167,9 @@ static void register_c_modules(lua_State *L)
         /* lyaml's C face under a dotted name: the user-facing "yaml"
          * module is the staged wrapper in luna_modules/yaml/ */
         { "yaml.core", luaopen_yaml },
+        /* lua-expat's C face under its own name; the user-facing "xml"
+         * module is the staged wrapper in luna_modules/xml/ */
+        { "lxp", luaopen_lxp },
 #ifdef LUNA_HAVE_OPENSSL
         { "_openssl", luaopen__openssl },
         { "_openssl.compat", luaopen__openssl_compat },

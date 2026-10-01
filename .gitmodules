@@ -52,3 +52,9 @@
 [submodule "deps/lyaml"]
 	path = deps/lyaml
 	url = https://github.com/gvvaughan/lyaml
+[submodule "deps/expat"]
+	path = deps/expat
+	url = https://github.com/libexpat/libexpat.git
+[submodule "deps/luaexpat"]
+	path = deps/luaexpat
+	url = https://github.com/lunarmodules/luaexpat.git

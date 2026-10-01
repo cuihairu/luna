@@ -4954,6 +4954,64 @@ static void test_tls_client_dials_by_hostname(void **state)
     unlink("/tmp/luna-loop-tls-key.pem");
 }
 
+static void test_dial_localhost_v4_only_listener_succeeds(void **state)
+{
+    (void)state;
+    /* 2026-10-01 勘定的回退语义:RFC 6724 把 localhost 的 ::1 排前,
+     * v4-only 监听会 refused 掉第一条地址——两条拨号路径都必须跳过
+     * 连不上的地址落到 127.0.0.1 上,全败才报错(此前只拨表头一条) */
+    int listener = tcp_listen_loopback(); /* v4-only */
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, echo_main,
+                                    (void *)(intptr_t)listener), 0);
+    const char *cert = tls_cert_file();
+    const char *key = tls_key_file();
+    char code[1408];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "srv = net.listenTls('127.0.0.1', 0," /* v4-only 监听 */
+        " {cert = '%s', key = '%s'}, function(e, c)\n"
+        "  if e then return end\n"
+        "  c:read(function(_, chunk)\n"
+        "    if chunk then\n"
+        "      c:write('tls:' .. chunk, function() c:close() end)\n"
+        "    end\n"
+        "  end)\n"
+        "end)\n"
+        "net.connect('localhost', %d, function(e, s)\n"
+        "  if e then log[1] = 'plain:' .. e return end\n"
+        "  s:write('ping', function()\n"
+        "    s:read(function(_, chunk)\n"
+        "      log[1] = tostring(chunk)\n"
+        "      s:close()\n"
+        "      net.connectTls('localhost', srv:port(),"
+        " {insecure = true}, function(e2, t)\n"
+        "        if e2 then log[2] = 'tls:' .. e2 srv:close() return end\n"
+        "        t:write('ping', function(e3)\n"
+        "          if e3 then log[2] = 'tw:' .. e3 srv:close() return end\n"
+        "          t:read(function(_, chunk2)\n"
+        "            log[2] = tostring(chunk2)\n"
+        "            t:close()\n"
+        "            srv:close()\n"
+        "          end)\n"
+        "        end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  if #log < 2 then log = {'bail'} end\n"
+        "  srv:close()\n"
+        "end, 1500)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", cert, key, tcp_port_of(listener));
+    assert_string_equal(eval_string(code), "ping,tls:ping");
+    pthread_join(th, NULL);
+    unlink("/tmp/luna-loop-tls-cert.pem");
+    unlink("/tmp/luna-loop-tls-key.pem");
+}
+
 static void test_tls_client_closed_before_resolution_answers(void **state)
 {
     (void)state;
@@ -6155,6 +6213,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_listener_coordinates_then_closed_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_rejects_bad_hosts_and_taken_ports, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_client_rejects_a_broken_ca_file, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_dial_localhost_v4_only_listener_succeeds, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_client_dials_by_hostname, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_client_closed_before_resolution_answers, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_read_swap_and_tostring, setup_loop, teardown_loop),

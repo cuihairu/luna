@@ -1490,14 +1490,13 @@
   每批两树全绿后单提交推进;REPL 集成循环(每求值后 drain nowait)
   维持推迟,启用条件:行编辑可超时读或唤醒线程可定时(见
   docs/node-parity.md timers 节)。
-- **net.connect/connectTls 多地址回退(2026-10-01 CI 勘定)**:两条
-  拨号路径都只取 addrinfo 表头拨一次——RFC 6724 在不少机器上把
-  `localhost` 的 ::1 排前,v4-only 监听就吃 refused(CI 的 TLS 主机名
-  用例正是这么红的,测试侧已用双栈监听绕开,见 luna_test_loop.c)。
-  Node `net.connect` 的 autoSelectFamily 语义是逐地址回退;改法:解析
-  结果留链,connect 失败关句柄换下一个,全败才报最后一条;plain 与
-  TLS 两条路径同修,配「v4-only 监听 + localhost 拨号必须成功」的
-  回归用例。
+- **net.connect/connectTls 多地址回退(2026-10-01 CI 勘定)**:**已完成
+  (2026-10-01,见上)**。两条拨号路径解析结果留链逐地址回退(Node
+  autoSelectFamily 语义):失败句柄关掉重初始化换下一条,全败才报
+  最后一条错误;plain 与 TLS 同修(TLS 侧失败经 poll SO_ERROR 异步
+  浮出,poll 句柄要随 fd 一起关掉重开)。回归用例
+  `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 +
+  localhost 拨号必须成功,plain/TLS 一条用例两腿同盖。
 
 ## 明确不做(上一轮)
 

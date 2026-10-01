@@ -202,6 +202,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | Node 能力 | luna 现状 | 缺口 | 补法 | 层 | 批次 |
 | --- | --- | --- | --- | --- | --- |
 | fs | ✅ 同步 `fs`(lfs + 便捷层)+ 异步 `loop.fs` | — | — | — | — |
+| net | ✅ `loop.net.connect/listen/connectTls/listenTls`(异步) | **connect/connectTls 只拨首地址,无 Happy Eyeballs 多地址回退**(CI `test_tls_client_dials_by_hostname` 因 `localhost` 先解析 `::1` 导致挂起已用双栈监听绕过,产品面仍需补) | 加地址迭代:解析出 addrinfo 列表后逐个拨号,成功即止、失败试下一条(参考 Node `net.connect` 语义) | Lua(策略层,`loop.net` 内) | 后续批次 |
 | timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in)+ **脚本尾部自动排水(批次 8 已启用)** | 全局化未决(REPL 集成维持推迟) | 见下节 | C 入口 + Lua 收尾 | 8 ✅ |
 | child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式)+ `exec`/`execSync`(批次 8) | — | — | C(loop.c 内) | 8 ✅ |
 | os | ✅ `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | — | — | C(loop.c 内) | 8 ✅ |

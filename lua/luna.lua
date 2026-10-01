@@ -100,6 +100,28 @@ local function exit_code_for(err)
     return 1
 end
 
+-- Script-tail auto-drain (batch 8): after a script's (or -e's) main
+-- chunk ends normally, run the event loop until it empties — Node's
+-- "the event loop runs until nothing is left" contract, so a plain
+-- loop.setTimeout without an explicit loop.run() still fires. No-op
+-- for scripts that never touched the loop; all-unref'd handles exit
+-- at once. The REPL deliberately does NOT drain (its three sync
+-- contracts — line-edit blocking read, ^C/130, attach polling —
+-- stand). A ^C landing mid-drain gets the same 130 as the script body.
+local function maybe_drain()
+    local ok, err = pcall(function()
+        local loop = package.loaded.loop
+        if loop and loop.maybeDrain then
+            loop.maybeDrain()
+        end
+    end)
+    if not ok then
+        io.stderr:write(tostring(err) .. "\n")
+        return exit_code_for(err)
+    end
+    return 0
+end
+
 -- Run a script file: args become the chunk's `...` (standalone lua
 -- convention), arg[] is rebuilt for the duration of the run.
 local function run_script(path, script_args)
@@ -125,7 +147,7 @@ local function run_script(path, script_args)
         io.stderr:write(tostring(err) .. "\n")
         return exit_code_for(err)
     end
-    return 0
+    return maybe_drain()
 end
 
 -- Evaluate -e code through a session so expressions echo Out[n]-style.
@@ -144,7 +166,7 @@ local function run_eval(code)
         -- mid-chunk gets the same 130 a script run would get
         return exit_code_for(err)
     end
-    return 0
+    return maybe_drain()
 end
 
 -- Attach console: line-edit locally, execute remotely in the target's

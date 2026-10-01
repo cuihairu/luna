@@ -5711,6 +5711,110 @@ static void test_proc_arg_and_lifecycle_contracts(void **state)
         "args=true,stdio=true,exit,cwd=true,kill=true");
 }
 
+/* -- batch 8: os additions, process sugar, script-tail drain ---------- */
+
+static void test_os_additions_report_system_state(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local o = loop.os\n"
+        "local a = o.arch()\n"
+        "assert(#a > 0)\n"
+        "assert(a == 'x64' or a == 'arm64' or a:find('^[a-z0-9_]+$'))\n"
+        "return tostring(o.EOL == '\\n') .. ',' .."
+        " tostring(#o.release() > 0)"), "true,true");
+    assert_string_equal(eval_string(
+        "local u = loop.os.userInfo()\n"
+        "assert(u.homedir:sub(1, 1) == '/')\n"
+        "return type(u.username) .. ',' .. type(u.uid) .. ',' .."
+        " type(u.gid) .. ',' .. type(u.shell)"), "string,number,number,string");
+    assert_string_equal(eval_string(
+        "return tostring(loop.os.availableParallelism() >= 1)"), "true");
+}
+
+static void test_process_exec_shell_sugar(void **state)
+{
+    (void)state;
+    /* exec is run("sh", {"-c", cmd}) verbatim: shell metacharacters
+     * work, stdout/stderr aggregate exactly as run's do */
+    assert_string_equal(eval_string(
+        "local p = loop.process\n"
+        "p.exec('printf a; printf b', function(e, r)\n"
+        "  out = tostring(e) .. ',' .. r.status .. ',' .. r.stdout\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "nil,0,ab");
+    /* opts pass straight through to run */
+    assert_string_equal(eval_string(
+        "local p = loop.process\n"
+        "p.exec('pwd', { cwd = '/tmp' }, function(e, r)\n"
+        "  out = (e == nil and r.stdout:sub(1, 1) == '/') and 'cwd-ok'\n"
+        "        or tostring(e)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return out"), "cwd-ok");
+    /* the callback stays mandatory, same as run */
+    assert_string_equal(eval_string(
+        "local ok = pcall(loop.process.exec, 'true')\n"
+        "return tostring(ok)"), "false");
+}
+
+static void test_process_exec_sync_face(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local p = loop.process\n"
+        "return '[' .. p.execSync('printf sync') .. ']'"), "[sync]");
+    /* output crossing the 4 KiB read loop */
+    assert_string_equal(eval_string(
+        "local p = loop.process\n"
+        "return tostring(#p.execSync('yes | head -c 20000'))"), "20000");
+    /* a failing command raises with its exit code (the close status) */
+    assert_string_equal(eval_string(
+        "local p = loop.process\n"
+        "local ok, err = pcall(p.execSync, 'exit 3')\n"
+        "return tostring(ok) .. ',' .."
+        " tostring(err:find('code 3', 1, true) ~= nil)"), "false,true");
+    /* so does dying to a signal */
+    assert_string_equal(eval_string(
+        "local ok = pcall(loop.process.execSync, 'kill -9 $$')\n"
+        "return tostring(ok)"), "false");
+}
+
+static void test_maybe_drain_contract(void **state)
+{
+    (void)state;
+    /* an idle loop is a no-op that reports it drained nothing */
+    assert_string_equal(eval_string(
+        "return tostring(loop.maybeDrain())"), "false");
+    /* a pending timer fires without an explicit run() — the drain is
+     * run('default') in disguise */
+    assert_string_equal(eval_string(
+        "out = 'none'\n"
+        "loop.setTimeout(function() out = 'drained' end, 30)\n"
+        "assert(loop.maybeDrain())\n"
+        "return out"), "drained");
+    /* all-unref'd handles: the drain returns at once and they never
+     * fire — they run while the loop turns but never keep it turning */
+    assert_string_equal(eval_string(
+        "out = 'quiet'\n"
+        "local t = loop.setTimeout(function() out = 'NEVER' end, 60000)\n"
+        "t:unref()\n"
+        "assert(loop.maybeDrain())\n"
+        "loop.clearTimeout(t)\n"
+        "assert(loop.run())\n"
+        "return out"), "quiet");
+    /* same for run() itself: the poll hook no longer pins the loop
+     * while an unref'd interval lingers (the batch 8 root fix) */
+    assert_string_equal(eval_string(
+        "local iv = loop.setInterval(function() end, 40)\n"
+        "iv:unref()\n"
+        "assert(loop.run())\n"
+        "loop.clearInterval(iv)\n"
+        "assert(loop.run())\n"
+        "return 'returned'"), "returned");
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -5915,6 +6019,10 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_closed_sock_method_contracts_throw_cleanly, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_sync_arg_contracts_throw_cleanly, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_proc_arg_and_lifecycle_contracts, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_os_additions_report_system_state, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_exec_shell_sugar, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_process_exec_sync_face, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_maybe_drain_contract, setup_loop, teardown_loop),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

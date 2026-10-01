@@ -44,6 +44,7 @@
 #include <stdlib.h>
 #include <arpa/inet.h>
 #include <signal.h>
+#include <sys/wait.h>
 
 #include <uv.h>
 
@@ -346,6 +347,31 @@ static int l_stop(lua_State *L)
     return 0;
 }
 
+/* loop.maybeDrain() — the script-tail auto-drain (batch 8): after a
+ * script's main chunk ends normally, drive the loop until it empties —
+ * Node's "the event loop runs until nothing is left" contract, so a
+ * plain setTimeout without an explicit run() still fires. A no-op when
+ * the loop holds no live handles (scripts that never touched it drain
+ * nothing), and unref'd-only handles let it return at once (they run
+ * while the loop turns but never keep it turning). Raises "interrupted"
+ * on ^C mid-drain, same as run(), so the exit-130 convention survives
+ * the drain. The REPL never calls it — its three sync contracts stand. */
+static int l_maybe_drain(lua_State *L)
+{
+    if (!g_loop_ready || g_user_handles <= 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    g_L = L;
+    g_interrupted = 0;
+    uv_run(&g_loop, UV_RUN_DEFAULT);
+    if (g_interrupted) {
+        return luaL_error(L, "interrupted");
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 /* loop.now() -> loop milliseconds (uv_now; timeouts are relative to it) */
 static int l_now(lua_State *L)
 {
@@ -371,6 +397,7 @@ static const luaL_Reg loop_funcs[] = {
     { "clearInterval", l_clear },
     { "clearImmediate", l_clear },
     { "run", l_run },
+    { "maybeDrain", l_maybe_drain },
     { "stop", l_stop },
     { "now", l_now },
     { "signal", l_signal },
@@ -411,6 +438,13 @@ static void keepalive_open(void)
 {
     if (!g_prep_inited) {
         uv_prepare_init(&g_loop, &g_prep);
+        /* the poll hook must not keep the loop alive itself: alive-ness
+         * is the user handles' own book (uv_ref/uv_unref). A ref'd
+         * prepare here would pin the loop while any unref'd handle
+         * lingers — run()/maybeDrain() would block on handles whose
+         * whole point was "run, but never keep". It still fires on
+         * every iteration the loop turns, which is all it needs. */
+        uv_unref((uv_handle_t *)&g_prep);
         g_prep_inited = 1;
     }
     if (++g_user_handles > 0) {
@@ -2573,11 +2607,80 @@ static int l_os_network_interfaces(lua_State *L)
     return 1;
 }
 
+/* loop.os.arch() — the CPU architecture under Node's names: "x64" for
+ * x86_64/amd64, "arm64" for aarch64, the raw uname machine otherwise
+ * (os.arch() reports the same strings, not uname's spelling) */
+static int l_os_arch(lua_State *L)
+{
+    uv_utsname_t un;
+    if (uv_os_uname(&un) != 0) {
+        return luaL_error(L, "loop.os: cannot read uname");
+    }
+    if (strcmp(un.machine, "x86_64") == 0 || strcmp(un.machine, "amd64") == 0) {
+        lua_pushliteral(L, "x64");
+    } else if (strcmp(un.machine, "aarch64") == 0 ||
+               strcmp(un.machine, "arm64") == 0) {
+        lua_pushliteral(L, "arm64");
+    } else {
+        lua_pushstring(L, un.machine);
+    }
+    return 1;
+}
+
+/* loop.os.release() — the kernel release string ("6.x.y-...") */
+static int l_os_release(lua_State *L)
+{
+    uv_utsname_t un;
+    if (uv_os_uname(&un) != 0) {
+        return luaL_error(L, "loop.os: cannot read uname");
+    }
+    lua_pushstring(L, un.release);
+    return 1;
+}
+
+/* loop.os.userInfo() — the passwd entry under Node's key names:
+ * {username, uid, gid, shell, homedir}; shell is absent when the
+ * entry has none (nil, same as Node's undefined) */
+static int l_os_user_info(lua_State *L)
+{
+    uv_passwd_t pw;
+    if (uv_os_get_passwd(&pw) != 0) {
+        return luaL_error(L, "loop.os: cannot read user info");
+    }
+    lua_createtable(L, 0, 5);
+    lua_pushstring(L, pw.username);
+    lua_setfield(L, -2, "username");
+    lua_pushinteger(L, (lua_Integer)pw.uid);
+    lua_setfield(L, -2, "uid");
+    lua_pushinteger(L, (lua_Integer)pw.gid);
+    lua_setfield(L, -2, "gid");
+    if (pw.shell != NULL) {
+        lua_pushstring(L, pw.shell);
+        lua_setfield(L, -2, "shell");
+    }
+    lua_pushstring(L, pw.homedir);
+    lua_setfield(L, -2, "homedir");
+    uv_os_free_passwd(&pw);
+    return 1;
+}
+
+/* loop.os.availableParallelism() — the CPU count the process may
+ * actually use (affinity-aware, Node >= 18 same name) */
+static int l_os_available_parallelism(lua_State *L)
+{
+    lua_pushinteger(L, (lua_Integer)uv_available_parallelism());
+    return 1;
+}
+
 static const luaL_Reg os_funcs[] = {
     { "home", l_os_home },
     { "tmpdir", l_os_tmpdir },
     { "hostname", l_os_hostname },
     { "type", l_os_type },
+    { "arch", l_os_arch },
+    { "release", l_os_release },
+    { "userInfo", l_os_user_info },
+    { "availableParallelism", l_os_available_parallelism },
     { "uptime", l_os_uptime },
     { "loadavg", l_os_loadavg },
     { "freemem", l_os_freemem },
@@ -4105,9 +4208,70 @@ static const luaL_Reg proc_funcs[] = {
     { NULL, NULL },
 };
 
+/* process.exec(cmd, opts?, cb) — the shell sugar: exactly
+ * run("sh", {"-c", cmd}, opts, cb), Node's exec shape (a shell
+ * interprets the command line; stdout/stderr aggregate as run does).
+ * The argv table lands at slot 2 so l_process_run parses it unchanged. */
+static int l_process_exec(lua_State *L)
+{
+    int top = lua_gettop(L);
+    if (top < 2 || top > 3) {
+        return luaL_error(L,
+            "loop.process.exec: usage exec(cmd, opts, cb)");
+    }
+    const char *cmd = luaL_checkstring(L, 1);
+    lua_createtable(L, 2, 0); /* argv at top+1 */
+    lua_pushliteral(L, "-c");
+    lua_rawseti(L, -2, 1);
+    lua_pushstring(L, cmd);
+    lua_rawseti(L, -2, 2);
+    lua_pushliteral(L, "sh"); /* top+2 */
+    lua_insert(L, 1);         /* sh, cmd, [opts], [cb], argv */
+    lua_replace(L, 2);        /* sh, argv, [opts], [cb] */
+    return l_process_run(L);
+}
+
+/* process.execSync(cmd) -> stdout: the synchronous shell face, io.popen
+ * shaped — read the whole stdout, close() carries the wait status (the
+ * close three-tuple in Lua), and a non-zero exit raises (Node's
+ * execSync throws on a failed command). */
+static int l_process_exec_sync(lua_State *L)
+{
+    const char *cmd = luaL_checkstring(L, 1);
+    FILE *fh = popen(cmd, "r");
+    if (!fh) {
+        return luaL_error(L, "loop.process.execSync: cannot run '%s'", cmd);
+    }
+    luaL_Buffer b;
+    luaL_buffinit(L, &b);
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), fh)) > 0) {
+        luaL_addlstring(&b, buf, n);
+    }
+    int status = pclose(fh);
+    luaL_pushresult(&b); /* stdout, whatever the exit status was */
+    if (status == -1) {
+        return luaL_error(L, "loop.process.execSync: cannot reap '%s'", cmd);
+    }
+    if (!WIFEXITED(status)) {
+        return luaL_error(L,
+            "loop.process.execSync: '%s' was killed by signal %d",
+            cmd, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    }
+    int code = WEXITSTATUS(status);
+    if (code != 0) {
+        return luaL_error(L,
+            "loop.process.execSync: '%s' exited with code %d", cmd, code);
+    }
+    return 1;
+}
+
 static const luaL_Reg process_funcs[] = {
     { "run", l_process_run },
     { "spawn", l_process_spawn },
+    { "exec", l_process_exec },
+    { "execSync", l_process_exec_sync },
     { NULL, NULL },
 };
 
@@ -4212,6 +4376,8 @@ int luaopen_luna_loop(lua_State *L)
     luaL_newlib(L, dns_funcs);
     lua_setfield(L, -2, "dns");
     luaL_newlib(L, os_funcs);
+    lua_pushliteral(L, "\n");
+    lua_setfield(L, -2, "EOL"); /* the POSIX line ending, like os.EOL */
     lua_setfield(L, -2, "os");
     /* named signal numbers for loop.signal, Linux-standard; SIGKILL and
      * SIGSTOP are listed but the kernel never delivers them */

@@ -23,6 +23,7 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 | `loop.setImmediate(fn, ...)` | 下一轮循环的 check 阶段执行 |
 | `loop.clearTimeout(h)` / `loop.clearInterval(h)` / `loop.clearImmediate(h)` | 清除句柄;对已触发的 one-shot 是无害空操作 |
 | `loop.run(mode?)` | `"default"`(默认,跑到空)、`"once"`(一轮,阻塞等就绪)、`"nowait"`(一轮,不阻塞) |
+| `loop.maybeDrain()` | 有活句柄才排水(等价 `run()`),否则空操作——脚本尾部自动排水的公开面 |
 | `loop.stop()` | 让当前 `run` 尽快返回;句柄保持已调度状态 |
 | `loop.now()` | 循环毫秒时钟(`uv_now`) |
 | `handle:unref()` / `handle:ref()` | 摘掉/恢复句柄的 keep-alive(见下节) |
@@ -61,6 +62,24 @@ loop.run()                    -- 其余句柄清空后即返回,interval 随进�
 - **这是 Node `unref` 的语义**:定时器、server、watcher 都可以"在,但不留人"——后台周期任务、不关心连接何时来的监听端、看一眼就走的观察者;
 - **清账责任仍在**:unref 只影响循环何时退出,不替你清理——脚本结束前对不再需要的句柄照常 `close`/`clear*`(关着的句柄上调用是安全的空操作);
 - **run 的返回不区分谁撑的**:全 unref 之后 `run("default")` 返回,和"没有句柄"无法区分——要判断"还有活没干完",自己在回调里记状态,别猜循环。
+
+## 脚本尾部自动排水
+
+`luna script.lua` 与 `luna -e` 在主代码块**正常结束**后,若循环里还有撑着的句柄,自动把循环跑空再退出——Node 的"事件循环跑到空退出"契约:
+
+```lua
+-- timer.lua:没有 loop.run(),定时器照样触发
+local loop = require("loop")
+loop.setTimeout(function()
+    print("fired")
+end, 500)
+```
+
+- **只影响"用了 loop 但没调 `run()`"的脚本**:现状是句柄被静默丢弃,新契约是句柄被执行到完——方向只会更对;自己调过 `run()` 的脚本不受影响(主块结束时代数已空,排水是空转);
+- **unref 语义原样生效**:全 unref 的脚本立即退出,回调不触发;
+- **主块出错不排水**:脚本以错误收场时进程直接退出,和 Node 的未捕获异常一致;
+- **排水中的 `^C` 照 130**:`maybeDrain` 与 `run` 同款以 `interrupted` 抛错,退出码约定不变;
+- **REPL 不排水**:行编辑的阻塞读、`^C`/130、attach 轮询点三张同步契约不动——控制台会话的循环仍然全部显式。
 
 ## loop.fs:异步文件 IO
 
@@ -210,8 +229,11 @@ require("loop").run()
 local os = require("loop").os
 
 print(os.hostname(), os.type())         -- coding	Linux
-print(os.home())                        -- /home/cui
-print(#os.cpus() .. " cpus")            -- 16 cpus
+print(os.arch(), os.release():sub(1, 6))  -- x64	6.12.3
+print(#os.cpus() .. " cpus, " .. os.availableParallelism() .. " usable")
+local u = os.userInfo()
+print(u.username, u.uid, u.homedir)     -- cui	1000	/home/cui
+print(os.EOL == "\n")                   -- true(POSIX 平台面)
 for name, addrs in pairs(os.networkInterfaces()) do
     for _, a in ipairs(addrs) do
         print(name, a.family, a.address, a.internal)
@@ -225,6 +247,11 @@ end
 | `os.tmpdir()` | 临时目录(`$TMPDIR` 或 `/tmp`) |
 | `os.hostname()` | 主机名 |
 | `os.type()` | 内核名(`"Linux"`) |
+| `os.arch()` | CPU 架构,Node 的名字:`"x64"`(x86_64/amd64)、`"arm64"`(aarch64),其余原样给 uname 的 machine |
+| `os.release()` | 内核版本串(`"6.12.3-luna1"` 这样) |
+| `os.EOL` | 常量 `"\n"`(POSIX 平台面) |
+| `os.userInfo()` | `{username=, uid=, gid=, shell=, homedir=}`——passwd 条目,Node 的键名;`shell` 无条目时缺席 |
+| `os.availableParallelism()` | 本进程实际可用的 CPU 数(亲和感知,Node ≥ 18 同名) |
 | `os.uptime()` | 系统运行秒数(number) |
 | `os.loadavg()` | 三个负载值 `{1min, 5min, 15min}` |
 | `os.freemem()` / `os.totalmem()` | 空闲/总物理内存(字节) |
@@ -470,7 +497,7 @@ loop.run()
 
 ## loop.process:异步子进程
 
-`loop.process` 是循环的第五块,两个入口:`run` 是 `child_process.exec` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付;`spawn` 则把三路 stdio 直接交成普通的 `loop.net` sock,流式收发:
+`loop.process` 是循环的第五块,四个入口:`run` 是 `child_process.execFile` 的聚合兄弟——不开 shell,拉起子进程,把它的 stdout/stderr 收进内存,等**退出且双管道排空**后一次交付;`exec` 是它的 shell 糖(`run("sh", {"-c", cmd})` 的直通,Node `exec` 语义);`execSync` 是同步面,阻塞到命令结束;`spawn` 则把三路 stdio 直接交成普通的 `loop.net` sock,流式收发:
 
 ```lua
 local loop = require("loop")
@@ -481,7 +508,13 @@ process.run("sh", {"-c", "echo hi; exit 0"}, function(err, res)
     print(res.status, res.stdout)   -- 0	hi
 end)
 
+process.exec("echo hi | tr a-z A-Z", function(err, res)  -- shell 语义的糖
+    print(res.stdout)               -- HI
+end)
+
 loop.run()
+
+print(process.execSync("date +%F"))  -- 同步阻塞,返回 stdout;非零退出抛错
 ```
 
 `run` **立刻返回** proc 句柄(不必等子进程结束):`p:pid()` 随时可读;`p:kill(sig?)` 默认 SIGTERM——被杀的子进程照常走退出回调,`res.signal` 是信号编号,此时 `status` 无意义(libuv 约定)。
@@ -489,6 +522,8 @@ loop.run()
 | 调用 | 语义 |
 | --- | --- |
 | `process.run(cmd, args?, opts?, cb)` | 无 shell 执行 cmd;`args` 是 argv 尾部字符串表;`opts` 首片只收 `{cwd = 路径}`;stdin 被忽略;立刻返回 proc 句柄 |
+| `process.exec(cmd, opts?, cb)` | `run("sh", {"-c", cmd}, opts, cb)` 逐字直通:命令行交给 shell 解释,聚合/交付契约与 `run` 全同;`opts` 同样只收 `{cwd = ...}` |
+| `process.execSync(cmd) -> stdout` | 同步执行(经 `popen`),阻塞到命令结束返回全部 stdout;非零退出码(或死于信号)以错误抛出——Node `execSync` 的形状 |
 | `proc:pid()` | 子进程 pid |
 | `proc:kill(sig?)` | 发信号(默认 15/SIGTERM);退出回调照常落地,幂等性没有——进程已退出后再杀会抛错 |
 | `res.status` | 退出码(`signal` 非空时无意义) |
@@ -499,8 +534,9 @@ loop.run()
 
 - **spawn 失败同步抛错**:命令不存在等 exec 失败由 libuv 在 `uv_spawn` 里同步带回,`run` 直接 raise——与 `listen` 的绑定错误同款;`pcall` 接住后循环照常排空,不留悬空句柄;
 - **交付条件是"退出 + 双管道 EOF"**:子进程死了内核必然关掉它的 fd,所以聚合回调确定性地到达,输出不会因缓冲未排空而截断;
-- **没有 shell**:`cmd` 不经 `/bin/sh`,管道、通配、`~` 一概不展开——要 shell 语义就 `run("sh", {"-c", "..."})`,和 Node `spawn`/`exec` 的分野一致;
-- **stdin 被忽略**:`run` 不接子进程的 stdin——要写就用 `process.spawn`(下一节),三路 stdio 都是普通 sock;
+- **`run` 没有 shell**:`cmd` 不经 `/bin/sh`,管道、通配、`~` 一概不展开——要 shell 语义就用 `exec`(或自己 `run("sh", {"-c", "..."})`),和 Node `spawn`/`exec` 的分野一致;
+- **`execSync` 是同步面**:不进事件循环、阻塞到子进程结束——长命令会卡住调用线程,和 Node `execSync` 一样是"知道自己在干什么"的接口;stdout 之外的 stderr 不捕获,退出码经 close 状态带回,非零即抛错;
+- **stdin 被忽略**:`run`/`exec`/`execSync` 不接子进程的 stdin——要写就用 `process.spawn`(下一节),三路 stdio 都是普通 sock;
 - **错误是字符串**:与 `loop.fs`/`loop.net` 相同,`uv_strerror` 直出。
 
 ## process.spawn:流式子进程

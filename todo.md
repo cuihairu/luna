@@ -967,7 +967,7 @@
       highWaterMark 记账阈值;适配器至少两个:sock(loop.net)→Duplex、
       内存块→Readable(loop.http onData→Readable 视余量)。用例:背压
       往返、error→destroy→'close' 联动、pipe 错误传播。**验收**:同上。
-- [ ] **批次 8:os 补齐 + child_process 糖 + timers 自动排水**。loop.os
+- [x] **批次 8:os 补齐 + child_process 糖 + timers 自动排水**。loop.os
       增 arch(x86_64→x64 映射)/release/EOL/userInfo/availableParallelism
       (loop.c os_funcs 表内 ~60 行);process.exec = run("sh",{"-c",…})
       糖、execSync = io.popen 糖(close 三元组拿退出码,非零 raise);
@@ -975,7 +975,7 @@
       luna_loop_maybe_drain(),REPL 不启用)。**验收**:既有全部 loop
       用例原样全绿(自动排水对自调 run() 的用例必须是无操作);新增:
       脚本 setTimeout 不调 run 也触发、全 unref 立即退出、-e 同口径;
-      ^C/130 与 attach 契约用例不回归。
+      ^C/130 与 attach 契约用例不回归。(实录见下节)
 - 每批共同门禁:单提交;两树 cmake --build + ctest 全绿(本立项日实为
   **16 组**——README 旧文「九组」清单已顺手修正,历史轮次记录里的
   九组/15 组是当时的账,不改);负载 >40 不取 rocks 终绿的纪律照旧;
@@ -1412,6 +1412,68 @@
       cov 树曾见 linedit 一败(并行时段瞬时,单跑 0.19s 实绿、复跑
       干净 16/16),普通树曾见 rocks 一败同判(单跑 21.08s 实绿)。
       单笔提交,push 前 fetch origin main 核对 SHA;不打 tag、不发版。
+
+### 批次 8(os 补齐 + child_process 糖 + timers 自动排水)实录(2026-10-01)
+
+- [x] **vendor:无**(零新依赖,全落既有 src/luna_loop.c 与 lua/luna.lua)。
+- [x] **实现**:loop.os 增五件——`arch`(uname machine 的 `x86_64`/`amd64`→`"x64"`、
+      `aarch64`/`arm64`→`"arm64"`,其余原样;Node 的名字,不是 uname 原文)、
+      `release`、`EOL`(字段常量 `"\n"`,`luaL_newlib` 后 setfield,非函数)、
+      `userInfo`(uv_os_get_passwd→`{username,uid,gid,shell,homedir}`,shell 无条目
+      时键缺席)、`availableParallelism`;五件同步直返、失败 `luaL_error`,与既有
+      os 面同款,REPL 的官方 `os` 全局不受影响。child_process 两糖:`exec` 在栈上
+      拼出 `sh, {"-c", cmd}` 后逐字转调 `l_process_run`(聚合/cwd/交付语义零分叉),
+      `execSync` 走 popen——fread 4K 循环读尽 stdout(任何退出状态都先返回)、
+      pclose 三元组拿 wait 状态,非零退出或死于信号 raise。**实现勘定**:两糖落
+      **C 面 process_funcs** 而非派发单初记的"Lua 层"——糖要随
+      `luaL_requiref(L,"loop")` 打开模块的每一处(CLI、两个 cmocka harness、嵌入方)
+      同脸出现,Lua 装饰层会漏掉后两者(node-parity.md 已记账)。
+      **脚本尾部自动排水**:loop.c 出 `maybeDrain()`(无活句柄 no-op 返 false,
+      有则 `g_interrupted=0` 后 `uv_run(DEFAULT)`),`lua/luna.lua` 的 `run_script`/
+      `run_eval` 在主块**正常结束**后调用(出错不排——Node 未捕获异常即退;REPL
+      不排,三张同步契约不动;`-i` 先排再进控制台);排水中 `^C` 与 `run()` 同款
+      raise `interrupted`,`exit_code_for` 出 130——一张契约贯穿脚本体与排水段。
+- [x] **顺手根因修复一个真产品 bug(prepare-ref)**:keep-alive 的 prepare 钩子
+      此前是 ref'd 句柄——只要还有**任何**用户句柄(unref 与否)它就撑着循环,
+      "只剩 unref 句柄"时 `run()` **永不返回**(实测 `-e` unref interval + run()
+      挂死 rc=124;libuv 的 `uv__loop_alive` 只数 ref'd 活句柄,deps/libuv 源码
+      核实)。修复:prepare 于 init 时 `uv_unref`——存活账本全归用户句柄自己,
+      钩子照常在循环每一拍照跑(^C 翻译与 attach 轮询不受影响);副作用是把
+      "unref 的一次性定时器在 run() 里照常触发"翻转为 Node 语义:循环不转,
+      永不触发(新测试钉住)。
+- [x] **测试**:loop 组 +4(195→199)——os 五件契约、exec 糖(shell 聚合/cwd/
+      无 cb 用法错)、execSync 面(20000 字节跨 4K 读循环、exit 3 raise 带
+      code 3、`kill -9` 信号腿)、maybeDrain 契约(idle→false、挂起 timer→
+      drained、全 unref→安静退出、unref interval + run() 返回——钉住 prepare
+      修复);cli 组 +4——脚本 setTimeout 不调 run 也触发、全 unref 立即退出且
+      NEVER 不出现、`-e` 同口径、排水中 ^C → 130(drain_wait.lua 用 1200ms 短
+      定时器:epoll EINTR 只在下一个唤醒点恢复,标记由下一拍的 prepare 读到);
+      新增 3 个夹具。验收线:既有全部 loop 用例(自调 run)原样全绿。
+- [x] **覆盖率账**:Lua 侧总 **97.32%**(3737 行 103 缺,批次 7 收官 97.08%);
+      **luna.lua 95.95% → 98.72%**(余 2 暗行均为旧登记结构腿:chunkname 普通
+      构建回退、socket.unix 捆绑必在——排水用例顺带点亮了此前的 attach 竞态
+      恢复腿)。C 侧 lines **94.6%**(2761/2919;批次 7 收官 94.8% 2689/2837,
+      分母 +82 为批次 8 新 C 面,72 亮/10 暗)、functions **100%**(256)、
+      branches **76.8%**(968/1260)。10 暗行逐条登记:arch 的 uname 失败
+      raise/arm64 两臂/裸机透传臂(本机 x86_64 平台恒定)、release 与 userInfo
+      的 getter 失败腿(平台恒真)、execSync 的 popen NULL(fork/资源耗尽)与
+      pclose==-1(wait 失败)——平台/资源类不为行数写假测试;maybeDrain 与
+      exec 全亮,execSync 信号死亡臂由 kill -9 用例点亮。坑:gcovr 首跑撞
+      GcovrMergeAssertion——9-27 的旧对象名 `luna_loop.gcda/.gcno`(行号平移
+      前的计数)与今日 `luna_loop.c.*` 并存,on_kick 起始行 91/92 冲突,清掉
+      陈旧对后出账(与第七轮"陈旧 gcda 配对"同族)。
+- [x] **文档同步**:guide/loop.md(API 表 +maybeDrain 行、"脚本尾部自动排水"
+      一节、os 表 +5 行、process 节改四入口与行为约定);node-parity.md B 表
+      timers/child_process/os 三行翻 ✅ + 三节实现勘定(maybeDrain 形态与
+      prepare-ref 根因、os 键名定稿、exec/execSync 的 C 面落地理由);
+      architecture.md 的 prepare 句(自身 unref,keep-alive 账本只记用户句柄)
+      与 loop 段补记;README/index 无涉(loop 只出现在测试清单)。
+- [x] **门禁**:两树 cmake --build + ctest **16 组全绿**——build 树 231.26s
+      (loop 157.65s、rocks 21.10s 实绿);cov 树全量 15/16 后 rocks 单跑
+      128.37s **实绿**(首跑失败查明为环境:并行会话把 /tmp tmpfs(26G)填到
+      19G+ 后写满,rocks 夹具的 scratch 落 /tmp 撞 ENOSPC;该窗口连工具输出
+      都写不进,df 核实后等并行会话清理即恢复,单跑复绿证明非回归)。文档构建
+      4.02s。单笔提交,push 前 fetch origin main 核对 SHA;不打 tag、不发版。
 
 ## 下轮方向
 

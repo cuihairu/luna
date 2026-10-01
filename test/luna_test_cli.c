@@ -347,6 +347,67 @@ static void test_interrupt_spinning_script_without_serve(void **state)
     assert_non_null(strstr(outbuf, "interrupted"));
 }
 
+/* -- batch 8: script-tail auto-drain ------------------------------------
+ *
+ * `timeout 10` wraps these: a drain regression that pins the loop
+ * fails fast with 124 instead of holding the group hostage. Markers go
+ * to stderr (unbuffered even into a pipe). */
+
+static int run_luna_capped(const char *args)
+{
+    char cmd[8192];
+    snprintf(cmd, sizeof(cmd), "timeout 10 %s %s 2>&1", LUNA_BIN, args);
+    FILE *p = popen(cmd, "r");
+    assert_non_null(p);
+    size_t n = fread(outbuf, 1, sizeof(outbuf) - 1, p);
+    outbuf[n] = '\0';
+    int status = pclose(p);
+    last_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    return 0;
+}
+
+/* a plain setTimeout without loop.run() still fires: the script tail
+ * drains the loop, Node's "run until empty then exit" */
+static void test_script_timer_fires_without_run(void **state)
+{
+    (void)state;
+    run_luna_capped(LUNA_FIXTURES "/drain_timer.lua");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "drained"));
+}
+
+/* all-unref'd handles never hold the process: exit is immediate and
+ * the callback never runs (it may not fire at all — Node's unref) */
+static void test_all_unref_exits_without_firing(void **state)
+{
+    (void)state;
+    run_luna_capped(LUNA_FIXTURES "/drain_unref.lua");
+    assert_int_equal(last_code, 0);
+    assert_null(strstr(outbuf, "NEVER"));
+}
+
+/* -e drains under the same contract */
+static void test_eval_timer_fires_without_run(void **state)
+{
+    (void)state;
+    run_luna_capped("-e 'local l = require(\"loop\") "
+                    "l.setTimeout(function() io.stderr:write(\"edrained\\n\")"
+                    " end, 80)'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "edrained"));
+}
+
+/* a ^C landing mid-drain gets the same 130 as one landing in the
+ * script body: maybeDrain raises "interrupted" like run() does */
+static void test_drain_interrupt_exits_130(void **state)
+{
+    (void)state;
+    run_luna_signalled(LUNA_FIXTURES "/drain_wait.lua", NULL, "ready", 200,
+                       SIGINT);
+    assert_int_equal(last_code, 130);
+    assert_non_null(strstr(outbuf, "interrupted"));
+}
+
 /* -- interactive group -------------------------------------------------- */
 
 static void test_interactive_piped_stdin(void **state)
@@ -499,6 +560,10 @@ int main(void)
         cmocka_unit_test(test_eval_interrupt_exits_130),
         cmocka_unit_test(test_script_interrupt_exits_130),
         cmocka_unit_test(test_interrupt_spinning_script_without_serve),
+        cmocka_unit_test(test_script_timer_fires_without_run),
+        cmocka_unit_test(test_all_unref_exits_without_firing),
+        cmocka_unit_test(test_eval_timer_fires_without_run),
+        cmocka_unit_test(test_drain_interrupt_exits_130),
         cmocka_unit_test(test_interactive_piped_stdin),
         cmocka_unit_test(test_interactive_multiline_piped),
         cmocka_unit_test(test_interactive_after_script),

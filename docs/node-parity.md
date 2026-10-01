@@ -202,9 +202,9 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | Node 能力 | luna 现状 | 缺口 | 补法 | 层 | 批次 |
 | --- | --- | --- | --- | --- | --- |
 | fs | ✅ 同步 `fs`(lfs + 便捷层)+ 异步 `loop.fs` | — | — | — | — |
-| timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in) | 脚本尾部自动排水、全局化未决 | 见下节 | C 入口 + Lua 收尾 | 8 |
-| child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式) | `exec` 糖、同步面 | `process.exec` = `run("sh",{"-c",…})` 糖;`execSync` 走 `io.popen`(已启用) | Lua | 8 |
-| os | ✅ `loop.os`(hostname/type/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | `arch`/`release`/`EOL`/`userInfo` | libuv `uv_os_uname`/`uv_os_get_passwd` 接进 loop.os | C(loop.c 内) | 8 |
+| timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in)+ **脚本尾部自动排水(批次 8 已启用)** | 全局化未决(REPL 集成维持推迟) | 见下节 | C 入口 + Lua 收尾 | 8 ✅ |
+| child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式)+ `exec`/`execSync`(批次 8) | — | — | C(loop.c 内) | 8 ✅ |
+| os | ✅ `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | — | — | C(loop.c 内) | 8 ✅ |
 | path | ✅ 批次 6 已落地(`path`,纯 Lua) | — | — | Lua | 6 |
 | util | ✅ 批次 6 已落地(`util`,纯 Lua;`luna.introspect` 仍是 REPL 内省,两者分工见下) | — | — | Lua | 6 |
 | events | ✅ 批次 6 已落地(`events`,纯 Lua) | — | — | Lua | 6 |
@@ -220,6 +220,13 @@ ini.encode({ server = { host = "127.0.0.1" } })
 
 1. **启用:脚本尾部自动排水**。Node 契约是"注册了 timer,进程就活着"——`luna script.lua` 现在是"主 chunk 跑完就走",`loop.setTimeout` 没配 `loop.run()` 的定时器被静默丢弃(footgun)。建议:`run_script` 主 chunk 正常结束后,若 loop 已被 require 且仍有活句柄,自动 `loop.run()` 排空——这正是 Node 的"事件循环跑到空退出";`unref` 语义天然支持"在但不留人",既有契约一个不改。实现落点 `luna_main.c` 的脚本路径尾部(探测 package.loaded.loop 的句柄计数,或 loop.c 出一个 `luna_loop_maybe_drain()`),`-e` 模式同口径,REPL 不启用。风险面:只影响"用了 loop 但没调 run()"的脚本——现状是句柄被丢,新行为是句柄被执行,方向只会更对;全部既有 loop 测试必须原样全绿(它们自己调 run,自动排水对它们是无操作)。
 2. **继续推迟:全局 `setTimeout`**。全局化逼着 REPL 主循环进循环世界:行编辑的阻塞读、`^C` 的 130 契约、attach 的轮询点全在同步侧,为省一个 `require` 动这三张契约,收益配不上代价;「REPL 每次求值后 drain(nowait)」的形态已记入 todo 下轮方向,条件成熟(行编辑可超时读或唤醒线程可定时)再启。
+
+**实现勘定(2026-10-01,批次 8 已落地)**:
+
+- **形态**:loop.c 出 `loop.maybeDrain()`(活句柄才排水,否则空操作返回 false),`lua/luna.lua` 的 `run_script` 与 `run_eval` 在主块**正常结束**后调用;主块出错不排水(对齐 Node 未捕获异常即退);REPL 不调用。`-i script.lua` 先排水再进控制台;
+- **排水中的 `^C` 照 130**:`maybeDrain` 与 `run()` 同款以 `interrupted` 抛错,`exit_code_for` 拿到 130——一张契约贯穿脚本体与排水段;
+- **顺手根因修复一个真 bug**:keep-alive 的 prepare 钩子此前是 ref'd 句柄——只要还有任何用户句柄(unref 与否)它就撑着循环,`run()` 在"只剩 unref 句柄"时**永不返回**(实测 `-e` unref interval + run() 挂死),与"unref 不再绑住脚本寿命"的文档承诺相悖。修复:prepare 改 `uv_unref`——存活账本全归用户句柄自己,钩子照常在循环每一拍照跑(^C 翻译与 attach 轮询不受影响);副作用是把"unref 的一次性定时器在 run() 里照常触发"翻转为 Node 语义(循环不转,永不触发);
+- 全局化与 REPL 集成维持推迟,启用条件不变。
 
 ### path(批次 6,纯 Lua)
 
@@ -319,8 +326,12 @@ em:setMaxListeners(20)                  -- 缺省 10(Events.defaultMaxListeners)
 | `loop.os.userInfo()` | `uv_os_get_passwd`:`{username, uid, gid, shell, homedir}` | `os.userInfo()` |
 | `loop.os.availableParallelism()` | `uv_available_parallelism` | Node ≥18 同名 |
 
-### child_process 糖(批次 8,Lua)
+**实现勘定(2026-10-01,批次 8)**:`arch` 的映射收 `x86_64`/`amd64`→`"x64"`、`aarch64`/`arm64`→`"arm64"`,其余 uname machine 原样;`EOL` 是字段常量 `"\n"`(在 `luaL_newlib` 后 setfield,不是函数);`userInfo` 的键 `{username, uid, gid, shell, homedir}`——shell 无条目时**键缺席**(nil),uid/gid 是 number;五件全部同步直返、失败 `luaL_error`,与既有 os 面同款。REPL 里的 `os` 全局不受影响(官方标准库的地盘,不遮蔽)。
+
+### child_process 糖(批次 8)
 
 - `process.exec(cmd, opts?, cb)`:`run("sh", {"-c", cmd}, opts, cb)` 的糖(Node `exec` 的 shell 语义;stdout/stderr 聚合照旧);`execFile` 即 `run` 本尊,文档点名即可;
-- `process.execSync(cmd) -> stdout`:~20 行 `io.popen` 糖(`LUA_USE_POSIX` 已开,popen 自带;`fh:close()` 的第二三元组拿退出码,非零 raise)——Node `execSync` 的形状;
+- `process.execSync(cmd) -> stdout`:`popen` 同步面(`LUA_USE_POSIX` 已开)——读尽 stdout,`pclose` 的 wait 状态拿退出码,非零(或死于信号)raise——Node `execSync` 的形状(io.popen 的 `close()` 三元组同源语义);
 - **不做** `spawnSync` 的三流同步面(popen 单流 + `/dev/null` 重定向够用的场景走 execSync;真三流是 `process.spawn` 的场)。
+
+**实现勘定(2026-10-01,批次 8)**:两件落在 **C 面 `process_funcs`**(loop.c 内),而非上表初记的"Lua 层"——糖要随 `loop` 模块同脸出现:CLI、嵌入式测试桩(`luaL_requiref` 直开 loop 的 harness)与 `lua/luna.lua` 三方都拿到同一张 `loop.process` 表,单独放 Lua 层会漏掉前两者;`exec` 在栈上拼出 `sh, {"-c", cmd}, opts, cb` 后**逐字转调 `l_process_run`**(聚合/交付/cwd 语义零分叉),`execSync` 走 `popen`/`pclose` + `WIFEXITED`/`WEXITSTATUS`,20000 字节级输出跨 4 KiB 读循环、`exit 3` 与 `kill -9 $$` 两条 raise 腿均有用例。

@@ -1,0 +1,43 @@
+name: daily-build
+
+# 每日构建:夜间定时 + 手动可触发。产物走 artifact(保留 14 天),
+# 不打 tag、不发 release——发布是显式动作,不归机器管。
+on:
+  schedule:
+    # 21:13 UTC ≈ 北京时间次日 05:13,错开整点高峰
+    - cron: "13 21 * * *"
+  workflow_dispatch:
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        working-directory: build
+        run: ctest -C $BUILD_TYPE --output-on-failure
+
+      - name: Smoke
+        run: ./build/luna -e 'print(kernel.version())'
+
+      - name: Stage
+        run: |
+          mkdir stage
+          cp build/luna stage/luna-linux-x64
+          tar -czf luna-nightly-linux-x64.tar.gz -C stage .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luna-nightly-linux-x64
+          path: luna-nightly-linux-x64.tar.gz
+          retention-days: 14

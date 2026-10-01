@@ -6,7 +6,7 @@ YAML 1.1 编解码、多文档流。后端 [lyaml](https://github.com/gvvaughan/
 
 | 调用 | 说明 |
 | --- | --- |
-| `yaml.decode(str)` | 解析首个文档 |
+| `yaml.decode(str, opts?)` | 解析首个文档;`opts.nullval = yaml.null` 可把 null 落成哨兵(缺省落 `nil`) |
 | `yaml.decodeAll(str)` | 解析 `---` 分隔的全部文档,返回数组 |
 | `yaml.encode(value)` | 编码为 YAML 文本 |
 | `yaml.null` | 编码侧的 null 哨兵:`encode` 时落成 `~`;`decode` 侧 `~`/空/`null` 一律落 `nil`,哨兵不回流 |
@@ -63,17 +63,20 @@ map:
 ...
 ```
 
-null 两侧不对称:编码侧用 `yaml.null` 哨兵表达(落成 `~`);解码侧 `~`、空值、`null` 一律落 `nil`,与"字段缺席"不可区分:
+null 两侧不对称:编码侧用 `yaml.null` 哨兵表达(落成 `~`);解码侧缺省把 `~`、空值、`null` 一律落 `nil`,与"字段缺席"不可区分——要区分就传 `opts.nullval` 把哨兵接回来:
 
 ```lua
 local yaml = require "yaml"
 local t = yaml.decode("value: ~\n")
 print(t.value, t.value == nil)
+local u = yaml.decode("value: ~\n", { nullval = yaml.null })
+print(u.value == yaml.null)
 print(yaml.encode({ v = yaml.null }))
 ```
 
 ```text
 nil	true
+true
 ---
 v: ~
 ...
@@ -83,4 +86,4 @@ v: ~
 
 - YAML 1.1 口径(lyaml 所实现的子集):`yes/no/on/off` 等布尔字面量按 1.1 规则处理;需要严格 1.2 的项目请注意差异。
 - `decode` 只取首个文档,多文档流请用 `decodeAll`。
-- null 不对称(见上):`yaml.null` 只在编码侧有意义,解码产物里不会出现它。
+- null 不对称(见上):编码侧的 null 只能是 `yaml.null` 哨兵;解码侧缺省落 `nil`,`opts.nullval = yaml.null` 才回流哨兵。

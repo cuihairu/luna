@@ -13,7 +13,7 @@ JSON 编解码。后端 [dkjson](https://dkolf.dk/dkjson)(纯 Lua,UTF-8 感知,�
 
 ## 用法
 
-数组按序还原;对象走哈希表,键序跟随 `pairs`——**每次运行都可能不同**,要稳定就排序后再编码:
+数组按序还原;对象走哈希表,键序跟随 `pairs`——**每次运行都可能不同**,对键序敏感的输出请逐键拼装或改用数组:
 
 ```lua
 local json = require "json"

@@ -43,7 +43,7 @@ print(conf.debug, type(conf.debug), conf.port, type(conf.port))
 true	boolean	8080	number
 ```
 
-编码对称(节序与节内键序都跟随 `pairs`,要确定的文本就把要输出的表按序排好):
+编码对称(节序与节内键序都跟随 `pairs`,每次运行可能不同;要确定的文本就每层只留一个键,或逐键拼装):
 
 ```lua
 local ini = require "ini"

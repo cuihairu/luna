@@ -1,0 +1,245 @@
+name: Daily Build
+
+# 每日构建流水线：CI 构建产物分发，不是发版——绝不 git tag / gh release
+# （铁律：本仓库的产物只存在于 Actions artifact，任何改动都不得引入
+# tag 或 Release 步骤）。全仓库只保留一份"最新每日构建"：固定 artifact
+# 名 daily-build，上传前先删历史同名（upload-artifact@v4 产物不可变，
+# 同名直接传会报错）。
+#
+# 与 push 触发的 CMake CI 的差异只有三处：构建类型 Release（产物给人
+# 运行）；关闭单元测试（全量 16 组套件由每次 push 的 CI 负责，夜间构建
+# 是纯产物流水线，不把 rocks 组的网络腿带进每日窗口）；最后打包上传
+# artifact。平台面与 README/architecture 的口径一致：Linux x64 /
+# Linux arm64 / macOS Apple Silicon——replxx 桥未含 windows.cxx，
+# Windows 不在支持面。luna 是单二进制（依赖全部静态链，系统侧只留
+# zlib 与 OpenSSL 的动态库），Linux 用发行版包（runner 镜像自带
+# libssl-dev / zlib1g-dev），macOS 用 Homebrew 的 keg-only openssl@3。
+
+on:
+  schedule:
+    # UTC 01:23 = 北京时间 09:23；错开 soar 每日构建的 00:40 UTC，
+    # 也避开整点 runner 高峰
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # collect job 删除历史 daily-build artifact 需要
+
+concurrency:
+  group: daily-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x64
+            title: Linux x64
+          - os: ubuntu-24.04-arm
+            name: linux-arm64
+            title: Linux arm64
+          - os: macos-latest
+            name: macos-arm64
+            title: macOS (Apple Silicon)
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      # pkg-config 顺手装上（FindOpenSSL 会拿它做提示）；
+      # openssl@3 是 keg-only，下面 Configure 里显式指给 CMake。
+      - name: Install Ninja & OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja pkg-config openssl@3
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_UNIT_TESTS=OFF \
+              -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          else
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DENABLE_UNIT_TESTS=OFF
+          fi
+
+      - name: Build
+        run: cmake --build build
+
+      # 冒烟：单二进制自证。--help 出用法；-e 出 Out[1]: 42；loop 定时器
+      # 不调 run 也触发——脚本尾部自动排水是 libuv + 排水全栈的端到端
+      # 证明。看门狗两层：5s 的 os.exit(99) 必须 :unref()（ref'd 看门狗
+      # 自己就是活句柄，会把排水段撑到自己响——挂起定时器留住进程正是
+      # Node 语义）；外层 perl alarm 20 兜住循环彻底卡死不转的形态
+      # （unref 定时器只在循环转身时响，卡死的循环它到不了）。
+      - name: Smoke
+        shell: bash
+        run: |
+          set -e -o pipefail
+          ./build/luna --help
+          ./build/luna -e '6*7' | grep -q 'Out\[1\]: 42'
+          perl -e 'alarm 20; exec @ARGV' \
+            ./build/luna -e 'local l = require("loop") l.setTimeout(function() print("drain-ok") end, 50) l.setTimeout(function() os.exit(99) end, 5000):unref()' \
+            | grep -q drain-ok
+
+      - name: Package
+        shell: bash
+        run: |
+          set -e
+          PKG=luna-${{ matrix.name }}
+          mkdir -p stage/$PKG
+          cp build/luna stage/$PKG/
+          cat > stage/$PKG/PLATFORM-NOTES.txt <<'NOTES'
+          luna 每日构建 - ${{ matrix.title }}
+          包含: luna 单二进制（Lua 5.5 / libuv / replxx / 全部格式后端已静态链入）
+
+          验证: 终端运行
+            ./luna --help
+            ./luna -e '6*7'          # 应答 Out[1]: 42
+            ./luna                    # 进入交互式 REPL（^D 退出）
+          NOTES
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cat >> stage/$PKG/PLATFORM-NOTES.txt <<'NOTES'
+
+          crypto 模块说明: 本包动态链接 Homebrew 的 OpenSSL（keg-only，不进
+          默认路径）。目标机如未装，`brew install openssl@3` 后 crypto 与
+          loop 的 TLS 面即可用；其余全部功能无此依赖。
+          首次运行如被 Gatekeeper 拦截: xattr -cr luna（每日构建未做签名）。
+          NOTES
+          else
+            cat >> stage/$PKG/PLATFORM-NOTES.txt <<NOTES
+
+          运行时依赖: libz 与 libssl/libcrypto（发行版默认自带；如缺按
+          发行版装 openssl 即可，只为 crypto 与 loop 的 TLS 面）。
+          NOTES
+          fi
+          cd stage
+          zip -qr ../$PKG.zip $PKG
+
+      - name: Upload platform package
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.name }}
+          path: luna-${{ matrix.name }}.zip
+          retention-days: 3
+          if-no-files-found: error
+
+  # 汇总：三平台 zip + BUILD_INFO + VERIFY 打成一个固定名 artifact。
+  # 上传前先删历史同名 daily-build——v4 产物不可变，不删必报错；
+  # 删了再传即"全仓库只存在一份最新每日构建"。
+  collect:
+    name: Collect daily-build
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download platform packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          merge-multiple: true
+          path: pkgs
+
+      - name: Remove previous daily-build artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.name == "daily-build") | .id')
+          if [ -n "$ids" ]; then
+            echo "$ids" | while read -r id; do
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/$id" \
+                && echo "deleted artifact $id"
+            done
+          else
+            echo "no previous daily-build artifact"
+          fi
+
+      - name: Build info and verify guide
+        run: |
+          set -e
+          UTC_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')
+          BJ_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M 北京时间')
+          BUILD_DATE=$(date -u +'%Y%m%d')
+          {
+            echo "luna 每日构建 (daily-build)"
+            echo "更新时间: ${UTC_TIME} / ${BJ_TIME}"
+            echo "Commit:   ${GITHUB_SHA}"
+            echo "短 sha:   ${GITHUB_SHA::8}"
+            echo "触发方式: ${{ github.event_name }}"
+            echo ""
+            echo "这是 CI 构建产物分发，不对应任何 Release/tag。"
+            echo ""
+            echo "平台产物:"
+            echo "  luna-linux-x64.zip    Linux x64: luna 单二进制"
+            echo "  luna-linux-arm64.zip  Linux arm64: luna 单二进制"
+            echo "  luna-macos-arm64.zip  macOS Apple Silicon: luna 单二进制"
+          } > BUILD_INFO.txt
+          cat > VERIFY.md <<'VERIFY'
+          # 最简验证
+          每个平台 zip 内附 PLATFORM-NOTES.txt。
+
+          ## 通用冒烟（三平台一致）
+          解压后命令行运行:
+            ./luna --help              # 打印用法，退出码 0
+            ./luna -e '6*7'            # 应答 Out[1]: 42
+            ./luna                     # 进入交互式 REPL（^D 退出）
+
+          ## Linux (x64 / arm64)
+          1. 解压对应平台 zip
+          2. `chmod +x luna && ./luna`
+
+          ## macOS (Apple Silicon)
+          1. 解压 luna-macos-arm64.zip
+          2. `xattr -cr luna && chmod +x luna && ./luna`
+             （未签名，必须先清隔离属性）
+          VERIFY
+          mv pkgs/luna-linux-x64.zip pkgs/luna-linux-arm64.zip \
+             pkgs/luna-macos-arm64.zip .
+          zip -q "luna-daily-${BUILD_DATE}-${GITHUB_SHA::8}.zip" \
+            luna-linux-x64.zip luna-linux-arm64.zip luna-macos-arm64.zip \
+            BUILD_INFO.txt VERIFY.md
+          echo "daily_zip=luna-daily-${BUILD_DATE}-${GITHUB_SHA::8}.zip" >> "$GITHUB_ENV"
+          echo "utc_time=${UTC_TIME}" >> "$GITHUB_ENV"
+          echo "bj_time=${BJ_TIME}" >> "$GITHUB_ENV"
+
+      - name: Upload daily-build
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-build
+          path: ${{ env.daily_zip }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Run summary
+        run: |
+          {
+            echo "## 每日构建产物"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 更新时间 | ${utc_time} / ${bj_time} |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| 产物 | artifact **daily-build**（唯一最新版，历史已清理） |"
+            echo "| 平台 | linux-x64 / linux-arm64 / macos-arm64（单二进制） |"
+            echo ""
+            echo "下载: 本 run 页面底部 Artifacts 区 \`daily-build\`。"
+            echo "验证方式见包内 VERIFY.md。这是 CI 构建产物分发，无 tag、无 Release。"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -670,13 +670,19 @@ static void test_fs_access_probes_existence(void **state)
 static void test_fs_realpath_resolves(void **state)
 {
     (void)state;
+    /* the expectation must be canonical: on macOS /tmp is a symlink to
+     * /private/tmp, so realpath lands where the literal '/tmp' spelling
+     * never matches — resolve the base the same way first */
     assert_string_equal(eval_string(
         "local fs = loop.fs\n"
         "out = 'none'\n"
         "fs.writeFile('/tmp/luna-loop-fs-real.txt', 'x', function(e)\n"
         "  assert(e == nil, e)\n"
-        "  fs.realpath('/tmp/../tmp/luna-loop-fs-real.txt', function(e2, p)\n"
-        "    out = tostring(e2 == nil) .. ':' .. tostring(p == '/tmp/luna-loop-fs-real.txt')\n"
+        "  fs.realpath('/tmp', function(e0, base)\n"
+        "    assert(e0 == nil, e0)\n"
+        "    fs.realpath('/tmp/../tmp/luna-loop-fs-real.txt', function(e2, p)\n"
+        "      out = tostring(e2 == nil) .. ':' .. tostring(p == base .. '/luna-loop-fs-real.txt')\n"
+        "    end)\n"
         "  end)\n"
         "end)\n"
         "assert(loop.run())\n"
@@ -895,7 +901,8 @@ static void test_fs_watch_missing_path_throws(void **state)
         "  function() end)\n"
         "local drained = loop.run()   -- nothing dangles after the throw\n"
         "return tostring(ok) .. '|' ..\n"
-        "       tostring((tostring(err):find('no such')) ~= nil) .. '|' ..\n"
+        /* macOS strerror capitalizes ('No such…'): match case-insensitively */
+        "       tostring((tostring(err):lower():find('no such')) ~= nil) .. '|' ..\n"
         "       tostring(drained)"), "false|true|true");
 }
 
@@ -961,10 +968,14 @@ static void test_signal_self_delivery(void **state)
         "  w:close()\n"
         "end)\n"
         "return 'armed'"), "armed");
+    /* the delivered number is the platform's SIGUSR2 (12 on Linux,
+     * 31 on macOS) — never hardcode it */
+    char expect[16];
+    snprintf(expect, sizeof(expect), "got:%d", (int)SIGUSR2);
     kill(getpid(), SIGUSR2);
     assert_string_equal(eval_string(
         "assert(loop.run())\n"
-        "return out"), "got:12");
+        "return out"), expect);
 }
 
 static void test_signal_reserved_refused(void **state)

@@ -22,6 +22,12 @@
 #define LUNA_BIN "./luna"
 #endif
 
+/* inner hang guard, from CMake: GNU timeout, or gtimeout where macOS
+ * brew provides it, or empty (no guard — ctest TIMEOUT still bounds) */
+#ifndef LUNA_TIMEOUT_CMD
+#define LUNA_TIMEOUT_CMD "timeout"
+#endif
+
 static char workdir[256];
 static char origdir[256];
 static int keep_workdir = 0; /* set on failure: teardown keeps the scene */
@@ -39,9 +45,14 @@ static char *read_all(const char *path);
 static int run_luna(const char *args)
 {
     char cmd[512];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && timeout 420 '%s' %s > out.log 2>&1",
-             workdir, LUNA_BIN, args);
+    if (LUNA_TIMEOUT_CMD[0] != '\0')
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && %s 420 '%s' %s > out.log 2>&1",
+                 workdir, LUNA_TIMEOUT_CMD, LUNA_BIN, args);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && '%s' %s > out.log 2>&1",
+                 workdir, LUNA_BIN, args);
     int rc = system(cmd);
     if (rc == -1 || !WIFEXITED(rc)) {
         keep_workdir = 1;

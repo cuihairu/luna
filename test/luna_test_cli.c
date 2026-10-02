@@ -26,6 +26,12 @@
 #define LUNA_FIXTURES "fixtures"
 #endif
 
+/* inner hang guard, from CMake: GNU timeout, or gtimeout where macOS
+ * brew provides it, or empty (no guard — ctest TIMEOUT still bounds) */
+#ifndef LUNA_TIMEOUT_CMD
+#define LUNA_TIMEOUT_CMD "timeout"
+#endif
+
 static char outbuf[65536];
 static int last_code;
 
@@ -356,7 +362,11 @@ static void test_interrupt_spinning_script_without_serve(void **state)
 static int run_luna_capped(const char *args)
 {
     char cmd[8192];
-    snprintf(cmd, sizeof(cmd), "timeout 10 %s %s 2>&1", LUNA_BIN, args);
+    if (LUNA_TIMEOUT_CMD[0] != '\0')
+        snprintf(cmd, sizeof(cmd), "%s 10 '%s' %s 2>&1",
+                 LUNA_TIMEOUT_CMD, LUNA_BIN, args);
+    else
+        snprintf(cmd, sizeof(cmd), "'%s' %s 2>&1", LUNA_BIN, args);
     FILE *p = popen(cmd, "r");
     assert_non_null(p);
     size_t n = fread(outbuf, 1, sizeof(outbuf) - 1, p);

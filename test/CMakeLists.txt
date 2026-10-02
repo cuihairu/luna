@@ -1,6 +1,16 @@
 project(luna_test LANGUAGES C CXX)
 include(FetchCMocka)
 
+# The cli/rocks harnesses shell out through the real binary with an
+# inner hang guard; GNU coreutils `timeout` does not exist on stock
+# macOS (brew's gtimeout is the same tool). When neither exists the
+# macro is empty and the harnesses run unguarded — the ctest TIMEOUT
+# per group stays the outer bound either way.
+find_program(LUNA_TIMEOUT_BIN NAMES timeout gtimeout)
+if(NOT LUNA_TIMEOUT_BIN)
+    set(LUNA_TIMEOUT_BIN "")
+endif()
+
 # luacov wiring: Profiling builds compile the coverage paths into the
 # harnesses and export LUNA_COVERAGE=1 to every test (spawning children
 # inherit it, so the real binary instruments itself too). Any other
@@ -49,8 +59,10 @@ add_executable(luna_test_cli luna_test_cli.c)
 target_link_libraries(luna_test_cli PRIVATE cmocka-static lualib luna_kernel)
 target_compile_definitions(luna_test_cli PRIVATE
         LUNA_BIN="$<TARGET_FILE:luna>"
-        LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+        LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+        LUNA_TIMEOUT_CMD="${LUNA_TIMEOUT_BIN}")
 add_test(NAME cli COMMAND luna_test_cli)
+set_tests_properties(cli PROPERTIES TIMEOUT 600)
 
 # Tab completion: chains, fields, metatables, plugin sources, require
 add_executable(luna_test_complete luna_test_complete.c)
@@ -148,7 +160,9 @@ set_tests_properties(linedit PROPERTIES TIMEOUT 120)
 # through the real binary; the online install step needs network
 add_executable(luna_test_rocks luna_test_rocks.c)
 target_link_libraries(luna_test_rocks PRIVATE cmocka-static lualib luna_kernel)
-target_compile_definitions(luna_test_rocks PRIVATE LUNA_BIN="$<TARGET_FILE:luna>")
+target_compile_definitions(luna_test_rocks PRIVATE
+        LUNA_BIN="$<TARGET_FILE:luna>"
+        LUNA_TIMEOUT_CMD="${LUNA_TIMEOUT_BIN}")
 add_test(NAME rocks COMMAND luna_test_rocks)
 # the group shells out to `luna install` (network); the bound has to clear
 # the Profiling tree too, where the coverage hook makes Lua ~10x slower

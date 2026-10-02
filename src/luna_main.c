@@ -26,7 +26,9 @@ int luaopen_lfs(lua_State *L);        /* luafilesystem */
 int luaopen_socket_core(lua_State *L); /* luasocket */
 int luaopen_mime_core(lua_State *L);  /* luasocket mime */
 int luaopen_zlib(lua_State *L);       /* lua-zlib */
+#ifndef _WIN32
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport: attach */
+#endif
 int luaopen_toml_core(lua_State *L);  /* src/luna_toml.c: tomlc17 binding */
 int luaopen_yaml(lua_State *L);       /* deps/lyaml: libyaml binding */
 int luaopen_lxp(lua_State *L);        /* deps/luaexpat: expat binding */
@@ -199,8 +201,12 @@ static void register_c_modules(lua_State *L)
         { "lfs", luaopen_lfs },
         { "socket.core", luaopen_socket_core },
         { "mime.core", luaopen_mime_core },
-        /* unix transport for the attach channel (luna --attach) */
+#ifndef _WIN32
+        /* unix transport for the attach channel (luna --attach); the whole
+         * socket.unix target is skipped on Windows (no unix domain socket
+         * sources), and the Lua side already reports it as unavailable */
         { "socket.unix", luaopen_socket_unix },
+#endif
         /* C core sits at zlib.core; the user-facing "zlib" module is
          * the thin wrapper in luna_modules/zlib/ (one-shot helpers on
          * top of the streaming API) */

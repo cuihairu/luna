@@ -151,7 +151,13 @@ set_tests_properties(line PROPERTIES TIMEOUT 180)
 # translation unit in (white-box) and drives it directly; the shim gives
 # the C side a view of replxx's opaque candidate list.
 add_executable(luna_test_linedit luna_test_linedit.c replxx_completions_shim.cxx)
-target_link_libraries(luna_test_linedit PRIVATE cmocka-static lualib replxx util)
+target_link_libraries(luna_test_linedit PRIVATE cmocka-static lualib replxx)
+if(NOT WIN32)
+    # libutil: forkpty, for the pty leg of the harness — the file compiles
+    # to an empty suite on Windows (see its top-of-file note), so it needs
+    # no libutil there
+    target_link_libraries(luna_test_linedit PRIVATE util)
+endif()
 target_include_directories(luna_test_linedit PRIVATE "${CMAKE_SOURCE_DIR}/src")
 add_test(NAME linedit COMMAND luna_test_linedit)
 set_tests_properties(linedit PROPERTIES TIMEOUT 120)

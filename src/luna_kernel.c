@@ -9,6 +9,8 @@
 
 #ifdef _WIN32
 #include <process.h> /* _getpid */
+#include <errno.h>
+#include <io.h> /* _chmod: the CRT's chmod */
 #else
 #include <errno.h>
 #include <sys/stat.h>
@@ -86,7 +88,13 @@ static int k_chmod(lua_State *L)
     long m = strtol(modestr, &end, 8);
     if (end == modestr || *end != '\0' || m < 0 || m > 07777)
         luaL_error(L, "chmod: bad mode \"%s\"", modestr);
+#ifdef _WIN32
+    /* no mode_t on Windows: _chmod takes the mode as an int and honours
+     * the write bit (0200), which is all kernel.chmod is used for */
+    if (_chmod(path, (int)m) != 0)
+#else
     if (chmod(path, (mode_t)m) != 0)
+#endif
         luaL_error(L, "chmod: %s", strerror(errno));
     return 0;
 }

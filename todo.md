@@ -1559,16 +1559,45 @@
   Configure 过 → LUA_USE_POSIX 平台收窄(349c3a8,Windows 暂无
   io.popen)后,**完整阻碍清单出炉**(按编译序):
   1. `src/luna_kernel.c(89)` `mode_t` 未声明——k_chmod(Windows 走
-     `_chmod`/`<io.h>` 或守卫);
+     `_chmod`/`<io.h>` 或守卫);**✅已修(2026-10-03)**;
   2. `deps/luasocket/src/usocket.c(21)` `sys/poll.h`——CMake 无条件编
-     unix 源,需按平台选 `wsocket.c` 系;
+     unix 源,需按平台选 `wsocket.c` 系;**✅已修(2026-10-03)**;
   3. `deps/luasocket` `unixstream.c`/`unixdgram.c` `sys/un.h`——Unix
      domain socket,Windows 无,目标整体跳过(socket.unix 是 attach 面);
+     **✅已修(2026-10-03)**;
   4. `src/luna_loop.c(45)` `arpa/inet.h`——loop 网络层 POSIX 头,需
-     winsock2 等价面或走 libuv 抽象(设计裁定点);
+     winsock2 等价面或走 libuv 抽象(设计裁定点);**仍开,本轮不动**;
   5. `test/luna_test_linedit.c(28)` `poll.h`——测试 harness 同修。
+     **✅已修(2026-10-03)**。
   正式依赖口径(源码 vendor 与否)待决。daily.yml matrix windows 项
   experimental:true 待转正。
+
+  **1/2/3/5 消项实录(2026-10-03,run 37038767850 九处报错定清单)**:
+  1. k_chmod 的 `_WIN32` 臂走 `_chmod(path,(int)m)`(`<io.h>`,CRT 的
+     chmod,只认 0200 写位——kernel.chmod 只用于 attach socket 的 600,
+     够用);`<errno.h>` 补进 `_WIN32` include 块(原块只 process.h,
+     `strerror(errno)` 在该臂要用);
+  2+3. `LUASOCKET_SOURCES` 按 `if(WIN32)` 分臂,与上游 `socket.vcxproj`
+     逐一对齐:Windows 只留 `wsocket.c`,unix 三件(`unix.c`/`unixstream.c`
+     /`unixdgram.c`)整体跳过——`unix.c` 引用 `unixstream_open`,只砍两件
+     会 LNK2019,故三件同进同出;`LUASOCKET_INET_PTON` 只在非 Windows
+     定义(它是"平台没有 inet_pton 才自造"的兜底宏,Windows 下定义会与
+     ws2tcpip 的 `__stdcall inet_pton` 声明撞 linkage——上游 vcxproj 亦不
+     定义);`ws2_32` 链接进 luasocket(WinSock DLL,上游同款)。配合
+     `src/luna_main.c` 的 `luaopen_socket_unix` 声明与 mods[] 条目加
+     `#ifndef _WIN32`——否则砍了 unix.c 后 luna.exe 链接期 LNK2019;
+     Lua 面无需改,serve.lua 本就有 "socket.unix unavailable" 降级腿。
+  5. `test/luna_test_linedit.c` 整个 harness `#ifndef _WIN32` 包裹,
+     Windows 出空套件 stub `main`(forkpty/poll/waitpid/重执行 pty 全 POSIX,
+     只挡 poll.h 会立刻撞下一行 pty.h——按平台修一次到位);同目标
+     `util`(libutil,forkpty 所在)在 WIN32 不链(`test/CMakeLists.txt`),
+     否则编过也 LNK1104。
+  **预判下一层(CI 实证后定案,均未动)**:`luna_test_line.c(19)` 与
+  `luna_test_serve.c(7)` 的 `poll.h` 是同构造孪生(仅 linedit 上过 CI
+  报错表,疑因 msbuild 失败即停调度);`luna_line.c(20-21)` pthread.h/
+  unistd.h、`luna_main.c(5)` unistd.h(两者均挂在 luna.exe/luna_test
+  的 item 4 依赖后面,此前从未被调度到);line/serve 两目标的 `util`
+  链接同 linedit 待条件化。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
 - **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,

@@ -24,6 +24,15 @@
  * process-wide, and the helper thread is never meant to be restarted
  * within a process).
  */
+
+/* The harness below is POSIX end to end: forkpty children, poll() on the
+ * master, waitpid, a re-exec of this binary on a pty, and the bridge TU
+ * itself brings pthread.h. Windows therefore compiles the target to an
+ * empty suite — there the contract has no runtime counterpart yet — so
+ * the build clears this layer wholesale instead of tripping over one
+ * POSIX header at a time. */
+#ifndef _WIN32
+
 #include <fcntl.h>
 #include <poll.h>
 #if defined(__APPLE__)
@@ -849,3 +858,12 @@ int main(int argc, char **argv)
     };
     return cmocka_run_group_tests(tests, setup_linedit, teardown_linedit);
 }
+
+#else /* _WIN32: empty suite, see the note at the top of the file */
+
+int main(void)
+{
+    return 0;
+}
+
+#endif

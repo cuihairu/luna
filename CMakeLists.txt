@@ -71,22 +71,42 @@ add_library(lfs STATIC deps/luafilesystem/src/lfs.c)
 target_link_libraries(lfs PUBLIC lualib)
 
 # net/http -> luasocket v3.1.0 (diegonehab); socket.core and mime.core
-# share the support files and live in one static library. The unix
-# domain and serial transports are not bundled.
+# share the support files and live in one static library. The serial
+# transport is not bundled; the socket transport is platform-selected
+# the way upstream's own socket.vcxproj does it: winsock (wsocket.c)
+# on Windows, usocket + the unix domain transport elsewhere —
+# socket.unix is the attach/serve channel (luna --attach) and has no
+# Windows counterpart, so those three translation units are skipped
+# wholesale rather than patched.
 set(LUASOCKET_SOURCES
         deps/luasocket/src/luasocket.c deps/luasocket/src/timeout.c
         deps/luasocket/src/buffer.c deps/luasocket/src/io.c
         deps/luasocket/src/auxiliar.c deps/luasocket/src/compat.c
         deps/luasocket/src/options.c deps/luasocket/src/inet.c
-        deps/luasocket/src/usocket.c deps/luasocket/src/except.c
-        deps/luasocket/src/select.c deps/luasocket/src/tcp.c
-        deps/luasocket/src/udp.c deps/luasocket/src/mime.c
-        # unix domain sockets: the attach/serve channel (luna --attach)
-        deps/luasocket/src/unix.c deps/luasocket/src/unixstream.c
-        deps/luasocket/src/unixdgram.c)
+        deps/luasocket/src/except.c deps/luasocket/src/select.c
+        deps/luasocket/src/tcp.c
+        deps/luasocket/src/udp.c deps/luasocket/src/mime.c)
+if(WIN32)
+    list(APPEND LUASOCKET_SOURCES deps/luasocket/src/wsocket.c)
+else()
+    list(APPEND LUASOCKET_SOURCES
+            deps/luasocket/src/usocket.c
+            # unix domain sockets: the attach/serve channel (luna --attach)
+            deps/luasocket/src/unix.c deps/luasocket/src/unixstream.c
+            deps/luasocket/src/unixdgram.c)
+endif()
 add_library(luasocket STATIC ${LUASOCKET_SOURCES})
-target_compile_definitions(luasocket PRIVATE LUASOCKET_INET_PTON)
+if(NOT WIN32)
+    # inet_pton/inet_ntop fallback for platforms without them. Upstream's
+    # Windows build leaves this unset: ws2tcpip.h declares inet_pton with
+    # WinSock linkage, and a cdecl redefinition here would clash.
+    target_compile_definitions(luasocket PRIVATE LUASOCKET_INET_PTON)
+endif()
 target_link_libraries(luasocket PUBLIC lualib)
+if(WIN32)
+    # wsocket.c talks to the WinSock DLL (upstream socket.vcxproj links it)
+    target_link_libraries(luasocket PUBLIC ws2_32)
+endif()
 
 # zlib -> lua-zlib v1.4 (brimworks), bound to the system zlib
 add_library(lua_zlib STATIC deps/lua-zlib/lua_zlib.c)

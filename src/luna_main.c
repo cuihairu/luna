@@ -2,6 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <stdint.h>
+#include <mach-o/dyld.h>
+#endif
 
 #include "lua.h"
 #include "lauxlib.h"
@@ -70,35 +75,74 @@ int luaopen__openssl_des(lua_State *L);
 #define LUNA_SO_EXT "so"
 #endif
 
-/* Prepend the bundled module tree to package.path/cpath so require
- * finds argparse and friends before any user configuration. */
-static void setup_module_paths(lua_State *L)
+/* Directory of the running executable, best effort. The nightly
+ * artifacts and the installers ship luna_modules/ as a sidecar next
+ * to the binary, because the compiled-in LUNA_MODULES_DIR points into
+ * the build tree and only exists where luna was configured. */
+static void exe_dir(char *buf, size_t size, const char *argv0)
 {
-    char item[512];
+    buf[0] = '\0';
+#if defined(__linux__)
+    ssize_t n = readlink("/proc/self/exe", buf, size - 1);
+    if (n > 0)
+        buf[n] = '\0';
+    else
+        buf[0] = '\0';
+#elif defined(__APPLE__)
+    uint32_t n = (uint32_t)size;
+    if (_NSGetExecutablePath(buf, &n) != 0)
+        buf[0] = '\0';
+#endif
+    /* no platform API: a path-looking argv0 still covers ./build/luna */
+    if (buf[0] == '\0' && argv0 && strchr(argv0, '/'))
+        snprintf(buf, size, "%s", argv0);
+    char *slash = strrchr(buf, '/');
+    if (slash)
+        *slash = '\0';
+    else
+        buf[0] = '\0';
+}
+
+/* Prepend one module dir to package.path/cpath so require finds
+ * argparse and friends before any user configuration. */
+static void prepend_module_dir(lua_State *L, int is_cpath, const char *dir)
+{
+    const char *field = is_cpath ? "cpath" : "path";
+    char add[5120];
+    char merged[10240];
 
     lua_getglobal(L, "package");
-    if (!lua_istable(L, -1))
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
         return;
-
-    const char *fields[] = { "path", "cpath", NULL };
-    for (int i = 0; fields[i]; i++) {
-        lua_getfield(L, -1, fields[i]);
-        const char *cur = lua_tostring(L, -1);
-        char extra[2048];
-        snprintf(extra, sizeof(extra),
-                 "%s/?.lua;%s/?/init.lua;",
-                 LUNA_MODULES_DIR, LUNA_MODULES_DIR);
-        if (strcmp(fields[i], "cpath") == 0)
-            snprintf(item, sizeof(item), "%s/?.%s;", LUNA_MODULES_DIR, LUNA_SO_EXT);
-        else
-            item[0] = '\0';
-        char merged[4096];
-        snprintf(merged, sizeof(merged), "%s%s%s", extra, item, cur ? cur : "");
-        lua_pushstring(L, merged);
-        lua_setfield(L, -3, fields[i]);
-        lua_pop(L, 1); /* old value */
     }
-    lua_pop(L, 1); /* package */
+    lua_getfield(L, -1, field);
+    const char *cur = lua_tostring(L, -1);
+    if (is_cpath)
+        snprintf(add, sizeof(add), "%s/?.%s;", dir, LUNA_SO_EXT);
+    else
+        snprintf(add, sizeof(add), "%s/?.lua;%s/?/init.lua;", dir, dir);
+    snprintf(merged, sizeof(merged), "%s%s", add, cur ? cur : "");
+    lua_pushstring(L, merged);
+    lua_setfield(L, -3, field);
+    lua_pop(L, 2); /* old value + package */
+}
+
+/* Search order: the compiled-in build tree first (in-place dev builds),
+ * then luna_modules/ next to the executable (installed sidecar). */
+static void setup_module_paths(lua_State *L, const char *argv0)
+{
+    char exe[4096];
+    char side[4160];
+
+    exe_dir(exe, sizeof(exe), argv0);
+    if (exe[0] != '\0') {
+        snprintf(side, sizeof(side), "%s/luna_modules", exe);
+        prepend_module_dir(L, 0, side);
+        prepend_module_dir(L, 1, side);
+    }
+    prepend_module_dir(L, 0, LUNA_MODULES_DIR);
+    prepend_module_dir(L, 1, LUNA_MODULES_DIR);
 }
 
 static void luna_on_sigint(int sig)
@@ -336,7 +380,7 @@ int main(int argc, char *argv[])
 
     register_c_modules(L);
 
-    setup_module_paths(L);
+    setup_module_paths(L, argv[0]);
 
     /* before the base-globals snapshot: the coverage globals then join
      * the runtime's own environment, so %reset leaves them (and the

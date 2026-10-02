@@ -54,7 +54,7 @@ static void test_module_paths_tolerates_a_missing_package(void **state)
     assert_non_null(L);
     lua_pushnil(L);
     lua_setglobal(L, "package");
-    setup_module_paths(L);
+    setup_module_paths(L, NULL); /* no argv0 in the white-box: compiled dir only */
     /* the lookup it could not use is still what is on top */
     assert_true(lua_isnil(L, -1));
     lua_close(L);

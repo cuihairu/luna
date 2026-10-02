@@ -73,8 +73,11 @@ jobs:
         if: runner.os == 'Windows'
         run: ./build/Release/luna.exe --version
 
-      # 裸二进制进 artifact(zip 一层,装机侧只解 zip;可执行位由
-      # 安装脚本 chmod 补,zip 是否带着都无所谓)
+      # 二进制 + luna_modules 侧车树进 artifact(zip 一层,装机侧只解
+      # zip):二进制的模块查找先是编译期目录(只在构建机上存在),再落
+      # 可执行文件同级 luna_modules/——产物不带侧车,装到任何机器都会
+      # module 'argparse' not found(2026-10-02 实测踩中)。可执行位由
+      # 安装脚本 chmod 补,zip 是否带着都无所谓
       - name: Stage
         shell: bash
         run: |
@@ -84,6 +87,7 @@ jobs:
           else
             cp build/luna stage/
           fi
+          cp -r build/luna_modules stage/luna_modules
 
       - uses: actions/upload-artifact@v4
         with:

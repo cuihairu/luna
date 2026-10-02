@@ -118,12 +118,19 @@ unzip -oq "$ZIP" -d "$WORK/unpacked" || die "artifact is not a valid zip"
 BIN="$WORK/unpacked/luna"
 [ -f "$BIN" ] || BIN="$WORK/unpacked/luna.exe"
 [ -f "$BIN" ] || die "artifact does not contain a luna binary (unexpected payload)"
+# the binary resolves its Lua layer (argparse and friends) from the
+# luna_modules/ sidecar next to the executable — without it, --version
+# dies with "module 'argparse' not found"
+[ -d "$WORK/unpacked/luna_modules" ] || die "artifact does not contain the luna_modules sidecar
+  (binaries from before 2026-10-02 were shipped without it and cannot run standalone)"
 
 DEST="${DIR:-$HOME/.local/bin}"
 mkdir -p "$DEST" || die "cannot create $DEST"
 cp "$BIN" "$DEST/luna.new.$$" || die "cannot write to $DEST"
 chmod 755 "$DEST/luna.new.$$"
 mv -f "$DEST/luna.new.$$" "$DEST/luna"
+rm -rf "$DEST/luna_modules"
+cp -R "$WORK/unpacked/luna_modules" "$DEST/luna_modules" || die "cannot install the luna_modules sidecar to $DEST"
 
 # ---- verify -------------------------------------------------------------
 

@@ -17,7 +17,11 @@
  * later step.
  */
 #include <poll.h>
+#if defined(__APPLE__)
+#include <util.h> /* no pty.h on macOS: forkpty lives here */
+#else
 #include <pty.h>
+#endif
 #include <setjmp.h>
 #include <signal.h>
 #include <stdarg.h>

@@ -104,9 +104,19 @@ try {
     if (-not (Test-Path $bin)) {
         Die "artifact does not contain a luna binary (unexpected payload)"
     }
+    # the binary resolves its Lua layer (argparse and friends) from the
+    # luna_modules/ sidecar next to the executable
+    $mods = Join-Path $work\unpacked "luna_modules"
+    if (-not (Test-Path $mods)) {
+        Die "artifact does not contain the luna_modules sidecar
+  (binaries from before 2026-10-02 were shipped without it and cannot run standalone)"
+    }
 
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     Copy-Item -Path $bin -Destination $exe -Force
+    $destMods = Join-Path $Dir "luna_modules"
+    if (Test-Path $destMods) { Remove-Item -Recurse -Force $destMods }
+    Copy-Item -Path $mods -Destination $destMods -Recurse -Force
 
     # ---- verify + PATH -----------------------------------------------------
 

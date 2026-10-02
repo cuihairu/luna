@@ -22,6 +22,22 @@
 - `luna_modules/` 上溯机制与 `node_modules` 一致,心智负担为零
 - 包管理是 `luna install|search|list|update` 一组子命令(LuaRocks **内嵌在二进制里**,不需要系统 luarocks):装进项目 `.luna/rocks/` 并锁进 `luna.lock`,属开发期可选;运行时与最终用户一行都不用跑——`git clone` 或解压 zip 即可
 
+## 怎么安装?产物从哪来?
+
+一键安装(装最新每日构建进 PATH,装完即验 `luna --version`,重跑即升级):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
+```
+
+产物是 GitHub Actions 的 nightly artifact(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车,保留 14 天),没有 tag 也没有 Release。artifact 下载需要 GitHub 凭据:脚本自动探测 `gh` 登录态,或传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);有匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 指过去,全程不出网关。详见[快速上手](/guide/getting-started)。
+
 ## 为什么 `require("crypto")` 报错说没链接 OpenSSL?
 
 crypto 模块绑定 luaossl,构建期**必须**链接系统 OpenSSL 开发头(`libssl-dev` / `openssl-devel`)。未安装时构建照常通过,但运行时给出指引性错误。解决:
@@ -123,9 +139,10 @@ luna 设计为**单二进制 CLI**,不是库。嵌入场景建议:
 
 ## Windows 支持现状
 
-- **不在支持面**:每日构建只有 Linux x64/arm64 与 macOS Apple Silicon——replxx 桥未编 windows.cxx,构建这一步就过不去;attach 的 unix 域 socket、信号/`^C` 口径也是 POSIX 设计(源码里有 `_WIN32` 分支,但从未在 CI 验证)
+- **试运行中,尚无产物**:nightly 矩阵挂着 windows 探针腿(experimental,红不拖垮其余平台)——vcpkg 静态 zlib 已通,`LUA_USE_POSIX` 已平台收窄,编译期阻碍清单(kernel `mode_t`、luasocket 平台源选型、unix 域 socket 目标、loop 网络层 POSIX 头、测试 `poll.h`)已登记,逐层消化中
+- `install.ps1` 已就位,Windows 产物落地后即可一键安装
 - `path` 模块只实现 `path.posix`(Node v24 语义),win32 面不做
-- **推荐 WSL2 或原生 Linux/macOS**;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
+- **当前推荐 WSL2 或原生 Linux/macOS**;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
 
 ## 如何贡献/报告问题
 

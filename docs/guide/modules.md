@@ -36,7 +36,7 @@ luna_modules/hello/
 | --- | --- | --- |
 | `json` | dkjson | `encode`/`decode` 与 `stringify`/`parse` 别名 |
 | `fs` | luafilesystem | lfs 全量 + `exists`/`isFile`/`isDirectory`/`readFileSync`/`writeFileSync`/`appendFileSync`/`readdirSync`/`mkdirSync` 便捷层 |
-| `net` | luasocket | `tcp`/`udp`/`connect`/`bind`/`select`/`dns` |
+| `net` | luasocket | `tcp`/`udp`/`connect`/`bind`/`serve`(一行阻塞 TCP 服务)/`select`/`dns` |
 | `http` | luasocket | `request`、`get` 等完整 http.client 面 |
 | `csv` | LPeg | RFC 4180 式 `decode`/`encode`(引号内分隔符/换行/双写引号、`headers` 表键行、`delimiter`)与逐记录 `lines()` 迭代器 |
 | `ini` | LPeg | 经典 `decode`/`encode`(段/段前裸键/两种注释/引号值转义/重复键/`cast` 数字与布尔) |

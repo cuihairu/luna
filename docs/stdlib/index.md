@@ -10,7 +10,7 @@
 | util | `format`/`inspect`,Node v24 语义 | 纯 Lua | [stdlib/util](/stdlib/util) |
 | events | EventEmitter:on/once/emit/错误契约 | 纯 Lua | [events](/stdlib/events) |
 | stream | Readable/Writable/Transform/pipe/背压 | 纯 Lua | [stream](/stdlib/stream) |
-| net | TCP/UDP 同步 socket | luasocket | [net](/stdlib/net) |
+| net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/stdlib/net) |
 | http | 一行起服 `serve()` + luasocket 客户端面 | luasocket + 纯 Lua | [http](/stdlib/http) |
 | crypto | sha1/256/384/512、HMAC、随机字节(需 OpenSSL) | luaossl | [crypto](/stdlib/crypto) |
 | zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |

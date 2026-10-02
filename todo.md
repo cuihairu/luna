@@ -1506,37 +1506,51 @@
 **windows Configure 止步**。转正条件与已挖证据如下(无本地 mac/win,
 每轮验证 = 一次 CI 队列往返,建议专门会话成批做):
 
-- **macOS 运行期(5 组红→run 36995166976 后 3 组;run 37009767450
-  仍 3 组:serve Failed / loop Timeout / linedit Failed,13/16)**:
+- **macOS 运行期(5 组红→run 36995166976 后 3 组;run 37038767850
+  仍 3 组:serve 19 挂 / loop 14 挂 / linedit 1 挂,13/16)**:
   - `cli` 与 `loop`:**已转绿(a0bc4a7,mac 实证 12/16)**。127 共因
     (GNU `timeout` 缺席)与 realpath/strerror/信号号三处平台硬编码,
     CMake find_program(timeout|gtimeout) + 期望值平台中立化修平。
   - `rocks`:**已转绿(b1ec090 后 run 36997100684 实录 13/16)**——
     `run_luna_in` 第二处 timeout 漏网补平即过。
   - `loop`:**间歇**(run 5 过 / run 6 600s Timeout / run 7 45.7s 挂
-    四点 / run 8=37009767450 600s Timeout)。挂点实录(349c3a8 树
-    行号):889(watch 族断言 false≠true)、1200(七连判第 5 假,时序
-    敏感)、1230(输出截断 `no-lo`)、**1785 `listen failed: Invalid
-    argument`——已修(b9fe708)**:裸 bind 以 sockaddr_storage 全长
-    (128)作 addrlen,XNU 把 sa_len 改写成 buflen 后 in_pcbbind 校验
-    族长即 EINVAL;Linux 不读 sa_len 故一直无事。改传 family 精确
-    长度(与 libuv 内部一致),Linux 16 组绿。
-  - **loop 600s Timeout 根因(run 8 定案,7f87795 已修)**:
+    **34 个**(前次登记"四点"系漏计)/ run 8=37009767450 600s
+    Timeout / run 9=37038767850 **14 挂,113s 正常收尾**)。挂点
+    实录(349c3a8 树行号):889(watch 族断言 false≠true)、1200
+    (七连判第 5 假,时序敏感)、1230(输出截断 `no-lo`)、
+    **1785 `listen failed: Invalid argument`——已修(b9fe708)**:裸
+    bind 以 sockaddr_storage 全长(128)作 addrlen,XNU 把 sa_len
+    改写成 buflen 后 in_pcbbind 校验族长即 EINVAL;Linux 不读
+    sa_len 故一直无事。改传 family 精确长度(与 libuv 内部一致)。
+  - **loop 600s Timeout 根因(run 8 定案,f89bf8d 已修并实证)**:
     `test_net_sock_addr_tcp` 客户端回调读服务端回调才赋值的
     `cshared`(注册序 6102,在全部 TLS 测试之前)——mac 上 kqueue
     顺序常使客户端回调先跑 → 索引 nil 报错 → `srv:close()` 被跳过 →
-    `loop.run()` 永不退出。四轮证据:36995166976 Timeout+同错、
-    36997100684 Timeout+同错、36999185064 赢竞态通过、37009767450
-    Timeout+同错(三次同卡同错,与 b9fe708 无关且先于它)。它卡在
-    TLS 段之前 → **b9fe708 至此未获 mac 实证,7f87795 后 TLS 段首次
-    可达**。两会合点改写后 Linux 203/203×2;889/1200/1230 三点
-    run 8 复现,仍是独立断言,修后复看。
+    `loop.run()` 永不退出。四轮证据:36995166976/36997100684/
+    37009767450 三次同卡同错、36999185064 赢竞态通过(与 b9fe708
+    无关且先于它)。两会合点改写后 **run 9 实证:sock_addr_tcp/pipe
+    双 OK,TLS 段首次跑达且全绿**——`test_tls_listen_with_custom_ca_
+    roundtrips`(1785)、`default_verify_rejected`、`bad_cert_throws`、
+    `http_get_over_tls`、`tls_listener_coordinates`、`tls_listen_
+    rejects_bad_hosts`、`tls_client_dials_by_hostname` 等 run 7 的
+    EINVAL 连坐全数转绿:**b9fe708 mac 实证到手**。
+  - **loop run 9 残余 14 挂(存量,run 7 同在)**:3 存量断言
+    (889/1200/1230)+ 11 个**错误注入/资源类**:`proc_run_cwd`(3153)、
+    `fs_write_enospc`(4513)、`sock_write_oom`(4642)、`udp_broadcast_
+    send`(4716)、`udp_send_oom`(4733)、`fs_oom_legs`(4812)、
+    `proc_oom_cleanup`(4840)、`tls_pre_handshake`(5334)、
+    `tls_fd_exhaustion`(5624,实录 `expected EMFILE-flavoured…got
+    connection refused`——mac fd 耗尽语义差)、`tls_write_oom`(5668)、
+    `tls_write_pend_oom`(5722)。单查一组,疑 macOS ulimit/RLIMIT 与
+    错误注入手段的平台差。
   - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
     `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
     全绿——疑与该测试前序状态/资源耗尽相关,单查。
-  - `serve`(140/47,336s 慢跑):监听 squat/rebind 语义系列
-    (`listener back…`、`bind works again once the squat is gone`),
-    macOS SO_REUSEADDR/端口复用行为差,逐断面看。
+  - `serve`(140/47,336s 慢跑):**19 挂两轮同名单**(run 8/9:
+    `test_socket_file_created` 起 19 个,attach socket 占大头)。
+    监听 squat/rebind 语义系列(`listener back…`、`bind works again
+    once the squat is gone`),macOS SO_REUSEADDR/端口复用行为差,
+    逐断面看。
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
 - **Windows**(探针三层实录,36999185064 轮;run 37009767450 复证
@@ -1557,6 +1571,12 @@
   experimental:true 待转正。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
+- **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,
+  固定名 `daily-build` 产物 + `pkg-*`,3 天保留,不跑测试)与
+  `daily.yml`(新,21:13 UTC + 手动,`luna-nightly-<os>-<arch>` 矩阵,
+  14 天保留,跑全量测试)每天各跑一次,产物两套并存。一键安装三件套
+  只认新名。旧管线是否退役(删文件或去 schedule)属设计裁定点,未动;
+  文档已统一指向新管线(getting-started/FAQ/README,2026-10-03)。
 
 ## 明确不做(上一轮)
 

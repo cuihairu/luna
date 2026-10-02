@@ -2,15 +2,31 @@
 
 ## 获取 luna
 
-两条路,按需选:
+三条路,按需选:
 
-**每日构建产物**(免编译,每 UTC 01:23 自动出一份):到 [Actions 的 Daily Build 工作流](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml)取最新一次成功 run,页面底部 Artifacts 区下载固定名 **`daily-build`**——里面是三平台 zip(Linux x64 / Linux arm64 / macOS Apple Silicon)+ `BUILD_INFO.txt`(commit 与时间)+ `VERIFY.md`(验证步骤);只要某个平台就直取 `pkg-linux-x64` / `pkg-linux-arm64` / `pkg-macos-arm64`。解压后:
+**一键安装**(推荐:装最新每日构建进 PATH,装完即验 `luna --version`,重跑即升级):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
+```
+
+Actions 产物的下载需要 GitHub 凭据:脚本自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN` 环境变量(`install.sh` 另收 `--token` 参数);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。
+
+**每日构建产物**(手动下载):[Daily Build 工作流](https://github.com/cuihairu/luna/actions/workflows/daily.yml)每天定时构建并跑全量测试,artifact 按平台命名——直取 **`luna-nightly-<os>-<arch>`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`),内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用),保留 14 天。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中,两者均红不拖垮其余平台。这是 CI 构建产物分发,不对应任何 tag 或 Release。
+
+解压后验证:
 
 ```bash
 ./luna -e '6*7'      # 应答 Out[1]: 42
 ```
 
-macOS 包未做签名,首次运行先 `xattr -cr luna` 清隔离属性(包内 PLATFORM-NOTES.txt 有同款说明)。这是 CI 构建产物分发,不对应任何 tag 或 Release。
+macOS 包未做签名,首次运行先 `xattr -cr luna` 清隔离属性。
 
 **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
 
@@ -21,11 +37,11 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
+macOS 另需 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYMENT_TARGET="10.6"`。测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
 
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 
-**Windows 不在支持面**(replxx 桥未编 windows.cxx),推荐 WSL2——见 [FAQ](/other/faq)。
+**Windows 源码移植未完**(nightly 矩阵有探针腿,逐层消化中),当前推荐 WSL2——见 [FAQ](/other/faq)。
 
 ## 三十秒上手
 
@@ -48,7 +64,14 @@ $ curl http://localhost:8000/api?name=cui
 ^C                                       # ^C 即停,退出码 130
 ```
 
-细节见[标准库 · http](/stdlib/http)。
+TCP echo 同样一行(另开终端 `echo hi | nc 127.0.0.1 9000` 即见 `echo: hi`):
+
+```bash
+luna -e 'require("net").serve("*", 9000, function(c)
+  c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
+```
+
+细节见[标准库 · http](/stdlib/http)与[标准库 · net](/stdlib/net)。
 
 ## 启动方式
 

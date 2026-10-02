@@ -54,6 +54,7 @@ examples:
 
 parser:flag("-i --interactive",
     "after the script (or instead of it), start the interactive console")
+parser:flag("-v --version", "print the version and exit")
 parser:option("-e --eval",
     "evaluate code and exit; expression results echo Out[n]-style")
 parser:flag("--no-color", "disable ANSI colors in output")
@@ -86,6 +87,13 @@ if arg[1] == "serve" then
 end
 
 local opts = parser:parse(arg)
+
+-- `luna --version` is the installers' post-install check: answer and
+-- leave before anything starts (no plugins, no attach socket).
+if opts.version then
+    io.write(kernel.version() .. "\n")
+    return 0
+end
 
 -- Directory plugins load for every launch mode (they may inject
 -- modules a script needs); --no-plugins skips them.

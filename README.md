@@ -33,7 +33,21 @@ REPL 里 `6 * 7` 回答 `Out[1]: 42`,`%timeit` 随手测性能,`%whos` 看当前
 
 ## 获取
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天出三平台产物(Linux x64/arm64、macOS Apple Silicon),取最新 run 底部 Artifacts 区的 `daily-build`(内含各平台 zip + 验证说明);CI 产物分发,无 tag 无 Release。
+**一键安装**(装最新每日构建进 PATH,装完即验 `luna --version`,重跑即升级):
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
+```
+
+Actions 产物的下载需要 GitHub 凭据:脚本会自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(Windows 项试运行中,见下)。
+
+- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时构建+全量测试,artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含裸二进制,保留 14 天);Windows 项为首飞试运行(源码的 Windows 移植未完),红了不拖垮其余平台;CI 产物分发,无 tag 无 Release。
 - **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash

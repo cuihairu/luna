@@ -29,6 +29,13 @@ luna -e 'require("http").serve(function(req, res)
   res:json({ hello = "luna", path = req.path }) end)'
 ```
 
+TCP echo 同样一行(收一行回一行,`^C` 即停),另开终端 `echo hi | nc 127.0.0.1 9000` 即见 `echo: hi`:
+
+```bash
+luna -e 'require("net").serve("*", 9000, function(c)
+  c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
+```
+
 REPL 里 `6 * 7` 回答 `Out[1]: 42`,`%timeit` 随手测性能,`%whos` 看当前全部全局;细节见[CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl)。
 
 ## 获取
@@ -65,7 +72,7 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 | REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回、`In[n]`/`Out[n]` | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
 | 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
 | 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/guide/loop) |
-| 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程双模式 | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
+| 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
 | 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
 | 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |

@@ -1,6 +1,6 @@
 # stdlib · net
 
-TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):**同步阻塞**模型,完整 `socket` 命名空间经 `require "socket"` 仍可达,本模块把常用工厂提到一层。事件循环一侧的异步面(`connect`/`listen`/`connectTls`/`listenTls`、Unix socket)在 [loop](/guide/loop) 的 `loop.net`,服务端与 TLS 都在那里——本页适合脚本里的一次性客户端场景。
+TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):**同步阻塞**模型,完整 `socket` 命名空间经 `require "socket"` 仍可达,本模块把常用工厂提到一层。事件循环一侧的异步面(`connect`/`listen`/`connectTls`/`listenTls`、Unix socket)在 [loop](/guide/loop) 的 `loop.net`,异步服务端与 TLS 都在那里;本页是同步阻塞面——一次性客户端,外加一行起的阻塞 TCP 服务 `net.serve`。
 
 ## API
 
@@ -9,6 +9,7 @@ TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):*
 | `net.tcp()` | 新 TCP master socket(`:connect(host, port)` 后用) |
 | `net.connect(host, port)` | 直连,返回 client socket;失败 `nil, err`(如 `connection refused`) |
 | `net.bind(address, port)` | 绑 master socket(`:listen()` + `:accept()`) |
+| `net.serve(host, port, handler)` | 一行起阻塞 TCP 服务:bind → accept 循环,`handler(client)` 每连接一调;handler 内部出错打到 stderr、服务不倒,返回 `false` 停服;实际监听地址播报 stderr(`port` 传 0 拿临时端口) |
 | `net.udp()` | 新 UDP socket |
 | `net.select(socksT, socksR[, timeout])` | 就绪集轮询 |
 | `net.dns` | DNS 面(`resolve`/`toip` …) |
@@ -58,6 +59,37 @@ s:close()
 ```text
 true
 ```
+
+### 一行 TCP 服务
+
+终端 1 起一个 echo 服务(`^C` 即停):
+
+```lua
+local net = require "net"
+net.serve("*", 9000, function(c)
+  c:send("echo: " .. (c:receive("*l") or "") .. "\n")
+end)
+```
+
+```text
+net.serve: listening on 0.0.0.0:9000
+```
+
+终端 2 连上去说话:
+
+```lua
+local net = require "net"
+local c = net.connect("127.0.0.1", 9000)
+c:send("hello\n")
+print(c:receive("*l"))
+c:close()
+```
+
+```text
+echo: hello
+```
+
+handler 拿到的是 luasocket 原生 client(上表方法全可用),关不关由 handler 自己定;handler 里出错只打 stderr、服务照常接客;返回 `false` 干净收摊。要异步并发或 TLS 的服务端,去 [loop](/guide/loop) 的 `net.listen`/`net.listenTls`;要 HTTP 直接 [http.serve](/stdlib/http)。
 
 DNS 解析:
 

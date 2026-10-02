@@ -6,6 +6,17 @@
 
 <p align="center">通用的 Lua 集成环境</p>
 
+<p align="center">
+  <a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a>
+  <a href="https://github.com/cuihairu/luna/actions/workflows/daily.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily.yml?label=nightly&style=flat-square"></a>
+  <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <img src="assets/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码,输出与高亮为真实抓取" width="560"/>
+</p>
+
 ## 定位
 
 luna 把一批通用工具集成进同一个二进制:交互式 REPL、Node 式的模块解析、现代标准库、目录插件、事件循环。每件工具都能单独用,也可以互相咬合;直接用、挑着用,或者把它们当零件拼成自己的工作流,都行。

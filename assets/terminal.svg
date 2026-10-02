@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="512" viewBox="0 0 560 512" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace" font-size="13">
+  <title>luna REPL 终端会话</title>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#0b0d14" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <!-- window -->
+    <rect x="0" y="0" width="560" height="512" rx="12" fill="#282a36"/>
+    <!-- title bar -->
+    <rect x="0" y="0" width="560" height="40" rx="12" fill="#21222c"/>
+    <rect x="0" y="28" width="560" height="12" fill="#21222c"/>
+    <circle cx="22" cy="20" r="6" fill="#ff5f57"/>
+    <circle cx="42" cy="20" r="6" fill="#febc2e"/>
+    <circle cx="62" cy="20" r="6" fill="#28c840"/>
+    <line x1="0" y1="40" x2="560" y2="40" stroke="#000" stroke-opacity="0.25"/>
+  </g>
+
+  <!-- the session below is a real capture: script(1) pty, TERM=xterm-256color,
+       luna 0.1.0 — colors follow the highlighter's own SGR codes -->
+
+  <!-- $ luna -->
+  <text x="22" y="72" xml:space="preserve"><tspan fill="#50fa7b">$</tspan><tspan fill="#f8f8f2"> luna</tspan></text>
+  <!-- banner -->
+  <text x="22" y="94" fill="#50fa7b" font-weight="bold" xml:space="preserve">luna 0.1.0 — Lua 5.5 interactive console</text>
+  <text x="22" y="116" fill="#f8f8f2" xml:space="preserve">Type ^D to exit.</text>
+
+  <!-- In [1]: 6 * 7 -->
+  <text x="22" y="138" xml:space="preserve"><tspan fill="#f8f8f2">In [1]: </tspan><tspan fill="#8be9fd">6</tspan><tspan fill="#f8f8f2"> * </tspan><tspan fill="#8be9fd">7</tspan></text>
+  <text x="22" y="160" xml:space="preserve"><tspan fill="#ff79c6" font-weight="bold">Out[1]: </tspan><tspan fill="#8be9fd">42</tspan></text>
+
+  <!-- In [2]: t = {} -->
+  <text x="22" y="182" fill="#f8f8f2" xml:space="preserve">In [2]: t = {}</text>
+  <!-- In [3]: for i = 1, 5 do t[i] = i * i end -->
+  <text x="22" y="204" xml:space="preserve"><tspan fill="#f8f8f2">In [3]: </tspan><tspan fill="#ff5555" font-weight="bold">for</tspan><tspan fill="#f8f8f2"> i = </tspan><tspan fill="#8be9fd">1</tspan><tspan fill="#f8f8f2">, </tspan><tspan fill="#8be9fd">5</tspan><tspan fill="#f8f8f2"> </tspan><tspan fill="#ff5555" font-weight="bold">do</tspan><tspan fill="#f8f8f2"> t[i] = i * i </tspan><tspan fill="#ff5555" font-weight="bold">end</tspan></text>
+  <!-- In [4]: t -->
+  <text x="22" y="226" fill="#f8f8f2" xml:space="preserve">In [4]: t</text>
+  <text x="22" y="248" xml:space="preserve"><tspan fill="#ff79c6" font-weight="bold">Out[2]: </tspan><tspan fill="#f8f8f2">{ [</tspan><tspan fill="#8be9fd">1</tspan><tspan fill="#f8f8f2">] = </tspan><tspan fill="#8be9fd">1</tspan><tspan fill="#f8f8f2">, [</tspan><tspan fill="#8be9fd">2</tspan><tspan fill="#f8f8f2">] = </tspan><tspan fill="#8be9fd">4</tspan><tspan fill="#f8f8f2">, [</tspan><tspan fill="#8be9fd">3</tspan><tspan fill="#f8f8f2">] = </tspan><tspan fill="#8be9fd">9</tspan><tspan fill="#f8f8f2">, [</tspan><tspan fill="#8be9fd">4</tspan><tspan fill="#f8f8f2">] = </tspan><tspan fill="#8be9fd">16</tspan><tspan fill="#f8f8f2">, [</tspan><tspan fill="#8be9fd">5</tspan><tspan fill="#f8f8f2">] = </tspan><tspan fill="#8be9fd">25</tspan><tspan fill="#f8f8f2"> }</tspan></text>
+
+  <!-- In [5]: function fib(n) …  (continuation prompt "... ") -->
+  <text x="22" y="270" xml:space="preserve"><tspan fill="#f8f8f2">In [5]: </tspan><tspan fill="#ff5555" font-weight="bold">function</tspan><tspan fill="#f8f8f2"> </tspan><tspan fill="#f1fa8c">fib</tspan><tspan fill="#f8f8f2">(n)</tspan></text>
+  <text x="22" y="292" fill="#f8f8f2" xml:space="preserve">...   <tspan fill="#ff5555" font-weight="bold">if</tspan> n &lt; <tspan fill="#8be9fd">2</tspan> <tspan fill="#ff5555" font-weight="bold">then</tspan> <tspan fill="#ff5555" font-weight="bold">return</tspan> n <tspan fill="#ff5555" font-weight="bold">end</tspan></text>
+  <text x="22" y="314" fill="#f8f8f2" xml:space="preserve">...   <tspan fill="#ff5555" font-weight="bold">return</tspan> <tspan fill="#f1fa8c">fib</tspan>(n - <tspan fill="#8be9fd">1</tspan>) + <tspan fill="#f1fa8c">fib</tspan>(n - <tspan fill="#8be9fd">2</tspan>)</text>
+  <text x="22" y="336" fill="#f8f8f2" xml:space="preserve">... <tspan fill="#ff5555" font-weight="bold">end</tspan></text>
+
+  <!-- In [6]: fib(10) -->
+  <text x="22" y="358" xml:space="preserve"><tspan fill="#f8f8f2">In [6]: </tspan><tspan fill="#f1fa8c">fib</tspan><tspan fill="#f8f8f2">(</tspan><tspan fill="#8be9fd">10</tspan><tspan fill="#f8f8f2">)</tspan></text>
+  <text x="22" y="380" xml:space="preserve"><tspan fill="#ff79c6" font-weight="bold">Out[3]: </tspan><tspan fill="#8be9fd">55</tspan></text>
+
+  <!-- In [7]: %timeit … -->
+  <text x="22" y="402" xml:space="preserve"><tspan fill="#f8f8f2">In [7]: %timeit </tspan><tspan fill="#f1fa8c">string.rep</tspan><tspan fill="#f8f8f2">(</tspan><tspan fill="#50fa7b">"ab"</tspan><tspan fill="#f8f8f2">, </tspan><tspan fill="#8be9fd">1000000</tspan><tspan fill="#f8f8f2">)</tspan></text>
+  <text x="22" y="424" fill="#f8f8f2" xml:space="preserve">7 loops, best of session: 15.000 ms per loop</text>
+
+  <!-- In [8]: json encode -->
+  <text x="22" y="446" xml:space="preserve"><tspan fill="#f8f8f2">In [8]: </tspan><tspan fill="#f1fa8c">require</tspan><tspan fill="#f8f8f2">(</tspan><tspan fill="#50fa7b">"json"</tspan><tspan fill="#f8f8f2">).</tspan><tspan fill="#f1fa8c">encode</tspan><tspan fill="#f8f8f2">({ hello = </tspan><tspan fill="#50fa7b">"luna"</tspan><tspan fill="#f8f8f2">, n = </tspan><tspan fill="#8be9fd">42</tspan><tspan fill="#f8f8f2"> })</tspan></text>
+  <text x="22" y="468" xml:space="preserve"><tspan fill="#ff79c6" font-weight="bold">Out[4]: </tspan><tspan fill="#50fa7b">'{"n":42,"hello":"luna"}'</tspan></text>
+
+  <!-- In [9]: %exit -->
+  <text x="22" y="490" fill="#f8f8f2" xml:space="preserve">In [9]: %exit</text>
+</svg>

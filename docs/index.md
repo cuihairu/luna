@@ -31,3 +31,11 @@ features:
     title: 目录插件
     details: ./plugins 就近发现,plugin.json 清单,魔法命令、补全源、高亮规则、模块注入四个扩展点,失败隔离不致命。
 ---
+
+## 在终端里
+
+一次真实会话的原样截取(pty 抓取,In/Out 寄存器、语法高亮与魔法命令输出均未加工):
+
+<p align="center">
+  <img src="/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码" width="560"/>
+</p>

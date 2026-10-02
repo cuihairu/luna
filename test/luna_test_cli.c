@@ -355,9 +355,9 @@ static void test_interrupt_spinning_script_without_serve(void **state)
 
 /* -- batch 8: script-tail auto-drain ------------------------------------
  *
- * `timeout 10` wraps these: a drain regression that pins the loop
- * fails fast with 124 instead of holding the group hostage. Markers go
- * to stderr (unbuffered even into a pipe). */
+ * LUNA_TIMEOUT_CMD (when present) wraps these: a drain regression that
+ * pins the loop fails fast with 124 instead of holding the group
+ * hostage. Markers go to stderr (unbuffered even into a pipe). */
 
 static int run_luna_capped(const char *args)
 {

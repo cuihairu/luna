@@ -197,9 +197,14 @@ static void write_file(const char *relpath, const char *text)
 static int run_luna_in(const char *dir, const char *args)
 {
     char cmd[600];
-    snprintf(cmd, sizeof(cmd),
-             "cd '%s' && timeout 420 '%s' %s > out.log 2>&1",
-             dir, LUNA_BIN, args);
+    if (LUNA_TIMEOUT_CMD[0] != '\0')
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && %s 420 '%s' %s > out.log 2>&1",
+                 dir, LUNA_TIMEOUT_CMD, LUNA_BIN, args);
+    else
+        snprintf(cmd, sizeof(cmd),
+                 "cd '%s' && '%s' %s > out.log 2>&1",
+                 dir, LUNA_BIN, args);
     int rc = system(cmd);
     if (rc == -1 || !WIFEXITED(rc))
         return -1;

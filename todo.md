@@ -1506,16 +1506,15 @@
 **windows Configure 止步**。转正条件与已挖证据如下(无本地 mac/win,
 每轮验证 = 一次 CI 队列往返,建议专门会话成批做):
 
-- **macOS 运行期(5 组红)**:
-  - `cli`(375/385/396)与 `rocks`(120/208):**exit 127 共因——harness
-    走 `popen/system` 前缀 GNU `timeout`(cli.c:359 `timeout 10`、
-    rocks.c:46 `timeout 420`),macOS 无此命令**。修法候选:CMake 探测
-    timeout/gtimeout 得 `LUNA_TIMEOUT` 宏,无则省略内层兜底(外层
-    ctest TIMEOUT 仍在);改后 cli+rocks 应整组转绿。
-  - `loop`(683/883/967):683 `test_fs_realpath_resolves` 期望
-    `p == '/tmp/…'`,macOS `/tmp` 是 `/private/tmp` 符号链 →
-    `true:false`。期望值改平台中立(先 `fs.realpath('/tmp')` 再拼);
-    883/967 未细看,同组连带。
+- **macOS 运行期(5 组红→run 36995166976 后 3 组)**:
+  - `cli` 与 `loop`:**已转绿(a0bc4a7,mac 实证 12/16)**。127 共因
+    (GNU `timeout` 缺席)与 realpath/strerror/信号号三处平台硬编码,
+    CMake find_program(timeout|gtimeout) + 期望值平台中立化修平。
+  - `rocks`:第一批修了 `run_luna` 一处,**`run_luna_in` 第二处漏网**
+    (run 5 实录:127 即死变 8.3s 真跑后挂)——已补(同宏),待下轮实证。
+  - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
+    `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
+    全绿——疑与该测试前序状态/资源耗尽相关,单查。
   - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
     `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
     全绿——疑与该测试前序状态/资源耗尽相关,单查。
@@ -1525,8 +1524,12 @@
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
 - **Windows**:`find_package(ZLIB REQUIRED)`(CMakeLists.txt:63,runner
-  无系统 zlib;vcpkg 或 FetchContent)+ `luna_kernel.c` 未守卫 POSIX
-  (`getpid`/`kill`)。daily.yml matrix windows 项 experimental:true 待转正。
+  无系统 zlib)——**Configure 探针已接**(6bfc7cb:runner 预装 vcpkg 装
+  `zlib:x64-windows-static`,纯 CI 侧;正式依赖口径——源码 vendor 与否、
+  对齐格式库的「不引系统库」原则——是设计裁定,待决);kernel 两个
+  POSIX 调用点已守卫(`_getpid`/`k_wake` 平台报错),SIGUSR1 散布
+  loop/line/main 等**完整阻碍清单等探针首轮实录**。daily.yml matrix
+  windows 项 experimental:true 待转正。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
 

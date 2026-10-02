@@ -3235,21 +3235,22 @@ static void test_net_read_survives_multiple_chunks(void **state)
 static void test_net_sock_addr_tcp(void **state)
 {
     (void)state;
+    /* the two connection callbacks arrive in either order across
+     * platforms (macOS often connects first): rendezvous on both
+     * halves, then assemble the assertion and close everything from
+     * the second one in — never read a value the other callback has
+     * not produced yet, or an error skips srv:close() and loop.run()
+     * hangs forever */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "out = 'none'\n"
-        "local cshared\n"
-        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
-        "  local p = c:peer()   -- the server sees the client's address\n"
-        "  gport = p.port > 0\n"
-        "  gaddr = p.address\n"
-        "  cshared = c\n"
-        "end)\n"
-        "local a = srv:address()\n"
-        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
-        "  local p, sn = s:peer(), s:sockname()\n"
-        "  s:close()\n"
-        "  local ok = pcall(function() return s:peer() end)\n"
+        "local srv_done, cli_done = false, false\n"
+        "local cconn, ssock, a, p, sn\n"
+        "local function maybe_done()\n"
+        "  if not (srv_done and cli_done) then return end\n"
+        "  cconn:close()\n"
+        "  ssock:close()\n"
+        "  local ok = pcall(function() return ssock:peer() end)\n"
         "  out = table.concat({\n"
         "    tostring(a.address == '127.0.0.1'),\n"
         "    tostring(a.port == srv:port()),\n"
@@ -3262,8 +3263,22 @@ static void test_net_sock_addr_tcp(void **state)
         "    tostring(gport),\n"
         "    tostring(not ok),\n"
         "  }, ',')\n"
-        "  cshared:close()\n"
         "  srv:close()\n"
+        "end\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  local cp = c:peer()  -- the server sees the client's address\n"
+        "  gport = cp.port > 0\n"
+        "  gaddr = cp.address\n"
+        "  cconn = c\n"
+        "  srv_done = true\n"
+        "  maybe_done()\n"
+        "end)\n"
+        "a = srv:address()\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  p, sn = s:peer(), s:sockname()\n"
+        "  ssock = s\n"
+        "  cli_done = true\n"
+        "  maybe_done()\n"
         "end)\n"
         "assert(loop.run())\n"
         "return out"),
@@ -3273,19 +3288,19 @@ static void test_net_sock_addr_tcp(void **state)
 static void test_net_sock_addr_pipe(void **state)
 {
     (void)state;
+    /* same rendezvous as the tcp case: the pipe accept callback and
+     * the connect callback may arrive in either order, so each half
+     * records what only it can see and the second one in finishes the
+     * assertion and closes all three handles */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "local path = '/tmp/luna-test-addrpipe.sock'\n"
         "os.remove(path)\n"
         "out = 'none'\n"
-        "local cshared\n"
-        "psrv = net.listenPipe(path, function(e, c)\n"
-        "  cshared = c\n"
-        "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
-        "end)\n"
-        "local a = psrv:address()\n"
-        "net.connectPipe(path, function(e, s)\n"
-        "  local p, sn = s:peer(), s:sockname()\n"
+        "local srv_done, cli_done = false, false\n"
+        "local cconn, ssock, a, p, sn\n"
+        "local function maybe_done()\n"
+        "  if not (srv_done and cli_done) then return end\n"
         "  out = table.concat({\n"
         "    tostring(a.family == 'unix'),\n"
         "    tostring(a.address == path),\n"
@@ -3295,9 +3310,22 @@ static void test_net_sock_addr_pipe(void **state)
         "    tostring(sn.family == 'unix'),\n"
         "    gfamily,\n"
         "  }, ',')\n"
-        "  s:close()\n"
-        "  cshared:close()\n"
+        "  cconn:close()\n"
+        "  ssock:close()\n"
         "  psrv:close()\n"
+        "end\n"
+        "psrv = net.listenPipe(path, function(e, c)\n"
+        "  cconn = c\n"
+        "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
+        "  srv_done = true\n"
+        "  maybe_done()\n"
+        "end)\n"
+        "a = psrv:address()\n"
+        "net.connectPipe(path, function(e, s)\n"
+        "  p, sn = s:peer(), s:sockname()\n"
+        "  ssock = s\n"
+        "  cli_done = true\n"
+        "  maybe_done()\n"
         "end)\n"
         "assert(loop.run())\n"
         "return out"),

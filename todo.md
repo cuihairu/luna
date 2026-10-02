@@ -1506,21 +1506,31 @@
 **windows Configure 止步**。转正条件与已挖证据如下(无本地 mac/win,
 每轮验证 = 一次 CI 队列往返,建议专门会话成批做):
 
-- **macOS 运行期(5 组红→run 36995166976 后 3 组)**:
+- **macOS 运行期(5 组红→run 36995166976 后 3 组;run 37009767450
+  仍 3 组:serve Failed / loop Timeout / linedit Failed,13/16)**:
   - `cli` 与 `loop`:**已转绿(a0bc4a7,mac 实证 12/16)**。127 共因
     (GNU `timeout` 缺席)与 realpath/strerror/信号号三处平台硬编码,
     CMake find_program(timeout|gtimeout) + 期望值平台中立化修平。
   - `rocks`:**已转绿(b1ec090 后 run 36997100684 实录 13/16)**——
     `run_luna_in` 第二处 timeout 漏网补平即过。
   - `loop`:**间歇**(run 5 过 / run 6 600s Timeout / run 7 45.7s 挂
-    四点)。挂点实录(349c3a8 树行号):889(watch 族断言 false≠true)、
-    1200(七连判第 5 假,时序敏感)、1230(输出截断 `no-lo`)、
-    **1785 `loop.net: listen failed: Invalid argument`——真产品 bug**,
-    luna_loop.c 监听路径在 macOS 的 POSIX 语义差(EINVAL),移植会话
-    从这里开刀。
-  - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
-    `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
-    全绿——疑与该测试前序状态/资源耗尽相关,单查。
+    四点 / run 8=37009767450 600s Timeout)。挂点实录(349c3a8 树
+    行号):889(watch 族断言 false≠true)、1200(七连判第 5 假,时序
+    敏感)、1230(输出截断 `no-lo`)、**1785 `listen failed: Invalid
+    argument`——已修(b9fe708)**:裸 bind 以 sockaddr_storage 全长
+    (128)作 addrlen,XNU 把 sa_len 改写成 buflen 后 in_pcbbind 校验
+    族长即 EINVAL;Linux 不读 sa_len 故一直无事。改传 family 精确
+    长度(与 libuv 内部一致),Linux 16 组绿。
+  - **loop 600s Timeout 根因(run 8 定案,7f87795 已修)**:
+    `test_net_sock_addr_tcp` 客户端回调读服务端回调才赋值的
+    `cshared`(注册序 6102,在全部 TLS 测试之前)——mac 上 kqueue
+    顺序常使客户端回调先跑 → 索引 nil 报错 → `srv:close()` 被跳过 →
+    `loop.run()` 永不退出。四轮证据:36995166976 Timeout+同错、
+    36997100684 Timeout+同错、36999185064 赢竞态通过、37009767450
+    Timeout+同错(三次同卡同错,与 b9fe708 无关且先于它)。它卡在
+    TLS 段之前 → **b9fe708 至此未获 mac 实证,7f87795 后 TLS 段首次
+    可达**。两会合点改写后 Linux 203/203×2;889/1200/1230 三点
+    run 8 复现,仍是独立断言,修后复看。
   - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
     `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
     全绿——疑与该测试前序状态/资源耗尽相关,单查。
@@ -1529,7 +1539,9 @@
     macOS SO_REUSEADDR/端口复用行为差,逐断面看。
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
-- **Windows**(探针三层实录,36999185064 轮):vcpkg 静态 zlib →
+- **Windows**(探针三层实录,36999185064 轮;run 37009767450 复证
+  清单 2–5 五处并发报错、zlib/lfs/lua-zlib 编过,清单 1 `mode_t`
+  该轮未现身):vcpkg 静态 zlib →
   Configure 过 → LUA_USE_POSIX 平台收窄(349c3a8,Windows 暂无
   io.popen)后,**完整阻碍清单出炉**(按编译序):
   1. `src/luna_kernel.c(89)` `mode_t` 未声明——k_chmod(Windows 走

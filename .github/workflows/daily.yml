@@ -52,9 +52,16 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
+      # 试运行探针:runner 预装 vcpkg,静态三元组装 zlib 让 Configure 过关,
+      # 编译器才能把下一层未移植面全数报出来——正式口径(源码 vendor 与否)
+      # 是设计裁定,维持 todo 转正清单待决
+      - name: Provision zlib (Windows probe)
+        if: runner.os == 'Windows'
+        run: vcpkg install zlib:x64-windows-static
+
       - name: Configure (Windows)
         if: runner.os == 'Windows'
-        run: cmake -B build
+        run: cmake -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
       - name: Build
         if: runner.os != 'Windows'

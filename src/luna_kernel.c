@@ -7,7 +7,9 @@
 #include <string.h>
 #include <time.h>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <process.h> /* _getpid */
+#else
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -48,7 +50,11 @@ static int k_clear_interrupt(lua_State *L)
  * is derived from it, and the attach client signals it with SIGUSR1) */
 static int k_pid(lua_State *L)
 {
+#ifdef _WIN32
+    lua_pushinteger(L, (lua_Integer)_getpid());
+#else
     lua_pushinteger(L, (lua_Integer)getpid());
+#endif
     return 1;
 }
 
@@ -57,9 +63,16 @@ static int k_pid(lua_State *L)
 static int k_wake(lua_State *L)
 {
     lua_Integer pid = luaL_checkinteger(L, 1);
+#ifdef _WIN32
+    /* no cross-process signals on Windows: the attach doorbell is a
+     * POSIX mechanism, refused loudly until the port lands an answer */
+    (void)pid;
+    return luaL_error(L, "wake: cross-process signals are not available on this platform");
+#else
     if (kill((pid_t)pid, SIGUSR1) != 0)
         luaL_error(L, "wake: %s", strerror(errno));
     return 0;
+#endif
 }
 
 /* kernel.chmod(path, "600"): restrict the attach socket to its owner.

@@ -1510,8 +1510,14 @@
   - `cli` 与 `loop`:**已转绿(a0bc4a7,mac 实证 12/16)**。127 共因
     (GNU `timeout` 缺席)与 realpath/strerror/信号号三处平台硬编码,
     CMake find_program(timeout|gtimeout) + 期望值平台中立化修平。
-  - `rocks`:第一批修了 `run_luna` 一处,**`run_luna_in` 第二处漏网**
-    (run 5 实录:127 即死变 8.3s 真跑后挂)——已补(同宏),待下轮实证。
+  - `rocks`:**已转绿(b1ec090 后 run 36997100684 实录 13/16)**——
+    `run_luna_in` 第二处 timeout 漏网补平即过。
+  - `loop`:**间歇**(run 5 过 / run 6 600s Timeout / run 7 45.7s 挂
+    四点)。挂点实录(349c3a8 树行号):889(watch 族断言 false≠true)、
+    1200(七连判第 5 假,时序敏感)、1230(输出截断 `no-lo`)、
+    **1785 `loop.net: listen failed: Invalid argument`——真产品 bug**,
+    luna_loop.c 监听路径在 macOS 的 POSIX 语义差(EINVAL),移植会话
+    从这里开刀。
   - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
     `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
     全绿——疑与该测试前序状态/资源耗尽相关,单查。
@@ -1523,12 +1529,20 @@
     macOS SO_REUSEADDR/端口复用行为差,逐断面看。
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
-- **Windows**(探针迭代,b1ec090 轮实录):vcpkg 静态 zlib 后 Configure
-  **已过关**,编译器开报——第一层 `deps/lua/luaconf.h(93) #error
-  "POSIX is not compatible with C89"`(全平台 PUBLIC 的 LUA_USE_POSIX)
-  **已修**(平台收窄,Windows 暂无 io.popen);SIGUSR1 散布 loop/line/main
-  等下一层**等下轮探针实录**。正式依赖口径(源码 vendor 与否)待决。
-  daily.yml matrix windows 项 experimental:true 待转正。
+- **Windows**(探针三层实录,36999185064 轮):vcpkg 静态 zlib →
+  Configure 过 → LUA_USE_POSIX 平台收窄(349c3a8,Windows 暂无
+  io.popen)后,**完整阻碍清单出炉**(按编译序):
+  1. `src/luna_kernel.c(89)` `mode_t` 未声明——k_chmod(Windows 走
+     `_chmod`/`<io.h>` 或守卫);
+  2. `deps/luasocket/src/usocket.c(21)` `sys/poll.h`——CMake 无条件编
+     unix 源,需按平台选 `wsocket.c` 系;
+  3. `deps/luasocket` `unixstream.c`/`unixdgram.c` `sys/un.h`——Unix
+     domain socket,Windows 无,目标整体跳过(socket.unix 是 attach 面);
+  4. `src/luna_loop.c(45)` `arpa/inet.h`——loop 网络层 POSIX 头,需
+     winsock2 等价面或走 libuv 抽象(设计裁定点);
+  5. `test/luna_test_linedit.c(28)` `poll.h`——测试 harness 同修。
+  正式依赖口径(源码 vendor 与否)待决。daily.yml matrix windows 项
+  experimental:true 待转正。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
 

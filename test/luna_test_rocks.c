@@ -135,6 +135,17 @@ static void test_install_lock_reproduce_cycle(void **state)
     assert_non_null(strstr(lock1, "\"ansicolors\""));
     assert_non_null(strstr(lock1, "\"rockspec\"")); /* the sha entries */
 
+    /* failed .src.rock fetches must leave no 0-byte remnant in the
+     * cache: inspect ships no .src.rock (fetch fails by design), and a
+     * leftover would be hashed into the NEXT relock as the empty
+     * digest (e3b0c442...), which --from-lock would then happily
+     * "verify" and hand luarocks a blank source */
+    char junk[512];
+    snprintf(junk, sizeof(junk), "%s/.luna/cache/inspect-3.1.3-0.src.rock", workdir);
+    struct stat junk_st;
+    assert_int_not_equal(stat(junk, &junk_st), 0);
+    assert_null(strstr(lock1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+
     /* 2. wipe the tree, keep the lock (and the .luna/cache) */
     char treepath[512];
     snprintf(treepath, sizeof(treepath), "%s/.luna/rocks", workdir);
@@ -153,6 +164,7 @@ static void test_install_lock_reproduce_cycle(void **state)
     char *lock2 = read_all(lockpath);
     assert_non_null(lock2);
     assert_string_equal(lock2, lock1);
+    assert_null(strstr(lock2, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
     free(lock1);
     free(lock2);
 }

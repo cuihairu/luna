@@ -290,6 +290,13 @@ local function fetch_src_rock(name, version, target)
                 and is_file(target) then
                 return true
             end
+            -- curl -o / wget -O truncate the target even when the fetch
+            -- itself fails (-f/-q suppress the body, not the file): a
+            -- 0-byte remnant must not survive, or the next relock hashes
+            -- it into the lock as the empty digest and --from-lock then
+            -- "verifies" a blank source (observed 2026-10-02 with
+            -- inspect, which ships no .src.rock)
+            os.remove(target)
         end
     end
     return false
@@ -304,7 +311,10 @@ end
 
 local function cache_and_hash(tree, name, version)
     local target = cache_file(tree, name, version)
-    if is_file(target) then
+    -- size guard: a 0-byte file is a failed fetch's leftover (or any
+    -- other truncated writer), never a .src.rock — hashing it would
+    -- lock the empty digest and --from-lock would then install a blank
+    if is_file(target) and (lfs.attributes(target, "size") or 0) > 0 then
         local hex = sha256_file(target)
         if hex then
             return hex

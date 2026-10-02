@@ -1917,6 +1917,18 @@ static int bind_addr_of(const char *host, int port,
     return -1;
 }
 
+/* exact sockaddr length for the family bind_addr_of produced. BSD
+ * kernels rewrite sa_len from the addrlen passed to bind() and reject
+ * a mismatch with EINVAL, so the raw-socket TLS path must pass the
+ * family size — libuv does this internally for the plain/udp paths. */
+static socklen_t ss_len_of(const struct sockaddr_storage *ss)
+{
+    if (ss->ss_family == AF_INET6) {
+        return (socklen_t)sizeof(struct sockaddr_in6);
+    }
+    return (socklen_t)sizeof(struct sockaddr_in);
+}
+
 /* loop.net.listen(host, port, onConn) -> server; port 0 = ephemeral
  * (read it back with server:port()). Bind/listen errors throw. */
 static int l_net_listen(lua_State *L)
@@ -3784,7 +3796,7 @@ static int l_net_listen_tls(lua_State *L)
     }
     int one = 1;
     setsockopt(sv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    if (bind(sv->listen_fd, (struct sockaddr *)&ss, sizeof ss) != 0 ||
+    if (bind(sv->listen_fd, (struct sockaddr *)&ss, ss_len_of(&ss)) != 0 ||
         listen(sv->listen_fd, SOMAXCONN) != 0) {
         int e = errno;
         tserver_close(sv);

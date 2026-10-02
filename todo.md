@@ -1523,13 +1523,12 @@
     macOS SO_REUSEADDR/端口复用行为差,逐断面看。
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
-- **Windows**:`find_package(ZLIB REQUIRED)`(CMakeLists.txt:63,runner
-  无系统 zlib)——**Configure 探针已接**(6bfc7cb:runner 预装 vcpkg 装
-  `zlib:x64-windows-static`,纯 CI 侧;正式依赖口径——源码 vendor 与否、
-  对齐格式库的「不引系统库」原则——是设计裁定,待决);kernel 两个
-  POSIX 调用点已守卫(`_getpid`/`k_wake` 平台报错),SIGUSR1 散布
-  loop/line/main 等**完整阻碍清单等探针首轮实录**。daily.yml matrix
-  windows 项 experimental:true 待转正。
+- **Windows**(探针迭代,b1ec090 轮实录):vcpkg 静态 zlib 后 Configure
+  **已过关**,编译器开报——第一层 `deps/lua/luaconf.h(93) #error
+  "POSIX is not compatible with C89"`(全平台 PUBLIC 的 LUA_USE_POSIX)
+  **已修**(平台收窄,Windows 暂无 io.popen);SIGUSR1 散布 loop/line/main
+  等下一层**等下轮探针实录**。正式依赖口径(源码 vendor 与否)待决。
+  daily.yml matrix windows 项 experimental:true 待转正。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
 

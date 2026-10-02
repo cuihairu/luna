@@ -28,8 +28,12 @@ target_include_directories(lualib PUBLIC "${PROJECT_SOURCE_DIR}/deps/lua")
 # io.popen: std Lua on POSIX; luna.rocks needs it (luarocks shells out
 # to curl/unzip), and scripts get it like any standard Lua. Lua 5.5's
 # liolib gates popen behind LUA_USE_POSIX (the old LUA_USE_POPEN knob
-# is gone).
-target_compile_definitions(lualib PUBLIC LUA_USE_POSIX)
+# is gone). POSIX-only: MSVC's luaconf.h #errors on the define
+# ("POSIX is not compatible with C89"), so Windows builds without popen
+# until the port decides its story (windows probe, nightly matrix).
+if(NOT WIN32)
+    target_compile_definitions(lualib PUBLIC LUA_USE_POSIX)
+endif()
 # libm: implicit on macOS, explicit on Linux (pow/log/...); dl: loadlib.c
 if(UNIX)
     target_link_libraries(lualib PUBLIC m ${CMAKE_DL_LIBS})

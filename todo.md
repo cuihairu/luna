@@ -1598,6 +1598,36 @@
   unistd.h、`luna_main.c(5)` unistd.h(两者均挂在 luna.exe/luna_test
   的 item 4 依赖后面,此前从未被调度到);line/serve 两目标的 `util`
   链接同 linedit 待条件化。
+
+  **CI 实证(run 37059350461,2026-10-03,13e37fb 推送后)**:
+  - **清单 1/2/3/5 逐条核销**:windows job 全量 619 处唯一报错中,
+    `luna_kernel.c` 仅剩 C4996(`strerror`,警告级)、luasocket 工程
+    零报错、`luna_test_linedit` 零报错——四项对应源文件全部从错误表
+    消失。run 结论 success(linux×2、macos 三腿绿,windows
+    experimental 腿红不拉倒整个 run——daily.yml 既定设计,该标志
+    本轮不动)。探针深度:上轮止步 4 个工程,本轮 12 个测试工程
+    进到编译期。
+  - **新层 1(612/619 同根,本轮主体)**:`build/generated/luna_lua.h`
+    (configure 期由 `cmake/luna_lua.h.in` 生成)以 C++ 原始字符串
+    字面量 `R"LUNA_ENTRY(...)LUNA_ENTRY"` 装十段嵌入式 Lua 源,
+    消费方却是按 C 编译的 TU——6 个白盒测试(repl/plugins/magic/
+    introspect/highlight/complete)各 102 处报错全指此头。
+    本地复核(非推断):同一头文件 gcc 默认模式(gnu17)编过、
+    `gcc -std=c11` 复现 MSVC 同类错(`missing terminating "
+    character`)、g++ 干净——Linux 全绿靠 GNU 方言放行,MSVC 按 C
+    编译即炸。`src/luna_main.c` 本身未现身错误表(排在 item 4
+    的 luna_loop 依赖后面)。根修方向:模板改转义常规 C 串逐行
+    拼接,弃原始字符串;**未动,待派发**。
+  - **新层 2(预判证实 + 三处未预判,均测试 harness POSIX 头)**:
+    `luna_test_line.c(19)`/`luna_test_serve.c(7)` `poll.h`(孪生
+    预判命中)、`luna_test_cli.c(13)`/`luna_test_covsum.c(15)`
+    `sys/wait.h`、`luna_test_modules.c(10)`/`luna_test_rocks.c(17)`
+    `unistd.h`(后两族未预判)——修法同 linedit(平台包裹/守卫),
+    line/serve 的 `util` 链接待条件化。
+  - 第 4 条(luna_loop.c arpa/inet.h)仍开、按派发不动;
+    `luna_main.c(5)` unistd.h 与 `luna_line.c(20-21)` 仍未被调度到。
+    MSBuild 失败即停的调度特性意味着这张表是下界,修完上述后
+    可能再浮出。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。
 - **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,

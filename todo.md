@@ -1500,6 +1500,36 @@
   `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 +
   localhost 拨号必须成功,plain/TLS 一条用例两腿同盖。
 
+## nightly 平台矩阵试运行转正清单(2026-10-02 登记)
+
+矩阵跑 36970096993 实录:linux 双绿;**macos 构建通、ctest 11/16**;
+**windows Configure 止步**。转正条件与已挖证据如下(无本地 mac/win,
+每轮验证 = 一次 CI 队列往返,建议专门会话成批做):
+
+- **macOS 运行期(5 组红)**:
+  - `cli`(375/385/396)与 `rocks`(120/208):**exit 127 共因——harness
+    走 `popen/system` 前缀 GNU `timeout`(cli.c:359 `timeout 10`、
+    rocks.c:46 `timeout 420`),macOS 无此命令**。修法候选:CMake 探测
+    timeout/gtimeout 得 `LUNA_TIMEOUT` 宏,无则省略内层兜底(外层
+    ctest TIMEOUT 仍在);改后 cli+rocks 应整组转绿。
+  - `loop`(683/883/967):683 `test_fs_realpath_resolves` 期望
+    `p == '/tmp/…'`,macOS `/tmp` 是 `/private/tmp` 符号链 →
+    `true:false`。期望值改平台中立(先 `fs.realpath('/tmp')` 再拼);
+    883/967 未细看,同组连带。
+  - `linedit`(749):`test_read_cancels_wakes_and_reports_eof` 的
+    `forkpty` 返回 -1(`assert_not_equal(-1,-1)`),而 line 组同函数
+    全绿——疑与该测试前序状态/资源耗尽相关,单查。
+  - `serve`(140/47,336s 慢跑):监听 squat/rebind 语义系列
+    (`listener back…`、`bind works again once the squat is gone`),
+    macOS SO_REUSEADDR/端口复用行为差,逐断面看。
+  - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
+    f8abd28)——构建期已通。
+- **Windows**:`find_package(ZLIB REQUIRED)`(CMakeLists.txt:63,runner
+  无系统 zlib;vcpkg 或 FetchContent)+ `luna_kernel.c` 未守卫 POSIX
+  (`getpid`/`kill`)。daily.yml matrix windows 项 experimental:true 待转正。
+- 转正动作:matrix 对应项 `experimental: true→false`、Test 步
+  `continue-on-error` 随之归零(daily.yml 已注明)。
+
 ## 明确不做(上一轮)
 
 - rocks.lua 剩 20 行——ensure_dir 递归(64)、openssl 后端缺席

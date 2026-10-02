@@ -45,9 +45,9 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-Actions 产物的下载需要 GitHub 凭据:脚本会自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(Windows 项试运行中,见下)。
+Actions 产物的下载需要 GitHub 凭据:脚本会自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(macOS 与 Windows 项为试运行,见下)。
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时构建+全量测试,artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层,保留 14 天);Windows 项为首飞试运行(源码的 Windows 移植未完),红了不拖垮其余平台;CI 产物分发,无 tag 无 Release。
+- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时构建+全量测试,artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层,保留 14 天);Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中(见 todo),两者均红不拖垮其余平台;CI 产物分发,无 tag 无 Release。
 - **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash

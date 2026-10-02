@@ -44,17 +44,21 @@ true
 b
 ```
 
-lfs 原样面照常可用:
+lfs 原样面照常可用。`attributes` 有两种形态:不给 `what` 返回整张属性表(`mode`/`size`/`mtime`/`permissions`…),给 `what` 直接返回单值:
 
 ```lua
 local fs = require "fs"
 local a = fs.attributes("/tmp/luna-fs-demo.txt")
 print(a.mode, a.size > 0)
+print(fs.attributes("/tmp/luna-fs-demo.txt", "mode"))
 ```
 
 ```text
 file	true
+file
 ```
+
+路径不存在时 `attributes` 返回 `nil, err`(lfs 口径)——`fs.exists` 取的正是它的第一个返回值。`fs.dir` 迭代器含 `.`/`..`,而 `fs.readdirSync` 已替你滤掉并排序;要"读目录"就用后者,要"流式扫大目录"才用前者。
 
 ## 契约与边界
 

@@ -6,10 +6,32 @@ JSON 编解码。后端 [dkjson](https://dkolf.dk/dkjson)(纯 Lua,UTF-8 感知,�
 
 | 调用 | 说明 |
 | --- | --- |
-| `json.encode(value)` | 编码为 JSON 字符串;table 键序跟随 `pairs`(不排序,键序敏感场景别依赖) |
-| `json.decode(str)` | 解码;坏数据返回 `nil, err`——`err` 是出错处的字符位置(1 基数字,dkjson 口径) |
+| `json.encode(value, opts?)` | 编码为 JSON 字符串;`opts` 透传 dkjson(`indent`/`keyorder`,见下节) |
+| `json.decode(str, pos?)` | 从 `pos`(默认 1)解码;坏数据返回 `nil, err`——`err` 是出错处的字符位置(1 基数字,dkjson 口径) |
 | `json.parse(str)` | `decode` 的 Node 式别名 |
 | `json.stringify(value)` | `encode` 的 Node 式别名 |
+
+## encode 的选项
+
+`opts` 原样透传给 dkjson,两个最常用:
+
+- **`indent = true`**:多行美化输出(两空格缩进);
+- **`keyorder = {...}`**:对象键按给定表排序输出。Lua 的 `pairs` 键序跨进程不稳定,要让编码结果**逐字节可复现**(写测试断言、生成要 diff/哈希的文件),这是正解:
+
+```lua
+local json = require "json"
+print(json.encode({b=1,a=1}, {indent=true, keyorder={"a","b"}}))
+```
+
+```text
+{
+  "a":1,
+  "b":1
+}
+```
+
+不指定 `keyorder` 时键序跟随 `pairs`——每次运行都可能不同,别对输出顺序做断言;指定了的键按表序,没指定的仍随 `pairs`。
+
 
 ## 用法
 

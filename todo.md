@@ -1727,8 +1727,14 @@
     line/linedit/serve 的 setenv 用点已在新层 2 的包裹内,Windows
     不可见;`luna_test_main.c` 的用点仍堵在 item 4 后(链 luna_loop
     未被调度),登记待 item 4 解冻后随层处理。验证:POSIX 分支全量
-    构建 + ctest **16/16**(306.3s);预期 windows 错误 3→1(仅剩
-    item 4),待 daily 再触发核销。
+    构建 + ctest **16/16**(306.3s)。
+  - **新层 2+3 CI 终验(run 37112664683,2026-10-03,070523b 触发)**:
+    windows 腿报错 **7→1 达成**——唯一剩余即 item 4(luna_loop.c(45)
+    arpa/inet.h,冻结待裁定);plugins/modules 两目标链接通过
+    (LNK1120 消失;luna_test_modules 链接期见 LNK4098 defaultlib
+    'LIBCMT' 冲突,警告级非致命,与 strerror 的 C4996 同容忍类,登记
+    不动)。`luna_main.c(5)`/`luna_line.c(20-21)`/`luna_test_main.c`
+    的 setenv 仍未被调度,堵在 item 4 后,MSBuild 下界照旧。
   - 第 4 条(luna_loop.c arpa/inet.h)仍开、按派发不动;
     `luna_main.c(5)` unistd.h 与 `luna_line.c(20-21)` 仍未被调度到。
     MSBuild 失败即停的调度特性意味着这张表是下界,修完上述后

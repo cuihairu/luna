@@ -419,6 +419,17 @@ file(COPY "${PROJECT_SOURCE_DIR}/lua/modules/"
 file(COPY "${PROJECT_SOURCE_DIR}/deps/dkjson/dkjson.lua"
      DESTINATION "${LUNA_MODULES_DIR}")
 
+# lualogging (deps/lualogging, tag v1.8.2): the `logging` core plus its
+# log4j-style appenders, staged the same way so require "logging" and
+# require "logging.file" resolve out of the box. Pure Lua; only
+# logging.socket / logging.rsyslog touch LuaSocket (already bundled),
+# and the optional drivers (sql's DBI, copas, ngx) are required lazily
+# inside the functions that use them, so the staged set loads clean.
+file(COPY "${PROJECT_SOURCE_DIR}/deps/lualogging/src/logging.lua"
+     DESTINATION "${LUNA_MODULES_DIR}")
+file(COPY "${PROJECT_SOURCE_DIR}/deps/lualogging/src/logging/"
+     DESTINATION "${LUNA_MODULES_DIR}/logging")
+
 # luasocket's Lua layer in the upstream layout: socket.lua/ltn12.lua/
 # mime.lua at the top, socket/{http,url,...} in a subdirectory. The C
 # halves (socket.core, mime.core) resolve from package.loaded,

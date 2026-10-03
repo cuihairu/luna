@@ -86,6 +86,7 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 | 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
 | 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
+| 日志 | `logging`:六级阈值,console/文件/滚动文件/socket 等 log4j 式 appender(lualogging 1.8,随二进制) | [标准库 · logging](https://cuihairu.github.io/luna/stdlib/logging) |
 | 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |
 | 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/architecture) |
 

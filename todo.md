@@ -1499,14 +1499,32 @@
   浮出,poll 句柄要随 fd 一起关掉重开)。回归用例
   `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 +
   localhost 拨号必须成功,plain/TLS 一条用例两腿同盖。
-- **lualogging 集成(2026-10-03 用户定案)**:集成 LuaLogging
-  (lunarmodules/lua-logging,1.8.x,MIT,log4j 式 appenders:
+- **lualogging 集成(2026-10-03 用户定案,同日完成)**:集成 LuaLogging
+  (lunarmodules/lualogging,1.8.2,MIT,log4j 式 appenders:
   console/file/rolling_file/socket/email/sql)进 luna 环境——默认
   `require 'logging'` 开箱可用、随环境分发,不走用户手动装;依赖
-  LuaSocket 已有。①Lua 5.5 兼容性验证(luna 是 5.5),不兼容打
-  最小补丁并上游记录差异,不留魔改;②示例+文档一节(级别/console/
-  文件/rolling_file 三五例),README 能力清单加 log;③测试绿独立
-  提交。
+  LuaSocket 已有。**落地实录**:子模块 deps/lualogging 钉 v1.8.2
+  (465c994);CMakeLists 按 dkjson 同款 staging(src/logging.lua +
+  logging/ 目录进 luna_modules/,随产物分发);可选驱动(sql 的
+  DBI、copas、ngx)都在函数体内懒 require,随发集合干净加载。
+  **Lua 5.5 兼容验证(上游 CI 只到 5.4,luna 是新地面)**:上游全套
+  回归(generic 11 + env 10 + console/file/mail/socket/sql/rolling)
+  在 luna 下三轮 exit=0(pairs 顺序各异);四腿手工冒烟(级别过滤/
+  file 落盘/200B 滚动到 .1/socket 回环收包)全过;唯一差异是
+  generic.format_error_stacktrace 把栈深硬编码 ==3——luna 脚本
+  运行器多一行可计数帧 `(luna):163 run_script`
+  (rewrite_stacktrace 的 gmatch 不吃无尾换行的末行,故 (luna):320
+  不计),属宿主帧敏感非 5.5 语义差异(stock 5.4 直跑 3 过、任何
+  Lua 帧包装器下都会 +1),源码零补丁、子模块零改动;若日后上游
+  收 5.5 进 CI,此处即为现成记录。示例四段(级别/格式/文件/滚动)
+  贴真实输出;docs/stdlib/logging.md + 侧栏 + 总览行 + README
+  能力清单行。**门禁实录**:15/16 绿,rocks 组
+  test_install_lock_reproduce_cycle 红于网络腿——三条 manifest
+  镜像(luarocks.org/moonrocks-mirror/loadk)全部下载失败,主机
+  直连 curl 对 luarocks.org 与 raw.githubusercontent.com 亦 TLS 即断
+  (unexpected eof);同测试 09:41 全绿、luarocks.org 10:30 仍可达,
+  属主机网络中断非本轮改动(失败点在 vendored luarocks 抓 manifest,
+  先于任何模块解析);网络恢复后复跑 rocks 全绿再 push。
 
 ## nightly 平台矩阵试运行转正清单(2026-10-02 登记)
 
@@ -1641,6 +1659,15 @@
     点此名,属 GCC 未对该形态实现此告警,非形态优势)。预期 Windows
     CI 消 612(新层 1),余量=item 4+新层 2+未调度层,待 daily 触发
     核销。
+  - **新层 1 CI 核销(run 37089224548,2026-10-03 手动触发,7609204
+    推送后)**:windows 腿 luna_lua.h 报错 **612→0**;唯一错误清单收敛
+    到 7 处 C1083,与登记严丝合缝——luna_loop.c(45) arpa/inet.h
+    (item 4,按裁定不动)、luna_test_line.c(19)/luna_test_serve.c(7)
+    poll.h、luna_test_cli.c(13)/luna_test_covsum.c(15) sys/wait.h、
+    luna_test_rocks.c(17)/luna_test_modules.c(10) unistd.h(新层 2);
+    六个白盒目标已正常编出(luna_test_introspect.exe 产物在日志),
+    luna_main.c(5) 仍未被调度到(luna.exe 卡在 luna_loop 依赖后,
+    与预判一致)。619→7,同根 612 清零收官。
   - **待裁定——派发机制条款与登记方向相反**:派发文字"改以 C++ 原始
     字符串拼接,弃用普通字符串拼接"恰为本条登记方向的倒装;按派发
     自身"按 todo.md 登记方案执行"落地了登记方向(转义常规串)。

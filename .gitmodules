@@ -58,3 +58,6 @@
 [submodule "deps/luaexpat"]
 	path = deps/luaexpat
 	url = https://github.com/lunarmodules/luaexpat.git
+[submodule "deps/lualogging"]
+	path = deps/lualogging
+	url = https://github.com/lunarmodules/lualogging.git

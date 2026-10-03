@@ -19,6 +19,7 @@
 | toml | TOML 1.0 编解码,datetime 组件表 | tomlc17 (C) | [toml](/stdlib/toml) |
 | yaml | YAML 1.1 编解码、多文档 | lyaml | [yaml](/stdlib/yaml) |
 | xml | DOM 编解码 + SAX 透传 | expat (lxp) | [xml](/stdlib/xml) |
+| logging | 级别化日志,console/文件/滚动文件/socket appender(上游原样透出) | lualogging | [logging](/stdlib/logging) |
 
 两个贯穿契约:
 

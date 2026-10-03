@@ -48,7 +48,8 @@ export default defineConfig({
           { text: 'ini', link: '/stdlib/ini' },
           { text: 'toml', link: '/stdlib/toml' },
           { text: 'yaml', link: '/stdlib/yaml' },
-          { text: 'xml', link: '/stdlib/xml' }
+          { text: 'xml', link: '/stdlib/xml' },
+          { text: 'logging', link: '/stdlib/logging' }
         ]
       },
       {

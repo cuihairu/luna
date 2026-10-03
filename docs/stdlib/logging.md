@@ -1,6 +1,6 @@
 # stdlib · logging
 
-[lualogging](https://github.com/lunarmodules/lualogging)(lunarmodules,1.8.x,MIT)的 `logging` 全家随二进制分发,`require` 即用:六级阈值 + log4j 式 appender。核心纯 Lua,上游原样透出、无包装;`logging.socket`/`logging.email` 踩在自带的 luasocket 上,`sql` 的数据库驱动与 `rsyslog`/`nginx` 的宿主属可选项,只在用到时才 require。luna 的 Lua 5.5 上游 CI 尚未覆盖(矩阵止于 5.4),已用上游全套回归在本机验证:三轮全绿、零补丁零改动。
+[lualogging](https://github.com/lunarmodules/lualogging)(lunarmodules,1.8.x,MIT)的 `logging` 全家随二进制分发,`require` 即用:六级阈值 + log4j 式 appender。核心纯 Lua,上游原样透出、无包装;`logging.socket`/`logging.email` 踩在自带的 luasocket 上,`sql` 的数据库驱动与 `rsyslog`/`nginx` 的宿主属可选项,只在用到时才 require。luna 的 Lua 5.5 上游 CI 尚未覆盖(矩阵止于 5.4),已用上游回归逐文件在本机验证:env/console/file/rolling/socket/SQL 全过,generic 10/11——唯一红的 `format_error_stacktrace` 硬编码宿主栈深(要 3,luna 运行器下得 4,stock 直跑得 2),纯测试形状敏感非语义差异;零补丁零改动,mail 需外部 SMTP 未在本地跑。
 
 ## API
 

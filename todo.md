@@ -1507,9 +1507,18 @@
   (465c994);CMakeLists 按 dkjson 同款 staging(src/logging.lua +
   logging/ 目录进 luna_modules/,随产物分发);可选驱动(sql 的
   DBI、copas、ngx)都在函数体内懒 require,随发集合干净加载。
-  **Lua 5.5 兼容验证(上游 CI 只到 5.4,luna 是新地面)**:上游全套
-  回归(generic 11 + env 10 + console/file/mail/socket/sql/rolling)
-  在 luna 下三轮 exit=0(pairs 顺序各异);四腿手工冒烟(级别过滤/
+  **Lua 5.5 兼容验证(上游 CI 只到 5.4,luna 是新地面)**:上游回归
+  在 luna 下逐文件实测——env 10 项 + console/file/rolling/socket/
+  SQL 全过(SQL 无 luasql 驱动走上游自带 SKIP 分支;socket 上游只
+  发不收,另起本地回环证明真实投递);generic 10/11,唯一红的是
+  format_error_stacktrace 把栈分隔符硬编码 ==3——`luna test.lua`
+  下得 4(脚本运行器多一行可计数帧 `(luna):163 run_script`;
+  rewrite_stacktrace 的 gmatch 不吃无尾换行的末行,故 (luna):320
+  不计)。同断言 stock 5.5 直跑(`lua_host generic.lua`)得 2 同样
+  红——只有经 dofile 的精确形状才得 3,纯宿主帧形状敏感,与 5.5
+  语义无关;源码零补丁、子模块零改动;mail 需外部 SMTP 未在本地
+  跑,其唯一依赖 socket.smtp 已随发就位。若日后上游收 5.5 进
+  CI,此处即为现成记录。四腿手工冒烟(级别过滤/
   file 落盘/200B 滚动到 .1/socket 回环收包)全过;唯一差异是
   generic.format_error_stacktrace 把栈深硬编码 ==3——luna 脚本
   运行器多一行可计数帧 `(luna):163 run_script`
@@ -1525,6 +1534,8 @@
   (unexpected eof);同测试 09:41 全绿、luarocks.org 10:30 仍可达,
   属主机网络中断非本轮改动(失败点在 vendored luarocks 抓 manifest,
   先于任何模块解析);网络恢复后复跑 rocks 全绿再 push。
+  **复核(同日 13:40 后,记录校准时)**:全量重跑 16/16 绿(Total
+  256.82s,rocks 12.39s 过),网络已恢复,早前红确为网络中断。
 
 ## nightly 平台矩阵试运行转正清单(2026-10-02 登记)
 

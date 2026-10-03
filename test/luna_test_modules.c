@@ -8,12 +8,18 @@
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32
-/* getcwd/chdir: the file's only POSIX surface (the relative-require
- * test below); the CRT spells them _getcwd/_chdir. Guarded, not
- * wrapped - the embedded-VM suite itself has no POSIX runtime need. */
-#include <direct.h>
+#include <direct.h> /* the CRT home of getcwd/chdir */
+#include <stdlib.h> /* _putenv_s */
+/* getcwd/chdir (the relative-require test) and setenv/unsetenv (the
+ * rocks vendor legs) are this file's only POSIX surface. The CRT spells
+ * them _getcwd/_chdir/_putenv_s; an empty _putenv_s value removes the
+ * variable, which is already how rocks.lua reads an empty
+ * LUNA_VENDOR_DIR (as unset), so the legs keep their meaning. Guarded,
+ * not wrapped - the embedded-VM suite has no POSIX runtime need. */
 #define getcwd _getcwd
 #define chdir _chdir
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
 #else
 #include <unistd.h>
 #endif

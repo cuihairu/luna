@@ -7,6 +7,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+/* the CRT has no setenv/unsetenv: _putenv_s is the pair, and assigning
+ * an empty value removes the variable - exactly what teardown wants */
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#endif
 
 #include <cmocka.h>
 

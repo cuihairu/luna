@@ -114,7 +114,12 @@ add_executable(luna_test_serve luna_test_serve.c)
 target_link_libraries(luna_test_serve PRIVATE cmocka-static lualib lpeg luasocket luna_kernel)
 # the idle-wake test drives the real binary on a pty; the busy-script
 # attach test drives it again with a fixture
-target_link_libraries(luna_test_serve PRIVATE util)
+if(NOT WIN32)
+    # libutil: forkpty, for the pty legs — the file compiles to an empty
+    # suite on Windows (see its top-of-file note), so it needs no libutil
+    # there
+    target_link_libraries(luna_test_serve PRIVATE util)
+endif()
 target_compile_definitions(luna_test_serve PRIVATE
         LUNA_BINARY="$<TARGET_FILE:luna>"
         SERVE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
@@ -139,7 +144,13 @@ set_tests_properties(loop PROPERTIES TIMEOUT 600)
 # Line editor (replxx bridge): typed commit, editing, Tab completion,
 # history recall/persistence, highlighting, ^C/^D — driven on a pty
 add_executable(luna_test_line luna_test_line.c)
-target_link_libraries(luna_test_line PRIVATE cmocka-static lualib luna_kernel util)
+target_link_libraries(luna_test_line PRIVATE cmocka-static lualib luna_kernel)
+if(NOT WIN32)
+    # libutil: forkpty, for the pty leg of the harness — the file compiles
+    # to an empty suite on Windows (see its top-of-file note), so it needs
+    # no libutil there
+    target_link_libraries(luna_test_line PRIVATE util)
+endif()
 target_compile_definitions(luna_test_line PRIVATE
         LUNA_BIN="$<TARGET_FILE:luna>")
 add_test(NAME line COMMAND luna_test_line)

@@ -7,7 +7,16 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#ifdef _WIN32
+/* getcwd/chdir: the file's only POSIX surface (the relative-require
+ * test below); the CRT spells them _getcwd/_chdir. Guarded, not
+ * wrapped - the embedded-VM suite itself has no POSIX runtime need. */
+#include <direct.h>
+#define getcwd _getcwd
+#define chdir _chdir
+#else
 #include <unistd.h>
+#endif
 
 #include <cmocka.h>
 

@@ -16,6 +16,15 @@
  * set just before the keystrokes, so an earlier echo cannot satisfy a
  * later step.
  */
+
+/* The harness below is POSIX end to end: forkpty children execv'ing the
+ * real binary, poll() on the master, waitpid, mkdtemp scratch homes,
+ * rm -f cleanup and SIGUSR1 wakeups. Windows compiles the target to an
+ * empty suite - the contract has no runtime counterpart there yet - so
+ * the build clears this layer wholesale instead of tripping over one
+ * POSIX header at a time. */
+#ifndef _WIN32
+
 #include <poll.h>
 #if defined(__APPLE__)
 #include <util.h> /* no pty.h on macOS: forkpty lives here */
@@ -1147,3 +1156,12 @@ int main(void)
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }
+
+#else /* _WIN32: empty suite, see the note at the top of the file */
+
+int main(void)
+{
+    return 0;
+}
+
+#endif

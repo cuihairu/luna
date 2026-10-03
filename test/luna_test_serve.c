@@ -3,6 +3,15 @@
  * The test is one Lua state acting as both target and client, stepping
  * serve.step() by hand where the kernel count hook would normally sit.
  */
+
+/* The harness below is POSIX end to end: forkpty and fork/exec children,
+ * pipes and dup2, poll() on ptys and sockets, waitpid, mkdtemp scratch
+ * sockets and popen sh lines. Windows compiles the target to an empty
+ * suite - no counterpart to that process model yet - so the build
+ * clears this layer wholesale instead of tripping over one POSIX header
+ * at a time. */
+#ifndef _WIN32
+
 #include <fcntl.h>
 #include <poll.h>
 #if defined(__APPLE__)
@@ -1285,3 +1294,12 @@ int main(void)
      * (statement then expression), order as declared */
     return cmocka_run_group_tests(tests, setup_serve, teardown_serve);
 }
+
+#else /* _WIN32: empty suite, see the note at the top of the file */
+
+int main(void)
+{
+    return 0;
+}
+
+#endif

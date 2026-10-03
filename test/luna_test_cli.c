@@ -4,6 +4,15 @@
  *   interactive  (piped stdin: bare luna, and luna -i script)
  * plus a --help smoke check. Each mode is its own group.
  */
+
+/* The harness below is POSIX end to end: fork/pipe/dup2 children with
+ * poll() and signal delivery, waitpid harvests, and sh command lines
+ * (printf pipes, env prefixes) through popen. Windows compiles the
+ * target to an empty suite - none of that has a counterpart there yet -
+ * so the build clears this layer wholesale instead of tripping over one
+ * POSIX header at a time. */
+#ifndef _WIN32
+
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -590,3 +599,12 @@ int main(void)
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
+
+#else /* _WIN32: empty suite, see the note at the top of the file */
+
+int main(void)
+{
+    return 0;
+}
+
+#endif

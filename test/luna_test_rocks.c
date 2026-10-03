@@ -8,6 +8,14 @@
  * network for the online install (the CI runner has it; the from-lock
  * step itself is offline-capable via .luna/cache).
  */
+
+/* The harness is POSIX end to end: sh command lines through system()
+ * (cd 'dir' && ..., rm -rf, mkdir -p, the timeout guard), mkdtemp
+ * scratch trees and wait-status macros - cmd.exe knows none of that.
+ * Windows compiles the target to an empty suite instead of tripping
+ * over one POSIX header at a time. */
+#ifndef _WIN32
+
 #include <stdarg.h>
 #include <stddef.h>
 #include <setjmp.h>
@@ -346,3 +354,12 @@ int main(void)
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
+
+#else /* _WIN32: empty suite, see the note at the top of the file */
+
+int main(void)
+{
+    return 0;
+}
+
+#endif

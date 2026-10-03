@@ -1,25 +1,35 @@
-/* Generated from lua/*.lua at configure time — do not edit. */
+/* Generated from the lua/ sources at configure time - do not edit. */
 #ifndef LUNA_LUA_H
 #define LUNA_LUA_H
 
-static const char LUNA_LUA_ENTRY[] = R"LUNA_ENTRY(@LUNA_LUA_ENTRY@)LUNA_ENTRY";
+static const char LUNA_LUA_ENTRY[] =
+@LUNA_LUA_ENTRY@;
 
-static const char LUNA_LUA_REPL[] = R"LUNA_REPL(@LUNA_LUA_REPL@)LUNA_REPL";
+static const char LUNA_LUA_REPL[] =
+@LUNA_LUA_REPL@;
 
-static const char LUNA_LUA_COMPLETE[] = R"LUNA_COMPLETE(@LUNA_LUA_COMPLETE@)LUNA_COMPLETE";
+static const char LUNA_LUA_COMPLETE[] =
+@LUNA_LUA_COMPLETE@;
 
-static const char LUNA_LUA_INTROSPECT[] = R"LUNA_INTROSPECT(@LUNA_LUA_INTROSPECT@)LUNA_INTROSPECT";
+static const char LUNA_LUA_INTROSPECT[] =
+@LUNA_LUA_INTROSPECT@;
 
-static const char LUNA_LUA_HIGHLIGHT[] = R"LUNA_HIGHLIGHT(@LUNA_LUA_HIGHLIGHT@)LUNA_HIGHLIGHT";
+static const char LUNA_LUA_HIGHLIGHT[] =
+@LUNA_LUA_HIGHLIGHT@;
 
-static const char LUNA_LUA_MAGIC[] = R"LUNA_MAGIC(@LUNA_LUA_MAGIC@)LUNA_MAGIC";
+static const char LUNA_LUA_MAGIC[] =
+@LUNA_LUA_MAGIC@;
 
-static const char LUNA_LUA_MODULES[] = R"LUNA_MODULES(@LUNA_LUA_MODULES@)LUNA_MODULES";
+static const char LUNA_LUA_MODULES[] =
+@LUNA_LUA_MODULES@;
 
-static const char LUNA_LUA_PLUGINS[] = R"LUNA_PLUGINS(@LUNA_LUA_PLUGINS@)LUNA_PLUGINS";
+static const char LUNA_LUA_PLUGINS[] =
+@LUNA_LUA_PLUGINS@;
 
-static const char LUNA_LUA_ROCKS[] = R"LUNA_ROCKS(@LUNA_LUA_ROCKS@)LUNA_ROCKS";
+static const char LUNA_LUA_ROCKS[] =
+@LUNA_LUA_ROCKS@;
 
-static const char LUNA_LUA_SERVE[] = R"LUNA_SERVE(@LUNA_LUA_SERVE@)LUNA_SERVE";
+static const char LUNA_LUA_SERVE[] =
+@LUNA_LUA_SERVE@;
 
 #endif

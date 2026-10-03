@@ -225,7 +225,7 @@ target_include_directories(luna_xml PRIVATE
         "${PROJECT_SOURCE_DIR}/deps/luaexpat/src")
 target_link_libraries(luna_xml PUBLIC lualib expat)
 
-# embed the entry plus policy modules into the binary (raw strings)
+# embed the entry plus policy modules into the binary
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna.lua" LUNA_LUA_ENTRY)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/repl.lua" LUNA_LUA_REPL)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/complete.lua" LUNA_LUA_COMPLETE)
@@ -236,6 +236,33 @@ file(READ "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua" LUNA_LUA_MODULES)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua" LUNA_LUA_PLUGINS)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/rocks.lua" LUNA_LUA_ROCKS)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua" LUNA_LUA_SERVE)
+# Each source becomes ordinary C string literals — one quoted line per
+# source line, concatenated by the compiler. This header used to emit
+# C++ raw string literals (R"…") instead: a C++-only feature that
+# MSVC rejects the moment a C translation unit includes the header
+# (612 of the 619 Windows CI errors, todo "新层 1"). The round trip
+# must be byte-identical to the file on disk: escape backslashes
+# first, then quotes, then CRs, and turn each source line break into
+# "\n" between adjacent literals. (Raw content reaching configure_file
+# was never transformed, so @VAR@ substitution exposure is unchanged.)
+function(luna_c_string_literal out content)
+    set(s "${content}")
+    string(REPLACE "\\" "\\\\" s "${s}")
+    string(REPLACE "\"" "\\\"" s "${s}")
+    string(REPLACE "\r" "\\r" s "${s}")
+    string(REPLACE "\n" "\\n\"\n\"" s "${s}")
+    set(${out} "\"${s}\"" PARENT_SCOPE)
+endfunction()
+luna_c_string_literal(LUNA_LUA_ENTRY "${LUNA_LUA_ENTRY}")
+luna_c_string_literal(LUNA_LUA_REPL "${LUNA_LUA_REPL}")
+luna_c_string_literal(LUNA_LUA_COMPLETE "${LUNA_LUA_COMPLETE}")
+luna_c_string_literal(LUNA_LUA_INTROSPECT "${LUNA_LUA_INTROSPECT}")
+luna_c_string_literal(LUNA_LUA_HIGHLIGHT "${LUNA_LUA_HIGHLIGHT}")
+luna_c_string_literal(LUNA_LUA_MAGIC "${LUNA_LUA_MAGIC}")
+luna_c_string_literal(LUNA_LUA_MODULES "${LUNA_LUA_MODULES}")
+luna_c_string_literal(LUNA_LUA_PLUGINS "${LUNA_LUA_PLUGINS}")
+luna_c_string_literal(LUNA_LUA_ROCKS "${LUNA_LUA_ROCKS}")
+luna_c_string_literal(LUNA_LUA_SERVE "${LUNA_LUA_SERVE}")
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna.lua"

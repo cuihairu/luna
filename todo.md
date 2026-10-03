@@ -1710,6 +1710,25 @@
     预期 windows CI 7→1(仅剩 item 4),待 daily 触发核销;
     `luna_main.c(5)`/`luna_line.c(20-21)` 仍未被调度到,MSBuild
     下界照旧。
+  - **新层 2 CI 核销(run 37111296367,2026-10-03,708a3cf 触发)**:
+    六个 POSIX 头报错全部从错误表消失——plugins/modules/rocks/cli/
+    covsum/line 编译期零报错;windows 腿剩余错误从 7 收敛到 3:
+    item 4(luna_loop.c(45) arpa/inet.h,冻结)+ 两个新浮出的
+    LNK1120(plugins/modules 各 2 个 unresolved externals:`setenv`
+    /`unsetenv`——MSBuild 下界按预判再兑现,两目标首次走到链接期
+    才暴露)。
+  - **新层 3 消项实录(同日,16/16 绿后提交)**:链接层 setenv/
+    unsetenv 属同一 harness POSIX 面家族,当轮一并收掉——
+    `luna_test_plugins.c` 与 `luna_test_modules.c` 顶部 `_WIN32`
+    守卫加 `_putenv_s` 宏对(空值赋值即移除变量)。modules 的空值
+    腿语义经产品源码核实无损:rocks.lua:135 本就把空
+    LUNA_VENDOR_DIR 读作 unset,159-162 的 die-before-luarocks 对
+    nil 同路,Windows 上空值赋值→移除→getenv nil→同一条腿。
+    line/linedit/serve 的 setenv 用点已在新层 2 的包裹内,Windows
+    不可见;`luna_test_main.c` 的用点仍堵在 item 4 后(链 luna_loop
+    未被调度),登记待 item 4 解冻后随层处理。验证:POSIX 分支全量
+    构建 + ctest **16/16**(306.3s);预期 windows 错误 3→1(仅剩
+    item 4),待 daily 再触发核销。
   - 第 4 条(luna_loop.c arpa/inet.h)仍开、按派发不动;
     `luna_main.c(5)` unistd.h 与 `luna_line.c(20-21)` 仍未被调度到。
     MSBuild 失败即停的调度特性意味着这张表是下界,修完上述后

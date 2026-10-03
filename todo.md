@@ -1499,6 +1499,14 @@
   浮出,poll 句柄要随 fd 一起关掉重开)。回归用例
   `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 +
   localhost 拨号必须成功,plain/TLS 一条用例两腿同盖。
+- **lualogging 集成(2026-10-03 用户定案)**:集成 LuaLogging
+  (lunarmodules/lua-logging,1.8.x,MIT,log4j 式 appenders:
+  console/file/rolling_file/socket/email/sql)进 luna 环境——默认
+  `require 'logging'` 开箱可用、随环境分发,不走用户手动装;依赖
+  LuaSocket 已有。①Lua 5.5 兼容性验证(luna 是 5.5),不兼容打
+  最小补丁并上游记录差异,不留魔改;②示例+文档一节(级别/console/
+  文件/rolling_file 三五例),README 能力清单加 log;③测试绿独立
+  提交。
 
 ## nightly 平台矩阵试运行转正清单(2026-10-02 登记)
 
@@ -1617,7 +1625,28 @@
     character`)、g++ 干净——Linux 全绿靠 GNU 方言放行,MSVC 按 C
     编译即炸。`src/luna_main.c` 本身未现身错误表(排在 item 4
     的 luna_loop 依赖后面)。根修方向:模板改转义常规 C 串逐行
-    拼接,弃原始字符串;**未动,待派发**。
+    拼接,弃原始字符串。
+  - **新层 1 根修完成(2026-10-03,16/16 绿后提交)**:`CMakeLists.txt`
+    新增 `luna_c_string_literal()`,转义序固定 `\\`→`\\\\`、`"`→`\"`、
+    CR→`\r`,每个 LF 换成 `\n"`+换行+`"`(每源行一条相邻字面量,编译
+    期拼接),十段 `file(READ)` 变量逐个过转换;`cmake/luna_lua.h.in`
+    十常量改 `static const char X[] =\n@X@;` 形(模板注释同步改 ASCII:
+    原 `lua/*.lua` 内嵌 `/*` 触发 -Wcomment,破折号是为 MSVC 码页留
+    意)。验证三层:①字节级往返 10/10 全一致(逐字面量解码比对
+    `lua/*.lua` 原文,最大 rocks 18298 B/515 字面量);②严格编译
+    `gcc -std=c11 -Wall -Wextra -Werror` 与 `g++ -std=c++11
+    -pedantic-errors`(免豁免)双双干净;③C 模式 pedantic 仅余
+    `-Woverlength-strings`——C99 只保证 4095,MSVC 硬限 65535 而最大
+    常量 18298,是保证下限非能力限制(旧原始串在 g++ pedantic 下不
+    点此名,属 GCC 未对该形态实现此告警,非形态优势)。预期 Windows
+    CI 消 612(新层 1),余量=item 4+新层 2+未调度层,待 daily 触发
+    核销。
+  - **待裁定——派发机制条款与登记方向相反**:派发文字"改以 C++ 原始
+    字符串拼接,弃用普通字符串拼接"恰为本条登记方向的倒装;按派发
+    自身"按 todo.md 登记方案执行"落地了登记方向(转义常规串)。
+    两方向目标同为 612 清零,登记方向改动面小(头文件+模板单点;
+    反向需 extern 声明+新 C++ TU 链进约 11 个目标);疑为派发文字
+    名词对调笔误。机制条款定案待用户裁定,结果不受影响。
   - **新层 2(预判证实 + 三处未预判,均测试 harness POSIX 头)**:
     `luna_test_line.c(19)`/`luna_test_serve.c(7)` `poll.h`(孪生
     预判命中)、`luna_test_cli.c(13)`/`luna_test_covsum.c(15)`

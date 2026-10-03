@@ -1691,6 +1691,25 @@
     `sys/wait.h`、`luna_test_modules.c(10)`/`luna_test_rocks.c(17)`
     `unistd.h`(后两族未预判)——修法同 linedit(平台包裹/守卫),
     line/serve 的 `util` 链接待条件化。
+  - **新层 2 消项实录(2026-10-03,16/16 绿后提交)**:按登记方法
+    落地。五个端到端 POSIX harness——`luna_test_line.c`/`luna_test_serve.c`
+    (forkpty+poll+waitpid+mkdtemp)、`luna_test_cli.c`(fork/pipe/dup2
+    信号腿 + sh 命令行经 popen)、`luna_test_covsum.c`(POSIX shell
+    单引号命令行,cmd.exe 不剥引号故无运行期对应)、`luna_test_rocks.c`
+    (system() 的 `rm -rf`/`mkdir -p`/`cd '&&'` + timeout 守卫)——
+    整文件 `#ifndef _WIN32` 包裹 + Windows 空套件 stub `main`,顶部
+    注记逐文件写明 POSIX 面(同 linedit 先例);`luna_test_modules.c`
+    走守卫不包裹:POSIX 面只有 unistd 的 getcwd/chdir(相对 require
+    测试),`_WIN32` 下换 `<direct.h>` + `_getcwd/_chdir` 宏,91 例
+    嵌入式 VM 套件在 Windows 保留可跑;`test/CMakeLists.txt` line/serve
+    的 `util`(libutil,forkpty 所在)链接按 linedit 同款
+    `if(NOT WIN32)` 条件化,否则编过也 LNK1104。验证两分支各自成立:
+    POSIX 分支全量构建 + ctest **16/16**(203.2s,rocks 10.98s 实绿,
+    负载 2.9),`-std=gnu11 -Wall -Wextra` 逐文件语法检查零新增告警;
+    `-D_WIN32 -fsyntax-only` 五个包裹文件全过(stub 分支零依赖)。
+    预期 windows CI 7→1(仅剩 item 4),待 daily 触发核销;
+    `luna_main.c(5)`/`luna_line.c(20-21)` 仍未被调度到,MSBuild
+    下界照旧。
   - 第 4 条(luna_loop.c arpa/inet.h)仍开、按派发不动;
     `luna_main.c(5)` unistd.h 与 `luna_line.c(20-21)` 仍未被调度到。
     MSBuild 失败即停的调度特性意味着这张表是下界,修完上述后

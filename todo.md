@@ -1840,7 +1840,7 @@
   http/crypto/process/os/loop)、Data-Format(csv/ini/toml/yaml/xml/
   zlib)、Dev tooling(logging/repl/introspect/magic/complete/highlight)、
   Ecosystem(LuaRocks/plugins/luna_modules)。防"什么都往里塞"。
-- **P0-P4 roadmap(挂起,待派发才动)**:P0 稳定 Runtime 核心(现状即
+- **P0-P4 roadmap(已解挂,转正式任务序见下节)**:P0 稳定 Runtime 核心(现状即
   P0,不新增功能);P1 runtime introspection(attach 升级:luna ps /
   %info / %modules / %plugins / %tasks / %gc / %globals / %stats /
   %eval / %load,评审认为 attach 是最被低估的一条线);P2 异步模型
@@ -1858,3 +1858,40 @@
   循环污染(require "loop" 才进异步)、LuaRocks 只包装不自建 registry、
   luna.lock 走复制锁(lock/package/ux 三者职责分离)。
 - 巡检注记(第十四轮,2026-09-28,基线 59b7db4):全量 15 组复跑——build 树 1026.7s(loop 322.9s 过新 600s 门,ASan 树同套 193 用例 578s 零泄漏)、cov 树 589s 15/15 绿;覆盖率门禁 lines 95.2%(2610/2743)、luna_loop 分支 76.19%(739/970)、聚合 76.3%(905/1186);本轮唯一修复:loop 组 TIMEOUT 属性 240→600(显式属性压过 ctest --timeout,59b7db4);rocks 组负载 87-107 三连败(2×Timeout+1×Failed,内层 timeout 420 掐网络重锁腿,负载假挂类),负载 38 复跑绿 253.6s,同轮 cov 树曾绿证非回归;工作树含并行会话 +76 行(test/luna_test_loop.c,6 测试,199 用例态同轮全绿)未纳入提交,gcov 临时产物已清。
+
+## 评审计划解挂:正式任务序(2026-10-04 派发生效)
+
+上节登记的架构评审由用户派发解除挂起,P0-P4 转正式任务序,按序开工,
+每完成可验收增量提交推送。原登记块保留作源记录,与本节冲突处以下节
+及各增量记录为准。
+
+**执行序**(状态:☑ 完成 / ▶ 进行中 / ☐ 未动):
+
+- ☑ **①文档/定位批**——README 第一屏三例(裸 REPL / `luna build.lua` /
+  `luna -e 'require("http").serve(...)'`)+ 定位句
+  "A batteries-included Lua runtime for scripting, tooling, and
+  lightweight services" + 三层模型文档主结构 + 标准库四类分法
+  (Core / Data-Format / Dev tooling / Ecosystem),Node.js 降为
+  architecture reference 不作产品身份;顺带核销安装面过时文案
+  (README"无 tag 无 Release"/faq:39/getting-started:21,匿名
+  Release 已通,原文反向);
+- ☑ **②P0 稳定 Runtime 核心**——不新增功能,守现状 + 巡检:门禁
+  全绿即 P0 达标,巡检记录随增量落本节;
+- ▶ **③P1 runtime introspection**——attach 线升级:`luna ps` +
+  %info / %modules / %plugins(已有) / %tasks / %gc / %globals /
+  %stats / %eval / %load;**%tasks 缓议**:其数据源是 P2 任务模型
+  (loop 句柄族无 Lua 可见注册表,红线又禁加 loop.xxx),待 P2 落
+  任务模型后回补,本轮以其余命令交付;
+- ☐ **P2 异步模型**——coroutine/future/await/cancellation/handle
+  lifetime;红线:**不许继续加 loop.xxx**;
+- ☐ **P3 生态**——plugin/package/template + 官方示例 hello-cli/
+  http-server/tcp-server/file-tool/web-scraper/build-tool/
+  game-script/automation;
+- ☐ **P4 安全运行时**——sandbox/permissions/module allowlist/
+  resource limits,trusted vs sandbox 双模。
+
+**红线(全程有效)**:不耦合游戏服务器(禁 ECS/Actor/Zone,游戏场景
+经 require("game") 或 plugin 接入);LuaRocks 只包装不自建 registry;
+C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异步)。
+
+**增量账**:(随做随记)

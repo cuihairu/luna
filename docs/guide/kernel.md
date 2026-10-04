@@ -21,6 +21,8 @@
 | `kernel.tty()` | stdin 是否终端 |
 | `kernel.colors()` | 着色是否可用(TTY + `TERM` 非 `dumb` + 无 NO_COLOR) |
 | `kernel.version()` | `"luna 0.1.0"` |
+| `kernel.fuel(strikes?)` | 设指令预算(计数钩子 strike 数);无参读当前值,不设返回 `nil` |
+| `kernel.memcap(bytes?)` | 设内存字节上限;无参读当前值,不设返回 `nil` |
 
 ## 执行与校验
 
@@ -52,6 +54,13 @@
 - **`kernel.tty()`** 看 stdin,**`kernel.colors()`** 看 stdout + 环境变量(`NO_COLOR`/`LUNA_NO_COLOR` 出现即关,[no-color.org](https://no-color.org) 契约;`LUNA_COLOR=1/0` 强开强关),REPL 的着色开关全部以它为准;
 - **`kernel.version()`**:版本串,`luna --help` 的标题同源。
 
+## 限额
+
+- **`kernel.fuel(strikes?)`**:指令预算,以计数钩子的 strike 为单位(一次 strike ≈ 10 万条指令);钩子每次先查 `^C` 标志、再扣预算,扣到零即 `error("sandbox: instruction budget exhausted")`。设 0 等于不设;无参调用读当前值。
+- **`kernel.memcap(bytes?)`**:分配器字节上限,超限的分配返回失败(Lua 报 `not enough memory`);上限是运行中的值,不设(或 0)时 allocator 逐字节等价默认行为,设上才开始记账(收缩回收,双向记账)。
+
+两者是[沙箱](/guide/sandbox)资源限额层的底层旋钮:`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 翻译成这两个调用,设完后旋钮从 `kernel` 表摘除——信任模式下它们是普通可调 API,可用性不受影响。
+
 ## 内部面
 
-`kernel.count_hook()` 是计数钩子自身逻辑的普通可调用形态:一次 `^C` 检查加一次 attach 轮询。只有覆盖率构建(luacov 独占调试钩子槽,行事件转发到此)会显式调它;普通运行不会遇到,也不需要调。
+`kernel.count_hook()` 是计数钩子自身逻辑的普通可调用形态:一次 `^C` 检查、一次 attach 轮询,已设预算时再扣一击 fuel。只有覆盖率构建(luacov 独占调试钩子槽,行事件转发到此)会显式调它;普通运行不会遇到,也不需要调。

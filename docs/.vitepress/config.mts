@@ -29,6 +29,7 @@ export default defineConfig({
           { text: '事件循环', link: '/guide/loop' },
           { text: '异步任务', link: '/guide/tasks' },
           { text: '示例与脚手架', link: '/guide/examples' },
+          { text: '沙箱运行时', link: '/guide/sandbox' },
           { text: '全局对象 kernel', link: '/guide/kernel' }
         ]
       },

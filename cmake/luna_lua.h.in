@@ -35,4 +35,7 @@ static const char LUNA_LUA_SERVE[] =
 static const char LUNA_LUA_NEW[] =
 @LUNA_LUA_NEW@;
 
+static const char LUNA_LUA_SANDBOX[] =
+@LUNA_LUA_SANDBOX@;
+
 #endif

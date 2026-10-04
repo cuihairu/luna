@@ -20,4 +20,9 @@ void luna_kernel_request_interrupt(void);
  * it there. */
 int luna_kernel_take_interrupt(void);
 
+/* Lua state allocator with an optional byte ceiling (the sandbox's
+ * memory cap). Pass to lua_newstate; cap 0 means uncapped — the same
+ * realloc/free behavior Lua's default allocator has. */
+void *luna_alloc(void *ud, void *ptr, size_t osize, size_t nsize);
+
 #endif

@@ -27,6 +27,41 @@ static volatile sig_atomic_t luna_interrupt_flag = 0;
 /* ticks between attach polls (two count-hook hits apart) */
 static unsigned luna_serve_ticks = 0;
 
+/* sandbox limits, both process-wide and off by default:
+ *   g_fuel  — count-hook strikes left (one strike ≈ 100k instructions);
+ *             0 = unlimited. Spent by the same hook that checks ^C.
+ *   g_mem   — the allocator's byte ceiling and running total. The total
+ *             starts counting when the cap is set (bootstrap allocations
+ *             before that are uncapped and uncounted — a few hundred KB,
+ *             the price of a plain luaL_newstate). */
+static long long g_fuel = 0;
+static struct {
+    size_t cap; /* 0 = uncapped */
+    size_t used;
+} g_mem = { 0, 0 };
+
+void *luna_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
+{
+    (void)ud;
+    if (nsize == 0) {
+        free(ptr);
+        return NULL;
+    }
+    /* signed delta both ways: shrinks decrement, so grow/shrink cycles
+     * don't inflate the total; a cap set mid-run starts from the clamped
+     * floor and only ever undercounts (conservative direction) */
+    long long delta = (long long)nsize - (ptr ? (long long)osize : 0);
+    if (delta > 0 && g_mem.cap &&
+        (unsigned long long)delta > g_mem.cap - g_mem.used)
+        return NULL; /* Lua turns this into "not enough memory" */
+    void *p = realloc(ptr, nsize);
+    if (p) {
+        long long used = (long long)g_mem.used + delta;
+        g_mem.used = used > 0 ? (size_t)used : 0;
+    }
+    return p;
+}
+
 void luna_kernel_request_interrupt(void)
 {
     luna_interrupt_flag = 1;
@@ -41,6 +76,45 @@ int luna_kernel_take_interrupt(void)
 
 /* Called by the REPL loop when it returns to the prompt: an interrupt
  * that arrived while nothing was running is discarded, bash-style. */
+
+/* kernel.fuel([strikes]): read or set the count-hook budget. One unit
+ * is one count-hook hit (~100k instructions), the same currency the
+ * hook spends. The sandbox bootstrap sets this from LUNA_SANDBOX_FUEL
+ * and then removes the function from the kernel table — a sandboxed
+ * script has no way back. */
+static int k_fuel(lua_State *L)
+{
+    if (lua_isnoneornil(L, 1)) {
+        if (g_fuel > 0)
+            lua_pushinteger(L, g_fuel);
+        else
+            lua_pushnil(L); /* unlimited */
+        return 1;
+    }
+    long long n = (long long)luaL_checkinteger(L, 1);
+    luaL_argcheck(L, n >= 0, 1, "fuel must be >= 0");
+    g_fuel = n;
+    return 0;
+}
+
+/* kernel.memcap([bytes]): read or set the allocator's byte ceiling;
+ * 0 = uncapped, returns the cap. Same sandbox lifecycle as fuel: set
+ * once at bootstrap, then the knob comes off the kernel table. */
+static int k_memcap(lua_State *L)
+{
+    if (lua_isnoneornil(L, 1)) {
+        if (g_mem.cap > 0)
+            lua_pushinteger(L, (lua_Integer)g_mem.cap);
+        else
+            lua_pushnil(L); /* uncapped */
+        return 1;
+    }
+    long long n = (long long)luaL_checkinteger(L, 1);
+    luaL_argcheck(L, n >= 0, 1, "memcap must be >= 0");
+    g_mem.cap = (size_t)n;
+    return 0;
+}
+
 static int k_clear_interrupt(lua_State *L)
 {
     (void)L;
@@ -138,6 +212,10 @@ static void luna_count_hook(lua_State *L, lua_Debug *ar)
     (void)ar;
     if (luna_interrupt_flag)
         luaL_error(L, "interrupted (SIGINT)");
+    if (g_fuel > 0) { /* one strike per hook hit, ≈100k instructions */
+        if (--g_fuel == 0)
+            luaL_error(L, "sandbox: instruction budget exhausted");
+    }
     if (++luna_serve_ticks >= 2) {
         luna_serve_ticks = 0;
         lua_Hook prev = lua_gethook(L);
@@ -489,6 +567,8 @@ static const luaL_Reg kernel_funcs[] = {
     { "write", k_write },
     { "sink", k_sink },
     { "clear_interrupt", k_clear_interrupt },
+    { "fuel", k_fuel },
+    { "memcap", k_memcap },
     { "pid", k_pid },
     { "wake", k_wake },
     { "alive", k_alive },

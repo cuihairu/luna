@@ -22,6 +22,13 @@ local intro = require "luna.introspect"
 
 local ok_unix, socket_unix = pcall(require, "socket.unix")
 
+-- The socket directory is read once, here, not per call: in sandbox
+-- mode os.getenv is stripped after this module loads, and the attach
+-- channel (kept as the ops path) still needs its path. Same for the
+-- stale-socket cleanup in start().
+local SOCK_DIR = os.getenv("LUNA_SOCK_DIR") or "/tmp"
+local os_remove = os.remove
+
 local serve = {}
 
 serve.srv = nil       -- listening socket
@@ -30,7 +37,7 @@ serve.client = nil    -- current client socket (nil until accepted)
 serve.enabled = true  -- cleared by --no-serve
 
 function serve.path_for(pid)
-    local dir = os.getenv("LUNA_SOCK_DIR") or "/tmp"
+    local dir = SOCK_DIR
     return dir .. "/luna-" .. tostring(pid) .. ".sock"
 end
 
@@ -48,7 +55,7 @@ function serve.start()
     end
     local path = serve.path_for(kernel.pid())
     local srv = socket_unix()
-    os.remove(path) -- stale socket from a dead predecessor
+    os_remove(path) -- stale socket from a dead predecessor
     -- create-owner-only: tighten the umask around bind so the socket
     -- file never exists wider than 0600 (0777 &~ 077); the chmod below
     -- stays as belt-and-suspenders for systems that ignore umask here
@@ -240,7 +247,7 @@ function serve.stop()
     if serve.srv then
         pcall(function() serve.srv:close() end)
         if serve.path then
-            os.remove(serve.path)
+            os_remove(serve.path)
         end
     end
     serve.srv, serve.path, serve.client = nil, nil, nil
@@ -254,7 +261,7 @@ end
 -- (Linux only — elsewhere nil, and the socket path is shown instead).
 -- Returns rows sorted by pid; the printing lives in psCli.
 function serve.ps()
-    local dir = os.getenv("LUNA_SOCK_DIR") or "/tmp"
+    local dir = SOCK_DIR
     local rows = {}
     local okl, lfs = pcall(require, "lfs")
     if not okl or type(lfs) ~= "table" or type(lfs.dir) ~= "function" then
@@ -299,7 +306,7 @@ function serve.psCli()
     local rows = serve.ps()
     if #rows == 0 then
         io.write(string.format("no luna processes with an attach socket under %s\n",
-            os.getenv("LUNA_SOCK_DIR") or "/tmp"))
+            SOCK_DIR))
         return 0
     end
     io.write(string.format("%-8s %-6s %s\n", "PID", "STATE", "COMMAND"))

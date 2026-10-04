@@ -31,6 +31,7 @@ package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, luna_chunkname
 package.preload["luna.rocks"] = assert(load(__LUNA_ROCKS_SRC, luna_chunkname("rocks")))
 package.preload["luna.serve"] = assert(load(__LUNA_SERVE_SRC, luna_chunkname("serve")))
 package.preload["luna.new"] = assert(load(__LUNA_NEW_SRC, luna_chunkname("new")))
+package.preload["luna.sandbox"] = assert(load(__LUNA_SANDBOX_SRC, luna_chunkname("sandbox")))
 
 -- Node-style resolution for project packages: relative requires and
 -- bare names walking up luna_modules/ directories, manifests honored.
@@ -67,6 +68,10 @@ parser:flag("--no-color", "disable ANSI colors in output")
 parser:flag("--no-plugins", "skip plugin discovery and loading")
 parser:flag("--no-serve",
     "do not open the unix attach socket for `luna --attach`")
+parser:flag("-S --sandbox",
+    "restrict the session: module allowlist, no native loads, no " ..
+    "subprocess/file-writes/env; LUNA_SANDBOX_FUEL / LUNA_SANDBOX_MEM " ..
+    "cap compute and memory")
 parser:option("--attach",
     "attach to a running luna's live state (its pid); interactive")
 parser:argument("script", "a .lua script to run first"):args("?")
@@ -117,9 +122,21 @@ if opts.version then
     return 0
 end
 
+-- Sandbox mode installs before anything user-facing runs; plugins are
+-- skipped outright (they inject package.preload entries, an allowlist
+-- bypass). The runtime's own lazily-loaded pieces (the line editor the
+-- console needs) are pulled in while the real require still exists.
+if opts.sandbox then
+    pcall(require, "linedit") -- the console's line editor, pre-guard
+    pcall(require, "luna.serve") -- the attach channel: its sock-dir
+        -- snapshot and socket.unix both load while require/env/cpath
+        -- are still real (the channel itself stays open as ops path)
+    require("luna.sandbox").install()
+end
+
 -- Directory plugins load for every launch mode (they may inject
 -- modules a script needs); --no-plugins skips them.
-if not opts.no_plugins then
+if not opts.no_plugins and not opts.sandbox then
     require("luna.plugins").load_all()
 end
 

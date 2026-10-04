@@ -367,7 +367,10 @@ int main(int argc, char *argv[])
     signal(SIGPIPE, SIG_IGN);
     install_sigusr1();
 
-    lua_State *L = luaL_newstate();
+    /* capped allocator: the sandbox's memory ceiling goes through
+     * kernel.memcap, so the cap is a runtime value, not a build one —
+     * with cap 0 this is byte-for-byte the default allocator. */
+    lua_State *L = lua_newstate(luna_alloc, NULL, luaL_makeseed(NULL));
     if (!L) {
         fprintf(stderr, "luna: cannot create Lua state\n");
         return 1;
@@ -414,6 +417,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_SERVE_SRC");
     lua_pushlstring(L, LUNA_LUA_NEW, sizeof(LUNA_LUA_NEW) - 1);
     lua_setglobal(L, "__LUNA_NEW_SRC");
+    lua_pushlstring(L, LUNA_LUA_SANDBOX, sizeof(LUNA_LUA_SANDBOX) - 1);
+    lua_setglobal(L, "__LUNA_SANDBOX_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
 

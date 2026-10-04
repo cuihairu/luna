@@ -89,6 +89,7 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 | 异步任务 | `task`:`task.run/await/sleep/promise/promisify`,句柄 `:cancel` 协作取消;`%tasks` 观测 | [异步任务](https://cuihairu.github.io/luna/guide/tasks) |
 | 脚手架 | `luna new plugin/package/script <name>` 内置模板一键生成起步代码;`--list` 列模板,已存在即拒 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
 | 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
+| 沙箱运行时 | `luna --sandbox`:模块白名单、禁原生加载、无子进程/文件写/环境,`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 限算力与内存 | [沙箱运行时](https://cuihairu.github.io/luna/guide/sandbox) |
 | 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
 | 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
@@ -98,7 +99,7 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 
 ## 文档
 
-- 文档站:**https://cuihairu.github.io/luna** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;
+- 文档站:**https://cuihairu.github.io/luna** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架 / 沙箱运行时)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;
 - 源码在 [`docs/`](docs/),VitePress:`cd docs && pnpm install && pnpm run docs:dev` 本地预览。
 
 ## 开发

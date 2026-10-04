@@ -1891,8 +1891,16 @@
   全真实走查;顺带修 net.serve 吃 ^C 的真实缺陷(accept 永阻塞,
   "^C 即停/130" 承诺落空 → 250ms 期限 + count_hook 转身),
   automation 例补 http.serve 同款心跳,loop.md ^C 条目补齐前提;
-- ☐ **P4 安全运行时**——sandbox/permissions/module allowlist/
-  resource limits,trusted vs sandbox 双模。
+- ☑ **P4 安全运行时**——`luna --sandbox`(-S)同一 Lua 态四层加固:
+  模块白名单(全局 require 卫兵 + `LUNA_SANDBOX_MODULES` 按名放行,
+  `package.require` 实测不存在故全局替换即全覆盖)、禁原生加载
+  (loadlib 拿掉 + package 掏空冻结——`__newindex` 只拦新键,裸赋
+  cpath 会绕过,改「冻结副本 + `__index` + `__metatable` 锁」)、权
+  限(动作类响亮拒绝 / 读环境返 nil 不炸,load 强制文本,debug 上值
+  与帧局部探测拒绝、getinfo 留给内省)、资源限额(kernel.fuel /
+  memcap 由 `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 驱动后摘表);
+  信任模式零行为变化(新 allocator cap=0 逐字节等价);attach 通道
+  保留且灌入行仍受卫兵,插件跳过;本地 15/15 组全绿。
 
 **红线(全程有效)**:不耦合游戏服务器(禁 ECS/Actor/Zone,游戏场景
 经 require("game") 或 plugin 接入);LuaRocks 只包装不自建 registry;
@@ -1921,6 +1929,19 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   success,含 loop/rocks 全量组——P0 巡检全绿;docs 部署
   (37181976485/37182548831)为 Pages 发布,不计门禁,与每日
   schedule 的 Daily Build(37184473423)同受 pool 拥堵,不阻塞;
+- 2026-10-05 P4 安全运行时:进程级 `luna --sandbox`(-S)同一 Lua 态四层
+  加固。C 侧 `lua_newstate(luna_alloc, NULL, luaL_makeseed(NULL))` 定制
+  分配器(收缩回收的双向字节账,上限 0 逐字节等价默认)+ 计数钩子扣
+  fuel + `kernel.fuel(strikes)`、`kernel.memcap(bytes)` 导出;装填层
+  lua/luna/sandbox.lua(白名单卫兵/冻结/剥旋钮/横幅)沿五触点嵌入,
+  luna.lua `-S` 派发预载 linedit+luna.serve、跳过插件。走查实录:
+  `__newindex` 只拦新键致 cpath 裸赋值绕过→改「掏空+冻结副本+
+  __index+__metatable」;`debug.getlocal` 抽卫兵帧实测够不到上值
+  (getupvalue 已关)仍一并关闭,getinfo 留给内省;attach 灌入行照受
+  拒绝,fs 放行后写面仍拒;LUNA_SANDBOX_FUEL/MEM 限额报错到位;
+  luna/serve.lua 快照 SOCK_DIR 与 os.remove 供安装后调用。文档:
+  guide/sandbox.md 新页 + 侧栏/cli-repl/kernel(限额节)/README 挂载;
+  ctest -E rocks 15/15。
 - 2026-10-05 P3 生态:①脚手架 `luna new`(lua/luna/new.lua 走
   __LUNA_*_SRC 嵌入路径;plugin/package/script 三模板,名字校验禁
   `..`、目标已存在即拒、--list;epilog 补行,luna.lua 与 rocks/

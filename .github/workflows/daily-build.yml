@@ -311,6 +311,16 @@ jobs:
           echo "utc_time=${UTC_TIME}" >> "$GITHUB_ENV"
           echo "bj_time=${BJ_TIME}" >> "$GITHUB_ENV"
 
+      # 同一份东西留档 run 页副本(不算交付;v4 产物不可变,上传前先删
+      # 历史同名——collect 头部的清理步给这一步清场)
+      - name: Upload daily-build
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-build
+          path: ${{ env.daily_zip }}
+          retention-days: 14
+          if-no-files-found: error
+
       # 滚动 nightly Release：固定 tag，每次构建把 target 重新指到本次
       # commit、清掉全部旧 assets 再传新的（全仓库只留最新一份，重跑幂
       # 等）。--prerelease --latest=false：不抢正式 release 位。匿名可下

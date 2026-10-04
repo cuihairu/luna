@@ -13,8 +13,9 @@
 - luafilesystem
 - luaossl (需系统 OpenSSL 开发头)
 - dkjson
+- lualogging (logging 模块,`logging` core + appender 随二进制 staged)
 - argparse
-- tomlc17 (TOML 1.0)
+- tomlc17 (TOML v1.1)
 - lyaml + libyaml (YAML 1.1)
 - lua-expat + expat (XML)
 - libuv (事件循环后端)
@@ -22,7 +23,7 @@
 - luacov (覆盖率,Profiling 树专用)
 - cmocka (测试框架,FetchContent 拉取)
 
-首次 configure 需要联网(拉取 git 子模块与 cmocka);之后离线可构建——**无需手动安装任何 LuaRocks 或系统 Lua 包**。
+首次 configure 需要联网(拉取 git 子模块与 cmocka);之后离线可构建——**无需手动安装任何 LuaRocks 或系统 Lua 包**。(`deps/` 里另有 `base64/`、`jemalloc/` 两个 vendored 目录,当前构建不编入,留作后备。)
 
 ## 构建步骤
 
@@ -142,14 +143,12 @@ VitePress 2.0-alpha,base `/luna/`,中文本地搜索。
 
 `.github/workflows/daily-build.yml`:
 
-- `schedule`: 每天 UTC 01:23
-- `workflow_dispatch`: 手动触发
-- 三平台并行构建(Linux x64 / Linux arm64 / macOS arm64)
-- 产物上传为 GitHub Artifacts,固定名 `daily-build`
-- Artifacts 里:三平台 zip + `BUILD_INFO.txt`(commit 与时间)+ `VERIFY.md`(验证步骤)
-- **不打 tag、不发 Release、不推镜像**——纯产物分发
+- `schedule`: 每天 UTC 01:23(北京时间 09:23,错开整点 runner 高峰);`workflow_dispatch` 手动触发;
+- 四平台并行构建:linux-x86_64 / linux-aarch64 / macos-aarch64(稳定腿)+ windows-x86_64(试运行,`continue-on-error`,红了不拖垮夜间绿——Windows 移植未完,尚无产物,移植落定后自动上线);
+- 交付面是**滚动 nightly Release**:collect & publish job 建/移固定 tag `nightly`(pre-release),清旧传新各平台 zip + `.sha256` 侧车,重跑幂等;Release notes 即 `BUILD_INFO`(commit 与时间)加 `VERIFY`(验证步骤);
+- Actions artifact(`daily-build`,保留 3 天)只是 run 页面的临时副本,不算交付。
 
-取件:Actions → Daily Build → 最新成功 run → Artifacts 区 → `daily-build`。
+取件走 Release 页匿名直下:`releases/download/nightly/luna-nightly-<os>-<arch>.zip`(安装器的下载坐标即此);run 页 artifact 仅作佐证。
 
 ## 推送 main 后
 

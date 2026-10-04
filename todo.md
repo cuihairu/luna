@@ -1919,3 +1919,27 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   schedule 的 Daily Build(37184473423)同受 pool 拥堵,不阻塞;
   期间取消两个被最终树覆盖的冗余 run(37181976479/37182548801)
   让出队列。
+- 2026-10-04 ④全局对账批(文档 vs 实现,全量扫):偏差清单逐条修——
+  交付面三处滞后:README 徽章/链接与每日构建 bullet 指向旧流水线
+  daily.yml(纯 artifact)而非 daily-build.yml(滚动 nightly 交付线),
+  bullet 里"每天定时构建+全量测试"与"两者均红"按实际矩阵改写
+  (Release 构建+冒烟,纯产物流水线,全量测试归 push CI;仅 Windows
+  是试运行腿),artifact 保留期钉准(pkg-<os>-<arch> 3 天、汇总
+  daily-build 14 天);build.md 的"CI:Daily Build"整节还是
+  "不打 tag、不发 Release"旧口径,照 daily-build.yml 重写,deps 清单
+  补 lualogging、tomlc17 版本钉 v1.1、base64/jemalloc 未编入注明;
+  P1 滞后两处:kernel.md API 表补 kernel.alive/kernel.started
+  (P1 f2bec84 引入未入档),config.md 命令行开关表补
+  -i/--interactive、-e/--eval、-v/--version 三行与子命令注;其余对账
+  修正:architecture.md "事件循环为何推迟"旧框架→"边界在哪"、
+  计数钩子 20 万→10 万(对齐 luna_kernel.c:373),introduction.md
+  删定位批残留的重复句,getting-started deps 列表补五个已发布依赖+
+  通用开关表补 --no-serve,stdlib/index.md 上游链接钉准
+  (lua-zlib brimworks、lyaml gvvaughan)+ 死锚 #分层→页内三层模型,
+  toml 三处"TOML 1.0"→"TOML v1.1"(tomlc17 README 口径),rocks.md
+  "约 400 行"→"约 500 行",faq utf8 不算"额外内置",node-parity
+  里"README 表述滞后"一句按现状收口;核对通过不动:loop.md(逐行
+  对过 C 导出表)、plugins.md(四扩展点+overridden/failed 全真)、
+  modules.md 净表(15 模块 API 声称脚本化核对全命中)、logging.md
+  (deps/lualogging 上游九 appender 全在)、errors.md、docs/index.md;
+  VitePress 本地 build 过。

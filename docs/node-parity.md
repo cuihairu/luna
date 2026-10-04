@@ -276,7 +276,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 
 ### timers:事件循环现状核实与建议
 
-**现状(源码核实)**:派发单引用的 README「事件循环推迟」已经演进——[architecture.md](/architecture) 的章节现在是「事件循环:第一批(显式选择,脚本 opt-in)」:`require "loop"` 落地已久,libuv 1.53.0 静态链接,已有 timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process 八个 C 面 + `loop.http` 纯 Lua 面;prepare 钩子承接 `^C` → `interrupted`(退出码 130)与 attach 轮询。**推迟的对象已经不是"要不要循环",而是"要不要全局化/进 REPL"**——README 概览表那句"事件循环推迟的 rationale"指向上文,表述滞后但不失实。
+**现状(源码核实)**:派发单引用的 README「事件循环推迟」已经演进——[architecture.md](/architecture) 的章节现在是「事件循环:第一批(显式选择,脚本 opt-in)」:`require "loop"` 落地已久,libuv 1.53.0 静态链接,已有 timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process 八个 C 面 + `loop.http` 纯 Lua 面;prepare 钩子承接 `^C` → `interrupted`(退出码 130)与 attach 轮询。**推迟的对象已经不是"要不要循环",而是"要不要全局化/进 REPL"**——README 概览表原有"事件循环推迟"的表述已随 2026-10-04 定位批更新为现状口径(定时器/TCP/Unix/TLS/异步 fs/信号/子进程 + 脚本尾部自动排水)。
 
 **建议:启用「脚本尾部自动排水」,继续推迟「全局化与 REPL 集成」。**
 

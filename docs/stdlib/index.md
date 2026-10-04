@@ -22,7 +22,7 @@
 | --- | --- | --- | --- |
 | csv | RFC 4180 CSV 编解码与逐行迭代 | LPeg | [csv](/stdlib/csv) |
 | ini | 经典 .ini 编解码 | LPeg | [ini](/stdlib/ini) |
-| toml | TOML 1.0 编解码,datetime 组件表 | tomlc17 (C) | [toml](/stdlib/toml) |
+| toml | TOML v1.1 编解码,datetime 组件表 | tomlc17 (C) | [toml](/stdlib/toml) |
 | yaml | YAML 1.1 编解码、多文档 | lyaml | [yaml](/stdlib/yaml) |
 | xml | DOM 编解码 + SAX 透传 | expat (lxp) | [xml](/stdlib/xml) |
 | zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |
@@ -56,13 +56,13 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 | `socket.core` | luasocket 的 TCP/UDP 原始面 | [luasocket](https://github.com/diegonehab/luasocket) |
 | `socket.unix` | unix 域 socket;attach 通道的传输层 | 同上 |
 | `mime.core` | MIME 编解码(base64、quoted-printable) | 同上 |
-| `zlib.core` | lua-zlib 原始流式面;`zlib` 包装层的一次式 API 在其上 | [lua-zlib](https://github.com/brunoos/luazlib) |
+| `zlib.core` | lua-zlib 原始流式面;`zlib` 包装层的一次式 API 在其上 | [lua-zlib](https://github.com/brimworks/lua-zlib) |
 | `toml.core` | tomlc17 解码核心(无编码,encode 是包装层的 Lua 面) | [tomlc17](https://github.com/cktan/tomlc17) |
-| `yaml.core` | lyaml 的 C 面(仅解码) | [lyaml](https://github.com/jdesgats/lyaml) |
+| `yaml.core` | lyaml 的 C 面(仅解码) | [lyaml](https://github.com/gvvaughan/lyaml) |
 | `lxp` | expat 的 SAX 面;`xml` 的 DOM 构建在其上 | [lua-expat](https://github.com/tomasguisasola/luaexpat) |
 | `_openssl.*` | luaossl 全家(约 20 个子模块,`crypto` 包装层之下) | [luaossl](https://github.com/wahern/luaossl) |
 | `lfs` | luafilesystem 完整面(`fs` 的透传半边) | [luafilesystem](https://github.com/keplerproject/luafilesystem) |
 | `argparse` | CLI 参数解析(入口自己用,脚本同样可 require) | [argparse](https://github.com/luarocks/argparse) |
 | `linedit` | C 行编辑器;一般经 REPL 使用,自建交互面时可直取 | luna 内置 |
 
-再往上是 `luna.*` 前缀的**内嵌策略模块**(`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve` 等)——REPL 的 Lua 半身,见[架构设计](/architecture#分层)。上游原样面意味着:错误风格与 API 形状随上游(`nil, err` 为主),luna 不做再包装。
+再往上是 `luna.*` 前缀的**内嵌策略模块**(`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve`/`luna.modules`/`luna.rocks` 等)——REPL 的 Lua 半身,见[架构设计](/architecture)的三层模型一节。上游原样面意味着:错误风格与 API 形状随上游(`nil, err` 为主),luna 不做再包装。

@@ -18,7 +18,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 产物来自**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发):公共仓库资产公开可下,**匿名直拉,不需要任何凭据**;每个 zip 带 `.sha256` 侧车,脚本下载后自动校验(不匹配只告警——nightly 可能在下载间隙被重发,重跑一次即可)。`--token`/`GITHUB_TOKEN`/`LUNA_INSTALL_MIRROR`/`LUNA_MIRROR` 保留作私有 fork 与直链兜底。
 
-**手动下载**:直接去 [nightly Release 页](https://github.com/cuihairu/luna/releases/tag/nightly)取 **`luna-nightly-<os>-<arch>.zip`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`)+ `.sha256` 侧车,内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用)。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中,两者均红不拖垮其余平台。Daily Build 工作流([daily.yml](https://github.com/cuihairu/luna/actions/workflows/daily.yml))是这些资产的来源,per-run artifact 只是本地副本,交付通道是 Release。
+**手动下载**:直接去 [nightly Release 页](https://github.com/cuihairu/luna/releases/tag/nightly)取 **`luna-nightly-<os>-<arch>.zip`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`)+ `.sha256` 侧车,内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用)。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),红不拖垮其余平台;macOS 项构建与产物已通,运行期测试按平台移植清单收敛中。Daily Build 工作流([daily-build.yml](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml))是这些资产的来源,per-run artifact 只是本地副本,交付通道是 Release。
 
 解压后验证:
 
@@ -28,7 +28,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 macOS 包未做签名,首次运行先 `xattr -cr luna` 清隔离属性。
 
-**源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、lua-zlib、luafilesystem、luaossl、dkjson、argparse)全部在 `deps/` 内,configure 时自动拉取。
+**源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、luafilesystem、lua-zlib、luaossl、dkjson、argparse、libuv、tomlc17、libyaml+lyaml、expat+lua-expat、lualogging 等)全部在 `deps/` 内,configure 时自动拉取。
 
 ```bash
 # Linux / macOS
@@ -89,7 +89,10 @@ luna serve [dir] [port]  # 静态文件服务,^C 停止(见上「三十秒上手
 | --- | --- |
 | `--no-color` | 关闭输出 ANSI 着色 |
 | `--no-plugins` | 跳过插件发现与加载 |
+| `--no-serve` | 不建 attach 监听 socket |
 | `--help` | 用法与示例 |
+
+全部开关与环境变量见[配置与环境变量](/other/config)。
 
 着色策略:TTY 且非 `dumb` 终端时自动开启;`NO_COLOR` 环境变量强制关闭,`LUNA_COLOR=1` 强制开启;管道下自动降级为纯文本——脚本输出永远不会被污染。
 

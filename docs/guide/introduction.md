@@ -5,7 +5,7 @@
 - **IPython 式的 REPL**:多行输入、实时语法高亮、Tab 补全、内省帮助、魔法命令、`In[n]`/`Out[n]` 会话记录;
 - **Node.js 式的工程体验**:贴近 Node 的模块解析规则、标准库形状、目录插件机制与包管理包装——Node 对齐是架构参考,不是身份,见[架构设计](/architecture)。
 
-三层模型:你的代码(User Space)跑在 luna 自己(标准库、模块、插件、REPL 策略层——Luna Runtime)之上,底下是官方 Lua 5.5 与 vendor 库(Native Runtime)。luna 把宿主补齐,而内核始终是**官方 Lua 5.5**——luna 不含自制解释器。
+三层模型:你的代码(User Space)跑在 luna 自己(标准库、模块、插件、REPL 策略层——Luna Runtime)之上,底下是官方 Lua 5.5 与 vendor 库(Native Runtime)。
 
 Lua 本身把一切留给宿主:没有命令行参数解析、没有包管理、交互层只有一行 `lua -`。luna 把宿主补齐,而内核始终是**官方 Lua 5.5**——luna 不含自制解释器。
 

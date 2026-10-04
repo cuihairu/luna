@@ -1,6 +1,6 @@
 # stdlib · toml
 
-TOML 1.0 编解码。`decode` 走 C 面([tomlc17](https://github.com/cktan/tomlc17),deps 内钉版);`encode` 是 luna 自己的 Lua 面(tomlc17 不带编码器)。
+TOML 编解码。`decode` 走 C 面([tomlc17](https://github.com/cktan/tomlc17),严格实现 TOML v1.1,deps 内钉版);`encode` 是 luna 自己的 Lua 面(tomlc17 不带编码器)。
 
 ## API
 

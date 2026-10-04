@@ -40,7 +40,7 @@ luna_modules/hello/
 | `http` | luasocket | `request`、`get` 等完整 http.client 面 |
 | `csv` | LPeg | RFC 4180 式 `decode`/`encode`(引号内分隔符/换行/双写引号、`headers` 表键行、`delimiter`)与逐记录 `lines()` 迭代器 |
 | `ini` | LPeg | 经典 `decode`/`encode`(段/段前裸键/两种注释/引号值转义/重复键/`cast` 数字与布尔) |
-| `toml` | tomlc17 | TOML 1.0 `decode`/`encode`;`decode` 走 C 后端,`encode` 是包装层自有实现(标量键先行、`[[表数组]]`、内联数组/日期时间/空表) |
+| `toml` | tomlc17 | TOML v1.1 `decode`/`encode`;`decode` 走 C 后端,`encode` 是包装层自有实现(标量键先行、`[[表数组]]`、内联数组/日期时间/空表) |
 | `yaml` | libyaml + lyaml | YAML 1.1 `decode`/`decodeAll`/`encode`;null → nil 默认(`opts.nullval = yaml.null` 保留哨兵),anchors/aliases 解为共享表引用,`---` 分隔的多文档走 `decodeAll` |
 | `xml` | expat + lua-expat | DOM 三件套 `decode`/`encode`(元素 = `{tag, attrs, kids}`,文本节点是 kids 里的字符串,属性恒字符串,命名空间前缀原样)+ `xml.sax` 流式透传(lxp handler 模型) |
 | `path` | 纯 Lua | Node `path.posix` 语义:`join`/`resolve`/`normalize`/`relative`/`dirname`/`basename`/`extname`/`isAbsolute`/`parse`/`format` + `sep`/`delimiter`(按 Node v24 实证钉版,win32 面不做) |

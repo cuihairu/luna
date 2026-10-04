@@ -13,9 +13,11 @@
 | `kernel.clear_interrupt()` | 复位挂起的 `^C` 标志 |
 | `kernel.pid()` | 本进程 pid(attach socket 路径由它派生) |
 | `kernel.wake(pid)` | 给目标进程发 `SIGUSR1`,唤醒其轮询点 |
+| `kernel.alive(pid)` | 进程存活探针:`kill(pid, 0)`,EPERM 视为存活、ESRCH 为 `false`;Windows 恒 `false` |
 | `kernel.chmod(path, "600")` | 八进制字符串设权限(lfs 不带 chmod 的补位) |
 | `kernel.umask(mask?)` | 设 umask 并返回旧值;缺省 `0077` |
 | `kernel.millis()` | 单调时钟毫秒(整数,`CLOCK_MONOTONIC`) |
+| `kernel.started` | luaopen 时刻的单调毫秒锚点;`kernel.millis() - kernel.started` 即进程 uptime |
 | `kernel.tty()` | stdin 是否终端 |
 | `kernel.colors()` | 着色是否可用(TTY + `TERM` 非 `dumb` + 无 NO_COLOR) |
 | `kernel.version()` | `"luna 0.1.0"` |
@@ -36,7 +38,8 @@
 ## 中断与进程
 
 - **`kernel.clear_interrupt()`**:回提示符时调用——空转时到达的 `^C` 直接丢弃(bash 语义),不留给下一个 chunk;
-- **`kernel.pid()` / `kernel.wake(pid)`**:attach 的一对原语——socket 文件名取 `pid`,客户端发 `SIGUSR1` 让目标的阻塞行编辑返回空行、主循环顺势轮询。
+- **`kernel.pid()` / `kernel.wake(pid)`**:attach 的一对原语——socket 文件名取 `pid`,客户端发 `SIGUSR1` 让目标的阻塞行编辑返回空行、主循环顺势轮询;
+- **`kernel.alive(pid)`**:`luna ps` 的存活判定(`ps` 扫到 socket 文件后逐个 pid 探活,死进程只剩文件时标 `stale`)。
 
 ## 权限
 
@@ -45,7 +48,7 @@
 
 ## 时钟与环境
 
-- **`kernel.millis()`**:单调钟,不受系统对时影响;`%timeit` 与 `loop.now()`(libuv 循环自己的钟)各有用途,别混用;
+- **`kernel.millis()`**:单调钟,不受系统对时影响;`%timeit` 与 `loop.now()`(libuv 循环自己的钟)各有用途,别混用;进程 uptime = `kernel.millis() - kernel.started`(`%info`/`%stats` 报告的 uptime 即此公式);
 - **`kernel.tty()`** 看 stdin,**`kernel.colors()`** 看 stdout + 环境变量(`NO_COLOR`/`LUNA_NO_COLOR` 出现即关,[no-color.org](https://no-color.org) 契约;`LUNA_COLOR=1/0` 强开强关),REPL 的着色开关全部以它为准;
 - **`kernel.version()`**:版本串,`luna --help` 的标题同源。
 

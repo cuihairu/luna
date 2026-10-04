@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a>
-  <a href="https://github.com/cuihairu/luna/actions/workflows/daily.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily.yml?label=nightly&style=flat-square"></a>
+  <a href="https://github.com/cuihairu/luna/actions/workflows/daily-build.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily-build.yml?label=nightly&style=flat-square"></a>
   <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua">
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
 </p>
@@ -67,7 +67,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(Windows 资产待源代码移植收尾后自动上线,见下)。
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily.yml) 每天定时构建+全量测试,per-run artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层,保留 14 天)以及挥发行 Release 的同一包;Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中(见 todo),两者均红不拖垮其余平台。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
+- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),红不拖垮其余平台;macOS 项构建与产物已通,运行期测试按平台移植清单收敛中(见 todo)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
 - **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash

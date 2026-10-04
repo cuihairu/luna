@@ -1,19 +1,31 @@
 name: Daily Build
 
-# 每日构建流水线：CI 构建产物分发，不是发版——绝不 git tag / gh release
-# （铁律：本仓库的产物只存在于 Actions artifact，任何改动都不得引入
-# tag 或 Release 步骤）。全仓库只保留一份"最新每日构建"：固定 artifact
-# 名 daily-build，上传前先删历史同名（upload-artifact@v4 产物不可变，
-# 同名直接传会报错）。
+# 每日构建流水线：滚动 nightly Release 是唯一交付面（舰队规范，同
+# chirp/soar 的每日构建）。固定 tag `nightly` 的 Pre-release，每次构建把
+# tag 重指本次 commit、清旧资产传新——全仓库只保留一份"最新每日构建"，
+# 重跑幂等。Actions artifact 只是 run 页面的临时副本，不算交付。固定 tag
+# 是分发通道，不对应版本：版本发布禁令仍然有效。公开仓库 Release 资产
+# 匿名可下，一键安装无需任何凭据。
+#
+# 资产名即安装器的坐标：luna-nightly-<os>-<arch>.zip（+ .sha256 侧车，
+# sha256sum 格式），zip 根平铺二进制 + luna_modules/ 模块侧车——二进制
+# 的模块查找先是编译期目录（只在构建机上存在），再落可执行文件同级
+# luna_modules/，产物不带侧车装到任何机器都会 module 'argparse' not
+# found（2026-10-02 实测踩中）。install.ps1 / install.sh 按 OS+arch 组名
+# 直拉 releases/download/nightly/<资产名>。
 #
 # 与 push 触发的 CMake CI 的差异只有三处：构建类型 Release（产物给人
 # 运行）；关闭单元测试（全量 16 组套件由每次 push 的 CI 负责，夜间构建
-# 是纯产物流水线，不把 rocks 组的网络腿带进每日窗口）；最后打包上传
-# artifact。平台面与 README/architecture 的口径一致：Linux x64 /
-# Linux arm64 / macOS Apple Silicon——replxx 桥未含 windows.cxx，
-# Windows 不在支持面。luna 是单二进制（依赖全部静态链，系统侧只留
-# zlib 与 OpenSSL 的动态库），Linux 用发行版包（runner 镜像自带
-# libssl-dev / zlib1g-dev），macOS 用 Homebrew 的 keg-only openssl@3。
+# 是纯产物流水线，不把 rocks 组的网络腿带进每日窗口）；最后打包发布。
+#
+# Windows 是试运行腿：源码还有冻结的 item 4（luna_loop.c arpa/inet.h，
+# 待裁定），编译不过——continue-on-error 红不拖垮夜间绿，移植落定当天
+# 资产自动进 Release，无需再动流水线。zlib 走 vcpkg 静态三元组是试运行
+# 探针口径（让 Configure 过关、把未移植面全数报出来），源码 vendor 与
+# 否是设计裁定，挂 todo 转正清单待决。平台面与 README/architecture 的
+# 口径一致：luna 是单二进制（依赖全部静态链，系统侧只留 zlib 与
+# OpenSSL 的动态库），Linux 用发行版包（runner 镜像自带 libssl-dev /
+# zlib1g-dev），macOS 用 Homebrew 的 keg-only openssl@3。
 
 on:
   schedule:
@@ -35,20 +47,30 @@ jobs:
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # Windows 试运行腿:编译不过(item 4 待裁定)红不拖垮夜间绿
+    continue-on-error: ${{ matrix.experimental }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            name: linux-x64
+            name: linux-x86_64
             title: Linux x64
+            experimental: false
           - os: ubuntu-24.04-arm
-            name: linux-arm64
+            name: linux-aarch64
             title: Linux arm64
+            experimental: false
           - os: macos-latest
-            name: macos-arm64
+            name: macos-aarch64
             title: macOS (Apple Silicon)
+            experimental: false
+          # 首飞试运行:同 daily.yml 的探针口径,红了不拖垮夜间绿
+          - os: windows-latest
+            name: windows-x86_64
+            title: Windows x64 (试运行)
+            experimental: true
 
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +89,14 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja pkg-config openssl@3
 
+      # 试运行探针：runner 预装 vcpkg，静态三元组装 zlib 让 Configure
+      # 过关，编译器才能把下一层未移植面全数报出来
+      - name: Provision zlib (Windows probe)
+        if: runner.os == 'Windows'
+        run: vcpkg install zlib:x64-windows-static
+
       - name: Configure
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -79,8 +108,22 @@ jobs:
               -DENABLE_UNIT_TESTS=OFF
           fi
 
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release -DENABLE_UNIT_TESTS=OFF \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
       - name: Build
+        if: runner.os != 'Windows'
         run: cmake --build build
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release -j
 
       # 冒烟：单二进制自证。--help 出用法；-e 出 Out[1]: 42；loop 定时器
       # 不调 run 也触发——脚本尾部自动排水是 libuv + 排水全栈的端到端
@@ -89,6 +132,7 @@ jobs:
       # Node 语义）；外层 perl alarm 20 兜住循环彻底卡死不转的形态
       # （unref 定时器只在循环转身时响，卡死的循环它到不了）。
       - name: Smoke
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -e -o pipefail
@@ -98,16 +142,27 @@ jobs:
             ./build/luna -e 'local l = require("loop") l.setTimeout(function() print("drain-ok") end, 50) l.setTimeout(function() os.exit(99) end, 5000):unref()' \
             | grep -q drain-ok
 
+      - name: Smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: ./build/Release/luna.exe --version
+
+      # 资产坐标 zip：根平铺二进制 + luna_modules/ 侧车 + 平台说明，附
+      # .sha256 侧车（sha256sum 格式，安装器装前比对）。可执行位由安装
+      # 脚本 chmod 补，zip 是否带着都无所谓。
       - name: Package
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -e
-          PKG=luna-${{ matrix.name }}
-          mkdir -p stage/$PKG
-          cp build/luna stage/$PKG/
-          cat > stage/$PKG/PLATFORM-NOTES.txt <<'NOTES'
+          ASSET=luna-nightly-${{ matrix.name }}
+          mkdir -p stage
+          cp build/luna stage/luna
+          cp -r build/luna_modules stage/luna_modules
+          cat > stage/PLATFORM-NOTES.txt <<NOTES
           luna 每日构建 - ${{ matrix.title }}
           包含: luna 单二进制（Lua 5.5 / libuv / replxx / 全部格式后端已静态链入）
+                + luna_modules/ 模块侧车（Lua 策略层，与二进制同目录解析，整包拷走即用）
 
           验证: 终端运行
             ./luna --help
@@ -115,7 +170,7 @@ jobs:
             ./luna                    # 进入交互式 REPL（^D 退出）
           NOTES
           if [ "$RUNNER_OS" = "macOS" ]; then
-            cat >> stage/$PKG/PLATFORM-NOTES.txt <<'NOTES'
+            cat >> stage/PLATFORM-NOTES.txt <<'NOTES'
 
           crypto 模块说明: 本包动态链接 Homebrew 的 OpenSSL（keg-only，不进
           默认路径）。目标机如未装，`brew install openssl@3` 后 crypto 与
@@ -123,31 +178,59 @@ jobs:
           首次运行如被 Gatekeeper 拦截: xattr -cr luna（每日构建未做签名）。
           NOTES
           else
-            cat >> stage/$PKG/PLATFORM-NOTES.txt <<NOTES
+            cat >> stage/PLATFORM-NOTES.txt <<NOTES
 
           运行时依赖: libz 与 libssl/libcrypto（发行版默认自带；如缺按
           发行版装 openssl 即可，只为 crypto 与 loop 的 TLS 面）。
           NOTES
           fi
-          cd stage
-          zip -qr ../$PKG.zip $PKG
+          (cd stage && zip -qr ../$ASSET.zip luna luna_modules PLATFORM-NOTES.txt)
+          sha256sum "$ASSET.zip" > "$ASSET.zip.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $Asset = "luna-nightly-${{ matrix.name }}"
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+          Copy-Item build/Release/luna.exe stage/luna.exe
+          Copy-Item build/luna_modules stage/luna_modules -Recurse
+          @'
+          luna 每日构建 - Windows x64
+          包含: luna.exe 单二进制（Lua 5.5 / libuv / replxx / 全部格式后端已静态链入）
+                + luna_modules\ 模块侧车（Lua 策略层，与二进制同目录解析，整包拷走即用）
+
+          验证: 终端运行
+            .\luna.exe --help
+            .\luna.exe -e '6*7'      # 应答 Out[1]: 42
+            .\luna.exe               # 进入交互式 REPL（^C 退出）
+          '@ | Set-Content -Encoding UTF8 stage/PLATFORM-NOTES.txt
+          Compress-Archive -Path stage/* -DestinationPath "$Asset.zip"
+          "$((Get-FileHash "$Asset.zip" -Algorithm SHA256).Hash.ToLower())  $Asset.zip" |
+            Set-Content "$Asset.zip.sha256"
 
       - name: Upload platform package
         uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.name }}
-          path: luna-${{ matrix.name }}.zip
+          path: |
+            luna-nightly-*.zip
+            luna-nightly-*.zip.sha256
           retention-days: 3
           if-no-files-found: error
 
-  # 汇总：三平台 zip + BUILD_INFO + VERIFY 打成一个固定名 artifact。
-  # 上传前先删历史同名 daily-build——v4 产物不可变，不删必报错；
-  # 删了再传即"全仓库只存在一份最新每日构建"。
+  # 汇总 + 发布：平台资产合成 SHA256SUMS 与 BUILD_INFO/VERIFY，先更新
+  # 滚动 nightly Release（交付面），再把同一份东西留档 daily-build
+  # artifact（run 页副本，不算交付——v4 产物不可变，上传前先删历史同名）。
   collect:
-    name: Collect daily-build
+    name: Collect & publish nightly
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write # 滚动 nightly Release（建/移 tag/清旧传新）需要
+      actions: write # 删除历史 daily-build artifact 需要
     steps:
       - name: Download platform packages
         uses: actions/download-artifact@v4
@@ -179,54 +262,137 @@ jobs:
           BJ_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M 北京时间')
           BUILD_DATE=$(date -u +'%Y%m%d')
           {
-            echo "luna 每日构建 (daily-build)"
+            echo "luna 每日构建 (nightly)"
             echo "更新时间: ${UTC_TIME} / ${BJ_TIME}"
             echo "Commit:   ${GITHUB_SHA}"
             echo "短 sha:   ${GITHUB_SHA::8}"
             echo "触发方式: ${{ github.event_name }}"
             echo ""
-            echo "这是 CI 构建产物分发，不对应任何 Release/tag。"
+            echo "平台资产（releases/download/nightly/ 匿名直下）:"
+            for z in pkgs/luna-nightly-*.zip; do
+              echo "  $(basename "$z")  (+ .zip.sha256 校验侧车)"
+            done
+            if [ ! -f pkgs/luna-nightly-windows-x86_64.zip ]; then
+              echo "  luna-nightly-windows-x86_64.zip  （试运行腿随 Windows 移植落定自动上线）"
+            fi
             echo ""
-            echo "平台产物:"
-            echo "  luna-linux-x64.zip    Linux x64: luna 单二进制"
-            echo "  luna-linux-arm64.zip  Linux arm64: luna 单二进制"
-            echo "  luna-macos-arm64.zip  macOS Apple Silicon: luna 单二进制"
+            echo "滚动 nightly Release: 固定 tag nightly，清旧传新，每次覆盖。"
+            echo "Actions artifact 仅为 run 页副本，不算交付。"
           } > BUILD_INFO.txt
           cat > VERIFY.md <<'VERIFY'
           # 最简验证
-          每个平台 zip 内附 PLATFORM-NOTES.txt。
+          zip 根平铺：二进制 + luna_modules/ 模块侧车 + PLATFORM-NOTES.txt。
 
-          ## 通用冒烟（三平台一致）
+          ## 通用冒烟
           解压后命令行运行:
-            ./luna --help              # 打印用法，退出码 0
+            ./luna --help              # 打印用法，退出码 0（Windows: .\luna.exe）
             ./luna -e '6*7'            # 应答 Out[1]: 42
             ./luna                     # 进入交互式 REPL（^D 退出）
 
-          ## Linux (x64 / arm64)
+          ## Linux (x86_64 / aarch64)
           1. 解压对应平台 zip
           2. `chmod +x luna && ./luna`
 
           ## macOS (Apple Silicon)
-          1. 解压 luna-macos-arm64.zip
+          1. 解压 luna-nightly-macos-aarch64.zip
           2. `xattr -cr luna && chmod +x luna && ./luna`
              （未签名，必须先清隔离属性）
+
+          ## 校验
+          资产与 SHA256SUMS.txt 放同一目录后 `sha256sum -c SHA256SUMS.txt`；
+          Windows 侧逐资产 `Get-FileHash` 比对 .zip.sha256。
           VERIFY
-          mv pkgs/luna-linux-x64.zip pkgs/luna-linux-arm64.zip \
-             pkgs/luna-macos-arm64.zip .
-          zip -q "luna-daily-${BUILD_DATE}-${GITHUB_SHA::8}.zip" \
-            luna-linux-x64.zip luna-linux-arm64.zip luna-macos-arm64.zip \
-            BUILD_INFO.txt VERIFY.md
+          cp BUILD_INFO.txt VERIFY.md pkgs/
+          (cd pkgs && sha256sum luna-nightly-*.zip > SHA256SUMS.txt)
+          (cd pkgs && zip -q "../luna-daily-${BUILD_DATE}-${GITHUB_SHA::8}.zip" \
+            luna-nightly-*.zip luna-nightly-*.zip.sha256 \
+            SHA256SUMS.txt BUILD_INFO.txt VERIFY.md)
           echo "daily_zip=luna-daily-${BUILD_DATE}-${GITHUB_SHA::8}.zip" >> "$GITHUB_ENV"
           echo "utc_time=${UTC_TIME}" >> "$GITHUB_ENV"
           echo "bj_time=${BJ_TIME}" >> "$GITHUB_ENV"
 
-      - name: Upload daily-build
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-build
-          path: ${{ env.daily_zip }}
-          retention-days: 14
-          if-no-files-found: error
+      # 滚动 nightly Release：固定 tag，每次构建把 target 重新指到本次
+      # commit、清掉全部旧 assets 再传新的（全仓库只留最新一份，重跑幂
+      # 等）。--prerelease --latest=false：不抢正式 release 位。匿名可下
+      # （公开仓库 Release assets 无需登录），install.ps1/install.sh 直
+      # 拉该坐标。
+      - name: Publish nightly Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          UTC_TIME=$(date -u +'%Y-%m-%d %H:%M UTC')
+          BJ_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M 北京时间')
+          BUILD_DATE=$(date -u +'%Y%m%d')
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release edit nightly --title "Luna Nightly Build (nightly)" \
+              --prerelease --latest=false
+            # gh release edit 不支持 --target：移动固定 tag 指向本次 commit
+            # （PATCH 失败兜底删重建，秒级窗口内完成）
+            if ! gh api -X PATCH \
+                "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+                -f sha="$GITHUB_SHA" -F force=true > /dev/null 2>&1; then
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/nightly" \
+                || true
+              gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f ref=refs/tags/nightly -f sha="$GITHUB_SHA"
+            fi
+          else
+            gh release create nightly --target "$GITHUB_SHA" \
+              --title "Luna Nightly Build (nightly)" --prerelease \
+              --latest=false --notes "每日构建发布中…"
+          fi
+          for name in $(gh release view nightly --json assets --jq '.assets[].name'); do
+            gh release delete-asset nightly "$name" -y && echo "deleted asset $name"
+          done
+          TABLE=""
+          for z in pkgs/luna-nightly-*.zip; do
+            b=$(basename "$z")
+            sz=$(du -h "$z" | cut -f1)
+            case "$b" in
+              luna-nightly-windows-x86_64.zip) d="Windows 10/11 x64 便携包: luna.exe + luna_modules\\，解压即用" ;;
+              luna-nightly-linux-x86_64.zip)   d="Linux x64 便携包: luna + luna_modules/，chmod +x 后运行" ;;
+              luna-nightly-linux-aarch64.zip)  d="Linux arm64 便携包: 同上（arm64 原生构建）" ;;
+              luna-nightly-macos-aarch64.zip)  d="macOS Apple Silicon 便携包: xattr -cr luna 后运行（未签名）" ;;
+              *) d="" ;;
+            esac
+            TABLE="${TABLE}| \`${b}\` | ${sz} | ${d} |
+          "
+          done
+          WINNOTE=""
+          if [ ! -f pkgs/luna-nightly-windows-x86_64.zip ]; then
+            WINNOTE="Windows 资产随移植收尾自动上线（试运行腿，红不拖垮夜间绿）。
+          "
+          fi
+          cat > release-notes.md <<NOTES
+          # Luna Nightly Build
+
+          \`nightly-${BUILD_DATE}-${GITHUB_SHA::8}\` · 更新时间 ${UTC_TIME} / ${BJ_TIME}
+
+          这是每日构建（自动构建、未签名），稳定性不作保证；追求稳定请等正式版本。
+
+          ## 下载
+
+          | 资产 | 大小 | 说明 |
+          |---|---|---|
+          ${TABLE}
+          ${WINNOTE}
+          一键安装（Windows PowerShell）: \`irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex\`
+          一键安装（Linux/macOS）: \`curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh\`
+
+          ## 验证
+
+          先 \`sha256sum -c SHA256SUMS.txt\`（随 Release 发布；Windows 逐资产
+          \`Get-FileHash\` 比对 \`.zip.sha256\`）。解压后 \`./luna -e '6*7'\`
+          应答 \`Out[1]: 42\`；详细步骤见包内 VERIFY.md 与 PLATFORM-NOTES.txt。
+
+          Commit: ${GITHUB_SHA}
+          NOTES
+          gh release edit nightly --notes-file release-notes.md
+          gh release upload nightly pkgs/luna-nightly-*.zip \
+            pkgs/luna-nightly-*.zip.sha256 pkgs/SHA256SUMS.txt \
+            pkgs/BUILD_INFO.txt pkgs/VERIFY.md --clobber
+          echo "nightly release updated: $(cd pkgs && ls luna-nightly-*.zip | tr '\n' ' ')"
 
       - name: Run summary
         run: |
@@ -237,9 +403,10 @@ jobs:
             echo "|---|---|"
             echo "| 更新时间 | ${utc_time} / ${bj_time} |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
-            echo "| 产物 | artifact **daily-build**（唯一最新版，历史已清理） |"
-            echo "| 平台 | linux-x64 / linux-arm64 / macos-arm64（单二进制） |"
+            echo "| 交付 | Release **Luna Nightly Build (nightly)**（固定 tag，清旧传新，匿名可下） |"
+            echo "| 留档 | artifact **daily-build**（run 页副本，历史已清理） |"
+            echo "| 平台 | linux-x86_64 / linux-aarch64 / macos-aarch64（单二进制+侧车）；windows-x86_64 试运行 |"
             echo ""
-            echo "下载: 本 run 页面底部 Artifacts 区 \`daily-build\`。"
-            echo "验证方式见包内 VERIFY.md。这是 CI 构建产物分发，无 tag、无 Release。"
+            echo "下载: <https://github.com/${GITHUB_REPOSITORY}/releases/tag/nightly>（匿名）。"
+            echo "验证方式见包内 VERIFY.md。固定 tag nightly 是分发通道，非版本发布。"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1747,6 +1747,48 @@
   14 天保留,跑全量测试)每天各跑一次,产物两套并存。一键安装三件套
   只认新名。旧管线是否退役(删文件或去 schedule)属设计裁定点,未动;
   文档已统一指向新管线(getting-started/FAQ/README,2026-10-03)。
+- **滚动 nightly Release 交付面接通(2026-10-04,巡检派发)**:用户报
+  install.ps1 装不上(`no nightly artifact for
+  luna-nightly-windows-x86_64`)——根因:安装器查 Actions artifacts
+  API,需 token 且该名 artifact 从未存在(真实产物只有 daily.yml 的
+  luna-nightly-* 矩阵件),而舰队规范=滚动 nightly Release(固定 tag
+  `nightly`,清旧传新,artifacts 不算交付),仓库此前没有任何
+  Release 步骤。两修(8377aed + ce18fbf):
+  1. daily-build.yml 补发布:平台打包改资产坐标 `luna-nightly-<os>-
+     <arch>.zip` + `.zip.sha256` 侧车,根平铺二进制 + luna_modules/
+     侧车(旧打包缺侧车,装到任何机器必死 module 'argparse' not
+     found,一并修掉);collect 尾接 Publish nightly Release(soar
+     同款 edit-or-create → PATCH refs/tags/nightly → 清全部旧资产 →
+     notes 重写 → --clobber;加 chirp 的 --prerelease --latest=false
+     ——仓库已有正式 v0.1.0,nightly 不抢 latest 位);Windows 试运行
+     腿进矩阵(continue-on-error,daily.yml 探针口径,item 4 冻结中
+     编译不过,移植落定当天资产自动进 Release);文件头部旧铁律段
+     (产物只进 artifact、不得引入 Release)按舰队规范改写。
+  2. install.ps1 改匿名直拉 `releases/download/nightly/<资产名>.zip`
+     (公开仓库免凭据),附 .sha256 校验(mismatch 只告警不拦——夜间
+     滚动换资产的竞态,装后 --version 冒烟才是真门);token/Mirror
+     保留作兜底,非 404 失败且手持凭据时回落旧 artifacts API;404
+     报错文案指向 Release 页。
+  实录:首发 run 37169394386 的 Publish 步栽在 gh 无 git 上下文
+  (collect job 不 checkout,`gh release view` 靠 git remote 发现仓
+  库直接扑空)——env 加 `GH_REPO=github.repository` 解(ce18fbf);
+  复跑 run **37169762132 全绿**(posix×2+macos 绿,windows 试运行腿
+  红=已知的 item 4,continue-on-error 不拖垮,Configure 过、
+  Build 止步同前)。链路实测(无凭据 curl):直下 linux-x86_64 zip
+  912K + `.sha256`,`sha256sum -c` OK;zip 根平铺 luna +
+  luna_modules/(argparse/init.lua 实存)+ PLATFORM-NOTES.txt,与
+  两安装器的解包断言逐一对上;**解包二进制实跑 `luna 0.1.0` /
+  `-e '6*7'` → `Out[1]: 42`**;windows 资产 URL 现为 404(脚本 404
+  臂指向 Release 页,资产随 item 4 解冻自动上线);notes 表格渲染
+  实查无串行。nightly tag 指向 ce18fbf=main HEAD,下轮 schedule
+  自愈重指。
+- **待办登记(2026-10-04,本轮不动)**:install.sh 同款匿名化改造
+  (派发只圈了 ps1;其 token 提示文案现同旧口径);docs/README 安装
+  面文案仍写"无 tag 无 Release、artifact 下载需凭据"(README.md:68
+  / faq.md:39 / getting-started.md:21),与 Release 交付面相悖——
+  挂文档站重设计会话口径一并翻新;daily.yml 头注"不打 tag、不发
+  release"亦分叉,随双每日管线退役裁定处理;Windows 资产上线条件
+  = item 4(luna_loop.c arpa/inet.h)解冻,发布机制已就绪。
 
 ## 明确不做(上一轮)
 

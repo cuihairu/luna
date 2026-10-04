@@ -27,6 +27,7 @@ export default defineConfig({
           { text: '插件开发', link: '/guide/plugins' },
           { text: '包管理', link: '/guide/rocks' },
           { text: '事件循环', link: '/guide/loop' },
+          { text: '异步任务', link: '/guide/tasks' },
           { text: '全局对象 kernel', link: '/guide/kernel' }
         ]
       },

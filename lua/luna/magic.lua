@@ -372,6 +372,27 @@ magic.register("load", function(session, arg)
     end
 end, "%load <file> — load a file (REPL: into the input buffer; attach: runs in the target)")
 
+-- %tasks reads package.loaded.task passively — no auto-require, so the
+-- loop stays opt-in until user code asks for it. The task module (P2)
+-- keeps the live registry and cumulative counters; a live task's
+-- status is always "running", the useful fact is what it awaits.
+magic.register("tasks", function()
+    local task = package.loaded.task
+    if type(task) ~= "table" then
+        kernel.write('task: not loaded — require "task" first\n')
+        return
+    end
+    local list = task.list()
+    local s = task.stats()
+    for _, h in ipairs(list) do
+        local what = h.awaiting and ("awaiting " .. h.awaiting) or "running"
+        kernel.write(string.format("  #%-4d %-16s %s\n", h.id, what, h.src))
+    end
+    kernel.write(string.format(
+        "%d live (%d awaiting), %d done, %d failed, %d cancelled of %d started\n",
+        s.live, s.awaiting, s.done, s.error, s.cancelled, s.started))
+end, '%tasks — live tasks and cumulative counts (needs require "task")')
+
 magic.register("help", function()
     local names = {}
     for name in pairs(magic.commands) do

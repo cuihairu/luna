@@ -50,9 +50,10 @@ REPL 是 luna 的入口形态,CLI 的三种模式都是它的变体。本页按"
 | `%reset` | 清空用户全局与 `Out`/`_`/`__`(保留 stdlib/kernel 等运行时环境;`In[n]` 按会话输入保留) |
 | `%clear` | 清屏(仅 TTY) |
 | `%plugins` | 已加载插件清单;失败单独报,被同名先到插件遮蔽的记入 overridden 段 |
+| `%tasks` | 活任务清单(id/在等什么/来源)+ 累计计数;需先 `require "task"`,被动读 `package.loaded`,不自动加载 |
 | `%exit` | 退出(同 `^D`) |
 
-内省族(`%info`/`%modules`/`%globals`/`%stats`/`%gc`)全部走目标内核对输出,REPL 与 attach 行为一致——P1 runtime introspection 交付面即此表的后半段;`%tasks` 待 P2 异步任务模型落定后回补(loop 句柄族暂无可观测的注册表,红线也不许新增 loop.xxx API)。
+内省族(`%info`/`%modules`/`%globals`/`%stats`/`%gc`)全部走目标内核对输出,REPL 与 attach 行为一致——P1 runtime introspection 交付面即此表的后半段;`%tasks` 是 P2 任务模型([异步任务](/guide/tasks))的观测面,数据源是 `require "task"` 的注册表,同样只读已加载的模块。
 
 ## 会话状态
 

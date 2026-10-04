@@ -28,6 +28,8 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 | `loop.now()` | 循环毫秒时钟(`uv_now`) |
 | `handle:unref()` / `handle:ref()` | 摘掉/恢复句柄的 keep-alive(见下节) |
 
+要 coroutine 式的 await/取消,promise 一次结算,这层糖在 [异步任务](/guide/tasks)(`require "task"`)——架在本表的 setTimeout/clearTimeout 上,不新增 loop API。
+
 行为约定:
 
 - **回调隔离**:回调抛错只打到 stderr,循环继续——和 REPL 隔离一次求值错误的方式一致;

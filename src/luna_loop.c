@@ -65,7 +65,7 @@ struct loopbox {
     int kind;
     int repeating;          /* timers only */
     int closed;             /* cleared handles reject a second close */
-    lua_State *L;           /* single-threaded loop: state is fixed */
+    lua_State *L;           /* creating thread; callbacks run on g_L, this is only a fallback */
     int selfref;            /* registry -> userdata, dropped on close */
     int fref;               /* registry -> {fn, ...args} */
 };
@@ -137,7 +137,14 @@ static struct loopbox *box_of(void *handle)
  * and keep going, the way the REPL isolates a chunk error. */
 static void box_call(struct loopbox *box)
 {
-    lua_State *L = box->L;
+    /* Callbacks land on the loop-driving state (same one the attach
+     * poll uses), never on box->L: that is whatever thread created the
+     * handle, which may be a coroutine suspended mid-await, dead, or
+     * unreferenced by the time the callback fires — pcalls onto such a
+     * thread corrupt it, and code inside the callback resuming it
+     * cannot work (it would resume the running thread). Every uv_run
+     * site sets g_L before timers and close callbacks can fire. */
+    lua_State *L = g_L ? g_L : box->L;
     lua_rawgeti(L, LUA_REGISTRYINDEX, box->fref); /* {fn, ...args} */
     int tbl = lua_gettop(L); /* fixed index: -1 moves as values land */
     int nargs = (int)lua_rawlen(L, tbl) - 1; /* table minus the function */
@@ -164,7 +171,9 @@ static void on_closed(uv_handle_t *handle)
 {
     struct loopbox *box = box_of(handle);
     keepalive_close();
-    luaL_unref(box->L, LUA_REGISTRYINDEX, box->selfref);
+    /* the registry is shared by every thread of the state; drop the
+     * ref on the driving thread, not the (possibly dead) creator */
+    luaL_unref(g_L ? g_L : box->L, LUA_REGISTRYINDEX, box->selfref);
 }
 
 static void box_close(struct loopbox *box)

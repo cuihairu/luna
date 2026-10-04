@@ -1877,13 +1877,15 @@
   Release 已通,原文反向);
 - ☑ **②P0 稳定 Runtime 核心**——不新增功能,守现状 + 巡检:门禁
   全绿即 P0 达标,巡检记录随增量落本节;
-- ▶ **③P1 runtime introspection**——attach 线升级:`luna ps` +
+- ☑ **③P1 runtime introspection**——attach 线升级:`luna ps` +
   %info / %modules / %plugins(已有) / %tasks / %gc / %globals /
-  %stats / %eval / %load;**%tasks 缓议**:其数据源是 P2 任务模型
-  (loop 句柄族无 Lua 可见注册表,红线又禁加 loop.xxx),待 P2 落
-  任务模型后回补,本轮以其余命令交付;
-- ☐ **P2 异步模型**——coroutine/future/await/cancellation/handle
-  lifetime;红线:**不许继续加 loop.xxx**;
+  %stats / %eval / %load;%tasks 的数据源是 P2 任务模型,随 P2 落地
+  回补(2026-10-05,见增量账 P2 条);
+- ☑ **P2 异步模型**——require "task":task.run/await/sleep/
+  promise/promisify + 句柄 :cancel(协作式)+ %tasks;红线守住:
+  零新 loop.xxx;唯一 C 改动是修 luna_loop.c 既有崩溃(回调落
+  创建线程→挂起协程上 pcall 即坏,现落驱动态 g_L,与 attach 轮询
+  同款),本地 15/15 组全绿含 loop;
 - ☐ **P3 生态**——plugin/package/template + 官方示例 hello-cli/
   http-server/tcp-server/file-tool/web-scraper/build-tool/
   game-script/automation;
@@ -1917,6 +1919,20 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   success,含 loop/rocks 全量组——P0 巡检全绿;docs 部署
   (37181976485/37182548831)为 Pages 发布,不计门禁,与每日
   schedule 的 Daily Build(37184473423)同受 pool 拥堵,不阻塞;
+- 2026-10-05 P2 异步模型:lua/modules/task/init.lua(AWAIT 哨兵
+  yield 协议,裸 coroutine.yield 记任务错误;promise 一次性结算,
+  双 settle 抛错;cancel 协作式,CANCELLED 落 await 点可被捕获,
+  取消先 clearTimeout;rec_of 弱键侧表,句柄外表不漏内部)+
+  %tasks(被动读 package.loaded.task,不自动加载)+ loop 回调
+  落点修复(box_call/on_closed 从创建线程改驱动态 g_L;协程里
+  setTimeout 的 pcall 打到挂起线程会 SEGV,实测 T6/T8 复现、
+  修复后六腿走查全绿:sleep/results/取消/promisify/裸 yield/
+  双 settle/拒绝/%tasks 双态/排水序);docs:guide/tasks.md 新页
+  + 侧栏 + cli-repl %tasks 行(缓议句清除)+ stdlib 总览异步面
+  句 + README 工具集行 + loop.md 交叉引用;门禁:本地 15/15 组
+  224.9s 全绿(含 loop 组,C 改动故本地必跑;rocks 网络腿留 CI);
+  实测脚本尾部排水与 deadline 唤醒序(a=20ms 先于 b=60ms);
+  Feature-first 零新测试;
   期间取消两个被最终树覆盖的冗余 run(37181976479/37182548801)
   让出队列。
 - 2026-10-04 ④全局对账批(文档 vs 实现,全量扫):偏差清单逐条修——

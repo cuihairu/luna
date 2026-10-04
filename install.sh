@@ -6,17 +6,27 @@
 # Installs the latest nightly build for this OS+arch into ~/.local/bin
 # (override with --dir). Re-running is safe: it upgrades in place.
 #
+# The zip comes from the rolling nightly Release (fixed tag `nightly`,
+# republished - assets cleared and re-uploaded - after every green daily
+# build): https://github.com/cuihairu/luna/releases/tag/nightly
+# Release assets on a public repo download anonymously, so no token is
+# needed. Each asset ships a .sha256 sidecar that is verified when
+# sha256sum is available.
+#
 # Options (with `| sh -s --` when piped):
-#   --token TOKEN   GitHub token for the Actions artifact API. Also read
-#                   from $GITHUB_TOKEN / $GH_TOKEN, or auto-detected from
-#                   a logged-in `gh` CLI.
-#   --mirror URL    direct download URL of the artifact zip (bypasses the
-#                   API entirely; the URL must be anonymously reachable).
+#   --token TOKEN   GitHub token. Optional: only needed for private
+#                   forks, or as a fallback to the Release download.
+#                   Also read from $GITHUB_TOKEN / $GH_TOKEN, or
+#                   auto-detected from a logged-in `gh` CLI.
+#   --mirror URL    direct download URL of the artifact zip (bypasses
+#                   the Release entirely; see also $LUNA_INSTALL_MIRROR)
 #   --dir DIR       install directory (default: $HOME/.local/bin)
 #   --repo O/N      source repository (default: cuihairu/luna)
 #
-# Artifacts need auth to download from GitHub Actions (anonymous API
-# calls get 403), hence the token/mirror escapes above.
+# A token is only attached when present. If the Release download fails
+# with credentials in hand (non-404), the legacy Actions-artifact API is
+# tried as a fallback - that API always needs a token. A missing nightly
+# asset is reported with a pointer at the Release page above.
 
 set -eu
 
@@ -31,7 +41,7 @@ die() {
 }
 
 usage() {
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -78,10 +88,17 @@ api_get() { # path -> body on stdout
               "https://api.github.com$2"
 }
 
+if [ -z "$MIRROR" ] && [ -n "${LUNA_INSTALL_MIRROR:-}" ]; then
+    MIRROR=$LUNA_INSTALL_MIRROR
+fi
+
 if [ -n "$MIRROR" ]; then
     echo "install.sh: downloading $PLATFORM from mirror"
     curl -fsSL "$MIRROR" -o "$ZIP" || die "mirror download failed: $MIRROR"
 else
+    # credentials are optional: the nightly Release on a public repo
+    # downloads anonymously. Attach a token when one is around so
+    # private forks keep working.
     if [ -z "$TOKEN" ]; then
         if [ -n "${GITHUB_TOKEN:-}" ]; then
             TOKEN=$GITHUB_TOKEN
@@ -89,27 +106,69 @@ else
             TOKEN=$GH_TOKEN
         elif command -v gh >/dev/null 2>&1 && gh auth token >/dev/null 2>&1; then
             TOKEN=$(gh auth token)
-            echo "install.sh: using token from gh CLI"
+            echo "install.sh: attaching gh CLI credentials"
         fi
     fi
-    [ -n "$TOKEN" ] || die "nightly artifacts need a GitHub token to download.
-  pass --token TOKEN, or set GITHUB_TOKEN / GH_TOKEN, or log in once with 'gh auth login' (auto-detected),
-  or point LUNA_INSTALL_MIRROR / --mirror at an anonymously reachable zip URL"
 
-    echo "install.sh: looking up latest $PLATFORM"
-    JSON=$(api_get "$TOKEN" "/repos/$REPO/actions/artifacts?name=$PLATFORM&per_page=1") \
-        || die "artifact lookup failed (network, or token lacks repo read)"
-    TOTAL=$(printf '%s' "$JSON" | sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
-    [ "${TOTAL:-0}" -ge 1 ] || die "no nightly artifact for $PLATFORM yet
-  check https://github.com/$REPO/actions/workflows/daily-build.yml for the latest run"
-    ZIPURL=$(printf '%s' "$JSON" | sed -n 's/.*"archive_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    [ -n "$ZIPURL" ] || die "could not read archive_download_url from the API reply"
+    RELEASE_URL="https://github.com/$REPO/releases/download/nightly/$PLATFORM.zip"
+    echo "install.sh: downloading $PLATFORM from the nightly Release"
+    CURL_ERR="$WORK/curl.err"
+    # set -e 会直接杀掉失败 curl:显式承接退出码再分支
+    RC=0
+    if [ -n "$TOKEN" ]; then
+        curl -fsSL -H "Authorization: Bearer $TOKEN" \
+             "$RELEASE_URL" -o "$ZIP" 2>"$CURL_ERR" || RC=$?
+    else
+        curl -fsSL "$RELEASE_URL" -o "$ZIP" 2>"$CURL_ERR" || RC=$?
+    fi
+    if [ "$RC" -ne 0 ]; then
+        if grep -q ' 404' "$CURL_ERR" 2>/dev/null; then
+            die "no $PLATFORM asset on the nightly Release yet
+  check https://github.com/$REPO/releases/tag/nightly - the daily-build
+  workflow republishes the assets there after every green run (the
+  Windows asset flows once the Windows port clears its last frozen item)"
+        fi
+        if [ -n "$TOKEN" ]; then
+            # non-404 with credentials in hand (private repo oddities,
+            # transient API shapes): fall back to the legacy
+            # Actions-artifact API, which always needs a token
+            echo "install.sh: release download failed, falling back to the Actions artifact API"
+            JSON=$(api_get "$TOKEN" "/repos/$REPO/actions/artifacts?name=$PLATFORM&per_page=1") \
+                || die "artifact lookup failed (network, or token lacks repo read)"
+            TOTAL=$(printf '%s' "$JSON" | sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')
+            [ "${TOTAL:-0}" -ge 1 ] || die "no nightly artifact for $PLATFORM yet
+  the delivery channel is the nightly Release -
+  check https://github.com/$REPO/releases/tag/nightly
+  (Actions artifacts are run-local copies, not the delivery)"
+            ZIPURL=$(printf '%s' "$JSON" | sed -n 's/.*"archive_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+            [ -n "$ZIPURL" ] || die "could not read archive_download_url from the API reply"
+            curl -fsSL -H "Authorization: Bearer $TOKEN" \
+                      -H "Accept: application/vnd.github+json" \
+                      "$ZIPURL" -o "$ZIP" \
+                || die "artifact download failed (expired artifact, thin token, or network)"
+        else
+            die "nightly Release download failed: $(cat "$CURL_ERR")
+  check https://github.com/$REPO/releases/tag/nightly, or pass --token /
+  set GITHUB_TOKEN / GH_TOKEN / log in with 'gh auth login' (private
+  forks), or point --mirror / LUNA_INSTALL_MIRROR at an anonymously
+  reachable zip URL"
+        fi
+    fi
 
-    echo "install.sh: downloading"
-    curl -fsSL -H "Authorization: Bearer $TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "$ZIPURL" -o "$ZIP" \
-        || die "artifact download failed (expired artifact, thin token, or network)"
+    # checksum: nightly assets ship a .zip.sha256 sidecar (sha256sum
+    # format). A mismatch is usually the release being republished
+    # mid-download - warn, don't bail; the --version smoke below is the
+    # real gate. Sidecar fetch is anonymous and optional: no sha256sum
+    # command, no checksum, no verdict.
+    if command -v sha256sum >/dev/null 2>&1; then
+        if SHA=$(curl -fsSL "$RELEASE_URL.sha256" 2>/dev/null); then
+            want=$(printf '%s' "$SHA" | awk '{print $1}')
+            have=$(sha256sum "$ZIP" | awk '{print $1}')
+            if [ -n "$want" ] && [ "$have" != "$want" ]; then
+                echo "install.sh: WARNING sha256 mismatch (expected $want, got $have) - the nightly may have been republished mid-download; re-run to retry" >&2
+            fi
+        fi
+    fi
 fi
 
 # ---- unpack + install --------------------------------------------------

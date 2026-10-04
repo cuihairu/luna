@@ -1782,6 +1782,22 @@
   臂指向 Release 页,资产随 item 4 解冻自动上线);notes 表格渲染
   实查无串行。nightly tag 指向 ce18fbf=main HEAD,下轮 schedule
   自愈重指。
+  **核销(2026-10-04,run 37174407997 main 触发)**:自愈重指实证——
+  tag `nightly` ce18fbf→**08d2d07(=main HEAD)**;清旧传新幂等:9 资产
+  删光重传成功、无残留;notes 重写带新 sha(`nightly-20261004-
+  08d2d073`);run 页 artifact **daily-build 出现**(第一次核销发现
+  重写时丢掉了上库步,汇总 zip 只组装没人传、清理步成死码——按
+  soar 先例补回,commit c114f8f);链路三级复验:匿名直下 + 侧车
+  sha256sum -c 过 + 解包 `Out[1]: 42`(与上轮哈希不同属 zip 时间戳,
+  走自身侧车验证即可)。create 时冻结的 targetCommitish=ce18fbf 是
+  GitHub 元数据,下载 URL 跟 tag 走,与 soar/chirp 同形态。
+  **install.sh 同款匿名化(2026-10-04,commit 08d2d07)**:主路径改
+  releases/download/nightly/ 匿名直拉 + .sha256 校验(mismatch 告警
+  不拦),token 保留兜底、非 404 回落旧 artifacts API,404 指路
+  Release 页;LUNA_INSTALL_MIRROR 环境变量落实(此前只在文案里)。
+  实测三类路径:纯匿名(无 token 无 gh)直装本机成功(`Out[1]: 42`)、
+  --token 回归绿、404 臂 exit 1 指路;修一处 set -e 吞失败态隐患
+  (curl 失败时 -e 直接杀脚本,die 文案永远不出现——RC 显式承接)。
 - **待办登记(2026-10-04,本轮不动)**:install.sh 同款匿名化改造
   (派发只圈了 ps1;其 token 提示文案现同旧口径);docs/README 安装
   面文案仍写"无 tag 无 Release、artifact 下载需凭据"(README.md:68
@@ -1802,4 +1818,43 @@
 - luna_loop.c 剩余 193 行(第八轮逐函数表征)——维持;
 - 未闭合引号跨行续行的语义修补(维持前轮判定);
 - 打 tag / 发版(硬约束禁止)。
+
+## 架构评审方向登记(2026-10-04,只登记不动,无实现授权)
+
+用户对 luna 的完整架构评审(方向性输入,非派发;文档/README/定位
+属文档站重设计会话口径,代码层不派生任何实现)。要点:
+
+- **产品定位调整建议**:核心不再讲"通用 Lua 集成环境"或"Lua 版
+  Node.js",改定为 **"A batteries-included Lua runtime for scripting,
+  tooling, and lightweight services"**(开箱即用的 Lua 通用运行时,用
+  于脚本、开发工具与轻量服务)。Node.js 降为 architecture reference,
+  不是 product identity。README 第一屏三例:裸 REPL、`luna build.lua`、
+  `luna -e 'require("http").serve(...)'`,加一句
+  "Lua with a REPL, batteries-included standard library, Node-style
+  modules, plugins, package management and opt-in async I/O"。
+- **三层模型作为文档架构主结构**:User Space(script/REPL/CLI/app)/
+  Luna Runtime(modules/stdlib/plugins/loop/package/tooling)/ Native
+  Runtime(Lua 5.5/libuv/OpenSSL/replxx/LPeg)。现有"Node.js 对照"叙述
+  保留作 rationale,不充当身份。
+- **标准库四类分法**(文档分组与命名建议):Core(json/fs/path/net/
+  http/crypto/process/os/loop)、Data-Format(csv/ini/toml/yaml/xml/
+  zlib)、Dev tooling(logging/repl/introspect/magic/complete/highlight)、
+  Ecosystem(LuaRocks/plugins/luna_modules)。防"什么都往里塞"。
+- **P0-P4 roadmap(挂起,待派发才动)**:P0 稳定 Runtime 核心(现状即
+  P0,不新增功能);P1 runtime introspection(attach 升级:luna ps /
+  %info / %modules / %plugins / %tasks / %gc / %globals / %stats /
+  %eval / %load,评审认为 attach 是最被低估的一条线);P2 异步模型
+  (coroutine/future/await/cancellation/handle lifetime,**明确"不要
+  继续加 loop.xxx"**);P3 生态(plugin/package/template + 官方示例
+  hello-cli/http-server/tcp-server/file-tool/web-scraper/build-tool/
+  game-script/automation);P4 安全运行时(sandbox/permissions/module
+  allowlist/resource limits,trusted vs sandbox 双模)。
+- **插件系统升级方向**:REPL 扩展机制 → 生态扩展机制(luna-plugin-* /
+  `luna git status` 形态);manifest/failure isolation/override 现设计
+  保留。
+- **不耦合游戏服务器**:luna 保持通用,游戏场景经 require("game")
+  或 plugin 接入;不因任何业务域引入 ECS/Actor/Zone 概念。
+- 评审认可点(维持不改):不造 Lua、C 层尽量薄、同步标准库不被事件
+  循环污染(require "loop" 才进异步)、LuaRocks 只包装不自建 registry、
+  luna.lock 走复制锁(lock/package/ux 三者职责分离)。
 - 巡检注记(第十四轮,2026-09-28,基线 59b7db4):全量 15 组复跑——build 树 1026.7s(loop 322.9s 过新 600s 门,ASan 树同套 193 用例 578s 零泄漏)、cov 树 589s 15/15 绿;覆盖率门禁 lines 95.2%(2610/2743)、luna_loop 分支 76.19%(739/970)、聚合 76.3%(905/1186);本轮唯一修复:loop 组 TIMEOUT 属性 240→600(显式属性压过 ctest --timeout,59b7db4);rocks 组负载 87-107 三连败(2×Timeout+1×Failed,内层 timeout 420 掐网络重锁腿,负载假挂类),负载 38 复跑绿 253.6s,同轮 cov 树曾绿证非回归;工作树含并行会话 +76 行(test/luna_test_loop.c,6 测试,199 用例态同轮全绿)未纳入提交,gcov 临时产物已清。

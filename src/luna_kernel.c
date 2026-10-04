@@ -77,6 +77,33 @@ static int k_wake(lua_State *L)
 #endif
 }
 
+/* kernel.alive(pid) -> boolean: does the process exist? kill(pid, 0)
+ * delivers no signal — it is the liveness probe behind `luna ps`, so a
+ * socket file outliving its process (SIGKILL, crash) shows up stale
+ * instead of passing for attachable. EPERM means the process exists but
+ * belongs to someone else: alive. */
+static int k_alive(lua_State *L)
+{
+    lua_Integer pid = luaL_checkinteger(L, 1);
+#ifdef _WIN32
+    /* no kill() on Windows: attach itself is a POSIX mechanism, and the
+     * socket scan finds nothing there anyway */
+    (void)pid;
+    lua_pushboolean(L, 0);
+    return 1;
+#else
+    if (pid <= 0)
+        return luaL_error(L, "alive: pid must be a positive integer");
+    if (kill((pid_t)pid, 0) == 0 || errno == EPERM)
+        lua_pushboolean(L, 1);
+    else if (errno == ESRCH)
+        lua_pushboolean(L, 0);
+    else
+        return luaL_error(L, "alive: %s", strerror(errno));
+    return 1;
+#endif
+}
+
 /* kernel.chmod(path, "600"): restrict the attach socket to its owner.
  * luafilesystem 1.9 ships no chmod and spawning a shell from the
  * runtime is not an option. */
@@ -371,8 +398,9 @@ static int k_exec(lua_State *L)
 /* misc probes                                                         */
 /* ------------------------------------------------------------------ */
 
-/* kernel.millis() -> monotonic milliseconds (integer) */
-static int k_millis(lua_State *L)
+/* monotonic milliseconds (integer); CLOCK_MONOTONIC ticks since boot,
+ * so in-process uptime is millis() - kernel.started (anchored below) */
+static lua_Integer luna_now_millis(void)
 {
     struct timespec ts;
 #ifdef CLOCK_MONOTONIC
@@ -380,8 +408,13 @@ static int k_millis(lua_State *L)
 #else
     timespec_get(&ts, TIME_UTC);
 #endif
-    lua_Integer ms = (lua_Integer)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-    lua_pushinteger(L, ms);
+    return (lua_Integer)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* kernel.millis() -> monotonic milliseconds (integer) */
+static int k_millis(lua_State *L)
+{
+    lua_pushinteger(L, luna_now_millis());
     return 1;
 }
 
@@ -458,6 +491,7 @@ static const luaL_Reg kernel_funcs[] = {
     { "clear_interrupt", k_clear_interrupt },
     { "pid", k_pid },
     { "wake", k_wake },
+    { "alive", k_alive },
     { "chmod", k_chmod },
     { "umask", k_umask },
     { "millis", k_millis },
@@ -470,6 +504,11 @@ static const luaL_Reg kernel_funcs[] = {
 int luaopen_luna_kernel(lua_State *L)
 {
     luaL_newlib(L, kernel_funcs);
+
+    /* registration time in monotonic millis: the process-start anchor
+     * uptime reporting subtracts from (%info/%stats) */
+    lua_pushinteger(L, luna_now_millis());
+    lua_setfield(L, -2, "started");
 
 #ifdef LUNA_VENDOR_DIR
     /* where the build tree staged the vendored LuaRocks sources for

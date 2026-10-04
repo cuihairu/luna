@@ -75,8 +75,9 @@ end
 
 -- Thin attach session: just enough of the REPL session shape for the
 -- magics to work remotely (%hist reads inputs, %reset clears the out
--- registers).
-local attach_session = { inputs = {}, out = {}, out_n = 0 }
+-- registers). __attach marks the mode for magics that branch on it
+-- (%load runs the file in the target instead of buffering it).
+local attach_session = { inputs = {}, out = {}, out_n = 0, __attach = true }
 
 -- Cap on captured output per command: a run-away print loop inside
 -- the target must not grow an unbounded frame.
@@ -243,6 +244,71 @@ function serve.stop()
         end
     end
     serve.srv, serve.path, serve.client = nil, nil, nil
+end
+
+-- luna ps: the attach channel's directory view. Scan the sock dir for
+-- luna-<pid>.sock files; a socket file can outlive its process (SIGKILL,
+-- crash), so every candidate pid goes through the kernel's kill(pid, 0)
+-- liveness probe and dead ones are reported stale — visible, not hidden.
+-- Rows: { pid, path, alive, cmdline? }; cmdline comes from /proc
+-- (Linux only — elsewhere nil, and the socket path is shown instead).
+-- Returns rows sorted by pid; the printing lives in psCli.
+function serve.ps()
+    local dir = os.getenv("LUNA_SOCK_DIR") or "/tmp"
+    local rows = {}
+    local okl, lfs = pcall(require, "lfs")
+    if not okl or type(lfs) ~= "table" or type(lfs.dir) ~= "function" then
+        return rows
+    end
+    local okd, iter, dirobj = pcall(lfs.dir, dir)
+    if not okd or type(iter) ~= "function" then
+        return rows -- unreadable sock dir: report an empty table
+    end
+    -- lfs' iterator takes the dir handle as the generic-for STATE
+    -- (pcall split the (iter, state) pair, so hand the state back
+    -- explicitly; dropping it reads as "directory metatable expected")
+    for entry in iter, dirobj do
+        local pid = entry:match("^luna%-(%d+)%.sock$")
+        if pid then
+            pid = tonumber(pid)
+            local path = dir .. "/" .. entry
+            local cmdline
+            local fh = io.open("/proc/" .. pid .. "/cmdline", "r")
+            if fh then
+                cmdline = fh:read("a"):gsub("%z", " "):gsub("%s+$", "")
+                fh:close()
+            end
+            rows[#rows + 1] = {
+                pid = pid,
+                path = path,
+                alive = kernel.alive(pid) == true,
+                cmdline = (cmdline ~= "" and cmdline) or nil,
+            }
+        end
+    end
+    table.sort(rows, function(a, b)
+        return a.pid < b.pid
+    end)
+    return rows
+end
+
+-- CLI surface behind `luna ps` (luna.lua intercepts it before argparse,
+-- like the rocks and serve commands). Read-only: no socket opens here,
+-- the run leaves with 0 whether or not anything was found.
+function serve.psCli()
+    local rows = serve.ps()
+    if #rows == 0 then
+        io.write(string.format("no luna processes with an attach socket under %s\n",
+            os.getenv("LUNA_SOCK_DIR") or "/tmp"))
+        return 0
+    end
+    io.write(string.format("%-8s %-6s %s\n", "PID", "STATE", "COMMAND"))
+    for _, r in ipairs(rows) do
+        local what = r.cmdline or ("(socket " .. r.path .. ")")
+        io.write(string.format("%-8d %-6s %s\n", r.pid,
+            r.alive and "live" or "stale", what))
+    end
+    return 0
 end
 
 return serve

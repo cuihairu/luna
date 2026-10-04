@@ -12,8 +12,9 @@ REPL 是 luna 的入口形态,CLI 的三种模式都是它的变体。本页按"
 | `luna -e 'code'` | 求值后退出;表达式按 `Out[n]` 回显,未完整代码报错 | `node -e` |
 | `luna serve [dir] [port]` | 静态文件服务到 `^C`(默认当前目录、8000 端口);退出码 130 同 `^C` 契约 | `python -m http.server` |
 | `luna --attach <pid>` | 交互式连到另一个运行中的 luna 进程 | gdb attach / ipython `%connect_info` |
+| `luna ps` | 列出当前可 attach 的 luna 进程(pid / live/stale / 命令行) | `ps` / `pgrep` |
 
-模式可组合通用开关 `--no-color` 与 `--no-plugins`;插件对**每种**启动模式都生效——脚本可能 `require` 插件注入的模块。
+模式可组合通用开关 `--no-color` 与 `--no-plugins`;插件对**每种**启动模式都生效——脚本可能 `require` 插件注入的模块。`luna ps` 是只读目录视图:扫 `$LUNA_SOCK_DIR`(默认 `/tmp`)里的 `luna-<pid>.sock`,逐个 pid 做存活探针(`kill(pid, 0)`),进程已死只剩 socket 的标记为 `stale`;空结果退出码 0,不作错误。
 
 ## 输入模型
 
@@ -38,11 +39,20 @@ REPL 是 luna 的入口形态,CLI 的三种模式都是它的变体。本页按"
 | `%time expr` | 执行一次并报 wall time;表达式回显为 `Out[n]`,语句形式只报时间 |
 | `%timeit expr` | 反复执行至 100ms/1000 次,报单次最优;同样接受语句 |
 | `%hist` | 本会话全部输入;`%hist 2` 看单条,`%hist 2-5` 看范围 |
-| `%whos` | 当前全局变量一览 |
+| `%whos` | 当前全局变量一览(名字 + 类型 + 值预览) |
+| `%globals [filter]` | 全局名字与类型;`filter` 为纯子串过滤(如 `%globals req`);`%whos` 的轻量版 |
+| `%info` | 运行时身份:版本、pid、uptime、attach socket、内存与模块计数 |
+| `%modules [name]` | 已加载模块清单(名字 + 形状);带名字时用 `?expr` 同款帮助描述该模块 |
+| `%stats` | 会话计数(输入/结果数)+ 运行时足迹(全局/模块/gc/uptime) |
+| `%gc` | 跑一次完整回收,报回收前后内存 |
+| `%eval <expr>` | 求值并记入 `Out[n]`(`%time` 的静默版) |
+| `%load <file>` | 把文件载进输入缓冲(REPL:续 Enter 执行、^C 丢弃;attach:直接跑在目标状态里) |
 | `%reset` | 清空用户全局与 `Out`/`_`/`__`(保留 stdlib/kernel 等运行时环境;`In[n]` 按会话输入保留) |
 | `%clear` | 清屏(仅 TTY) |
 | `%plugins` | 已加载插件清单;失败单独报,被同名先到插件遮蔽的记入 overridden 段 |
 | `%exit` | 退出(同 `^D`) |
+
+内省族(`%info`/`%modules`/`%globals`/`%stats`/`%gc`)全部走目标内核对输出,REPL 与 attach 行为一致——P1 runtime introspection 交付面即此表的后半段;`%tasks` 待 P2 异步任务模型落定后回补(loop 句柄族暂无可观测的注册表,红线也不许新增 loop.xxx API)。
 
 ## 会话状态
 
@@ -70,7 +80,7 @@ number
 attach> %detach
 ```
 
-- **魔法命令与帮助糖**:`%whos`、`%hist`、`%reset` 等通过目标自己的 `luna.magic` 表远程执行(`%hist`/`%reset` 作用于 attach 会话自己的历史与寄存器);`?expr` / `expr?` 描述目标状态里的值。
+- **魔法命令与帮助糖**:`%whos`、`%hist`、`%reset`、`%info`、`%modules`、`%gc` 等通过目标自己的 `luna.magic` 表远程执行(`%hist`/`%reset` 作用于 attach 会话自己的历史与寄存器);`?expr` / `expr?` 描述目标状态里的值。`%load` 在 attach 里语义换挡:文件直接跑在目标状态里(远程手术是 attach 的本意),不走输入缓冲。
 - **输出捕获**:命令执行期间目标内核的输出被收集进应答帧回显给客户端,同时镜像到目标自己的终端——两边看到同一条流;单帧输出上限 64KB。
 - **Tab 补全跑在远程**:候选来自**目标**的全局与 `package.loaded`(经 `\1complete` 元行协议),所以在 attach 里能补出只存在于目标状态的函数名。
 - **`%exit` 在 attach 里不杀目标**:它只让客户端脱离,目标进程继续运行;真正退出目标请在目标终端或 `os.exit()`。

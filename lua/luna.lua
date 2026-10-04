@@ -50,7 +50,10 @@ examples:
   luna -i script.lua            run script.lua, then drop into the console
   luna -e 'print(("x"):rep(3))' evaluate code and exit (like `node -e`)
   luna serve [dir] [port]       serve a directory over http (like
-                                `python -m http.server`)]])
+                                `python -m http.server`)
+  luna ps                       list attachable luna processes
+  luna --attach <pid>           open a console on a running luna's
+                                live state (see also `luna ps`)]])
 
 parser:flag("-i --interactive",
     "after the script (or instead of it), start the interactive console")
@@ -84,6 +87,14 @@ end
 -- attach to.
 if arg[1] == "serve" then
     os.exit(require("http").serveCli({ table.unpack(arg, 2) }))
+end
+
+-- Process table: `luna ps` lists attachable luna processes (the attach
+-- channel's directory view: pid, live/stale, command). Intercepted
+-- before argparse like the rocks and serve commands; read-only — no
+-- socket opens here.
+if arg[1] == "ps" then
+    os.exit(require("luna.serve").psCli())
 end
 
 local opts = parser:parse(arg)

@@ -9,6 +9,14 @@ local intro = require "luna.introspect"
 
 local magic = {}
 
+local function count_keys(t)
+    local n = 0
+    for _ in pairs(t) do
+        n = n + 1
+    end
+    return n
+end
+
 magic.commands = {}
 
 function magic.register(name, run, help)
@@ -209,6 +217,160 @@ magic.register("plugins", function()
         end
     end
 end, "%plugins — list loaded plugins, failures, and shadowed names")
+
+-- P1 introspection set (2026-10-04). All commands go through
+-- kernel.write, so they run identically in the local REPL and through
+-- luna --attach (where output joins the reply frame).
+local function uptime()
+    return (kernel.millis() - (kernel.started or kernel.millis())) / 1000
+end
+
+magic.register("info", function()
+    local lines = {
+        kernel.version() .. " — " .. _VERSION,
+        string.format("pid %d, uptime %.1f s", kernel.pid(), uptime()),
+    }
+    local ok_s, serve = pcall(require, "luna.serve")
+    if ok_s and serve and serve.path then
+        lines[#lines + 1] = "attach socket: " .. serve.path
+    else
+        lines[#lines + 1] = "attach socket: off (--no-serve, or unavailable)"
+    end
+    lines[#lines + 1] = string.format("gc %.1f KiB, %d loaded modules",
+        collectgarbage("count"), count_keys(package.loaded))
+    kernel.write(table.concat(lines, "\n") .. "\n")
+end, "%info — runtime identity: version, pid, uptime, attach socket, footprint")
+
+-- module_desc: what the loaded value looks like — C functions carry
+-- their C-ness in debug info; tables are tables (detail via %modules n).
+local function module_desc(name)
+    local m = package.loaded[name]
+    if type(m) == "function" then
+        local info = debug.getinfo(m, "S")
+        if info and info.what == "C" then
+            return "C func"
+        end
+        return "function"
+    end
+    return type(m)
+end
+
+magic.register("modules", function(session, arg)
+    local name = arg:match("^%s*(.-)%s*$")
+    if name ~= "" then
+        local m = package.loaded[name]
+        if type(m) ~= "table" and type(m) ~= "function" then
+            if type(package.preload[name]) == "function" then
+                error("module '" .. name .. "' is registered but not loaded yet — require it first, then %modules " .. name)
+            end
+            error("module '" .. name .. "' is not loaded (try %modules for the list)")
+        end
+        kernel.write(intro.help(m))
+        return
+    end
+    local rows, registered = {}, 0
+    for mname in pairs(package.loaded) do
+        if type(mname) == "string" then
+            rows[#rows + 1] = { name = mname, kind = module_desc(mname) }
+        end
+    end
+    for mname in pairs(package.preload) do
+        if type(mname) == "string" and package.loaded[mname] == nil then
+            registered = registered + 1
+        end
+    end
+    table.sort(rows, function(a, b)
+        return a.name < b.name
+    end)
+    for _, r in ipairs(rows) do
+        kernel.write(string.format("  %-28s %s\n", r.name, r.kind))
+    end
+    kernel.write(string.format("%d loaded modules (+ %d registered, not yet required)\n",
+        #rows, registered))
+end, "%modules [name] — list loaded modules; with a name, describe it")
+
+magic.register("gc", function()
+    local before = collectgarbage("count")
+    collectgarbage("collect")
+    local after = collectgarbage("count")
+    kernel.write(string.format("gc: %.1f KiB -> %.1f KiB (freed %.1f KiB)\n",
+        before, after, before - after))
+end, "%gc — run a full collection, report memory before/after")
+
+magic.register("stats", function(session)
+    kernel.write(string.format(
+        "inputs %d, results %d, globals %d, modules %d, gc %.1f KiB, uptime %.1f s\n",
+        session.in_n or 0, session.out_n or 0,
+        count_keys(_G), count_keys(package.loaded),
+        collectgarbage("count"), uptime()))
+end, "%stats — session counters (inputs, results) plus runtime footprint")
+
+magic.register("globals", function(session, arg)
+    local pat = arg:match("^%s*(.-)%s*$")
+    local rows = {}
+    for gname, v in pairs(_G) do
+        if type(gname) == "string" and (pat == "" or gname:find(pat, 1, true)) then
+            rows[#rows + 1] = { name = gname, kind = type(v) }
+        end
+    end
+    table.sort(rows, function(a, b)
+        return a.name < b.name
+    end)
+    for _, r in ipairs(rows) do
+        kernel.write(string.format("  %-20s %s\n", r.name, r.kind))
+    end
+    kernel.write(string.format("%d globals%s\n", #rows,
+        pat ~= "" and (" matching '" .. pat .. "'") or ""))
+end, "%globals [filter] — global names with types (plain-substring filter)")
+
+magic.register("eval", function(session, arg)
+    if arg == "" then
+        error("usage: %eval <expression or code>")
+    end
+    local src = runnable(arg)
+    local res = table.pack(kernel.exec(src, "=magic[eval]"))
+    if not res[1] then
+        error(tostring(res[2]))
+    end
+    magic.echo_result(session, res)
+end, "%eval <expr> — evaluate an expression and store the result in Out[n]")
+
+magic.register("load", function(session, arg)
+    local path = arg:match("^%s*(.-)%s*$")
+    if path == "" then
+        error("usage: %load <file>")
+    end
+    local fh, err = io.open(path, "r")
+    if not fh then
+        error("load: cannot open " .. path .. ": " .. tostring(err))
+    end
+    local src = fh:read("a")
+    fh:close()
+    local lines = src == ""
+        and 0
+        or select(2, src:gsub("\n", "\n")) + (src:sub(-1) ~= "\n" and 1 or 0)
+    if src == "" then
+        kernel.write("loaded " .. path .. " — but it is empty, nothing to run\n")
+        return
+    end
+    if session.__attach then
+        -- remote surgery is the point of attaching: run the file in the
+        -- target's live state right away, Out bookkeeping included
+        local res = table.pack(kernel.exec(src, "@" .. path))
+        if not res[1] then
+            error(tostring(res[2]))
+        end
+        magic.echo_result(session, res)
+        kernel.write(string.format("loaded and ran %s (%d lines)\n", path, lines))
+    else
+        -- IPython cell-load: the file becomes the next input — review
+        -- it, then Enter runs, ^C drops it
+        session.pending = src
+        kernel.write(string.format(
+            "loaded %s (%d lines) into the input buffer — Enter runs it, ^C aborts\n",
+            path, lines))
+    end
+end, "%load <file> — load a file (REPL: into the input buffer; attach: runs in the target)")
 
 magic.register("help", function()
     local names = {}

@@ -111,12 +111,12 @@ luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模�
 | lua-openssl(zhaozg,OpenResty 生态常见) | 淘汰:API 偏 OpenSSL 原型直译,**注意归属——它不是 OpenResty 官方出品**,只是 OpenResty 发行版常带;维护节奏依赖单作者 |
 | LuaSec | 淘汰:定位是 socket TLS 封装,不做 x509/pkey 级操作 |
 
-### 包管理 —— LuaRocks(包装,不自研)
+### 包管理 —— LuaRocks(薄包装)
 
 | 候选 | 结论 |
 | --- | --- |
 | **包装 LuaRocks v3.13.0**(源码 vendor 进二进制,进程内调用) | **入选**:lua.org 官方主仓库收录的 Lua 包事实标准,数千 rock 现成;luna 只写四个子命令的薄包装 + `.luna/rocks` 树 + `luna.lock`(rockspec sha 必有、`.src.rock` sha 尽力而为),`--from-lock` 离线优先复现并 sha 校验 |
-| 自研 registry 客户端 | 淘汰:仓库/上传/签名/索引/依赖解析全是长期负担,生态从零开始——违背"找成熟库、不要自己写" |
+| 自己写 registry 客户端 | 淘汰:仓库/上传/签名/索引/依赖解析全是长期负担,现成包一个用不上——违背"找成熟库、不要自己写" |
 | 移植 npm 客户端 | 淘汰:拿到的是 npm 的壳(格式/解析器),货(npm 仓库里的包)不是 Lua 代码;Lua 包仍须经 LuaRocks 发布,两套仓库并存只有成本 |
 
 ### 绑定层 —— 手写 C luaopen 直绑(不引入 sol2)
@@ -134,7 +134,7 @@ C 库怎么接进 Lua?luna 的答案一直是同一个:手写 `luaopen_*`(官方
 | sol2(`ThePhD/sol2`) | 淘汰(2026-09-30 评估):最新发布 v3.3.0(2025-06)**不支持 Lua 5.5**——5.5 支持停在未合并的 PR #1723(2025-07 起),维护者在帖内零回应,下游评注 "increasingly unmaintained",osrm-backend 等项目各自手动携带补丁;接入等于 vendor 一个未合并补丁集,把上游停维风险内化进单二进制;header-only C++17 模板库也与「C 内核尽量薄」的分层相逆 |
 | LuaBridge / lua-wrapper 等模板绑定 | 淘汰:与 sol2 同类赌注(C++ 模板追官方 VM 演进),生态与踩坑资料面更小;手写绑定的"薄"正是既有五族绑定零事故的原因 |
 
-一并记录 Lua 版本账:deps/lua 钉 **v5.5.1**——上游最新的 5.5 发布 tag(master 领先
+一并记录 Lua 版本账:deps/lua 钉 **v5.5.1**——上游最新的 5.5 发布 tag(master 比发布 tag 多
 6 个小修,GC 参数 UB 等,均未进发布;锁版本纪律等 5.5.2,不追 master)。「直接集成
 官方 Lua、不经绑定框架」因此不是新决定,是被再次确认的现状。
 
@@ -165,7 +165,7 @@ Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "lo
 2. **REPL 不需要**:交互主循环天然同步;循环是脚本模式的显式选择,没有全局 setTimeout 去污染同步代码;
 3. **两份契约搭一趟车**:循环唯一的自有句柄是一个 prepare 钩子(有活句柄时启动,最后一个关闭时停,自身 unref——不撑循环,keep-alive 的账本只记用户句柄),它每轮做两件事——把 uv_run 阻塞期间落下的 `^C` 转成 `interrupted` 错误(退出码 130 约定不变),和轮询 attach 套接字。事件循环里的进程因此照常可被 `--attach` 观测:轮询点模型原样成立,不因 libuv 的存在而多出第二个并发来源。
 
-keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node,后来又补齐目录面(appendFile/readdir/mkdir/rmdir/unlink/rename,读法仍是同一张契约);再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约,`sock:peer/sockname` 与 `server:address` 给出地址面(inet/inet6/unix 三族,TLS 与 UDP 两面同款,TLS 端从手搓 fd 直读内核);`loop.udp` 再补上数据报一面(bind 常驻收包、send 按包一次性回调,bind 冲突同步抛错);`fs.watch` 又补上观察的一面——目录变化的常驻事件回调(inotify 接线);`loop.signal` 再把 Unix 信号接进同一张契约(SIGTERM 优雅退出是主场;SIGINT/SIGUSR1 各有主人,拒绝注册);`loop.dns` 把 net.connect 内部用的线程池解析器独立成面(lookup/reverse,getaddrinfo 直通车);`net.connectTls` 与 `net.listenTls` 在 net 面上叠出 TLS 两端——uv_poll 驱动手搓 fd 上的 OpenSSL 状态机(握手、WANT_READ/WRITE 让路、pending 写缓冲、close_notify 即 EOF),证书校验默认开启、opts 可换 CA 或跳过,服务端只把完成握手的连接交给 onConn;`loop.http` 则是第一个纯 Lua 面——HTTP/1.1 客户端跑在 net.connect/connectTls 之上,一个请求一次聚合回调,body 按 content-length、chunked 或 EOF 三路分帧,重定向链与整请求超时也都在 Lua 里闭包成状态机,不动 C 内核一行;服务端一面同在 Lua 里——`http.listen` 把 net 的 server 接过来,整个请求落地才调 handler,res.send 三种重载写完整响应即关,handler 抛错补 500;大响应不必整块进内存——onHead/onData 把 body 转成流式观察,content-length 与无帧两路真增量,分帧判定照旧;`loop.os` 则是唯一的同步一面——主机名、网卡、CPU、内存这些系统信息直读直返,不进循环,归在 loop 名下只因它同出自 libuv(后来按 Node os 的键名补齐 arch/release/EOL/userInfo/availableParallelism 五件,arch 把 uname 的 `x86_64`/`aarch64` 换成 Node 的 `x64`/`arm64`);最新一批又补上 `loop.process`:子进程的聚合执行(无 shell spawn、stdout/stderr 捕获、`proc:kill`),交付条件是"退出 + 双管道 EOF",spawn 失败像 listen 一样同步抛错,后来又叠了两个糖——`exec` 是 `run("sh", {"-c", cmd})` 的逐字直通(shell 语义),`execSync` 是 popen 同步面(读尽 stdout,非零退出码 raise);`process.spawn` 再给出流式反面——三路 stdio 直接交成普通的 `loop.net` sock,退出回调对齐 Node 的 `'exit'`(不等流排空),半关闭用 `sock:shutdown`;全句柄族的 `unref`/`ref` 则把 keep-alive 的账本交到用户手里——句柄照常运行,只是可以"在,但不留人",后台周期任务与旁观者不再绑住脚本的寿命;脚本尾部还有一道自动排水——`luna script.lua`/`luna -e` 的主块正常结束后,loop 里还撑着的句柄被自动跑到空再退出(Node 的"事件循环跑到空"契约),主块出错不排、REPL 不排,`^C` 落在排水段照旧 130。
+keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node,后来又补齐目录面(appendFile/readdir/mkdir/rmdir/unlink/rename,读法仍是同一张契约);再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约,`sock:peer/sockname` 与 `server:address` 给出地址面(inet/inet6/unix 三族,TLS 与 UDP 两面同款,TLS 端从手搓 fd 直读内核);`loop.udp` 再补上数据报一面(bind 常驻收包、send 按包一次性回调,bind 冲突同步抛错);`fs.watch` 又补上观察的一面——目录变化的常驻事件回调(inotify 接线);`loop.signal` 再把 Unix 信号接进同一张契约(SIGTERM 优雅退出是主场;SIGINT/SIGUSR1 各有主人,拒绝注册);`loop.dns` 把 net.connect 内部用的线程池解析器独立成面(lookup/reverse,getaddrinfo 直通车);`net.connectTls` 与 `net.listenTls` 在 net 面上叠出 TLS 两端——uv_poll 驱动手搓 fd 上的 OpenSSL 状态机(握手、WANT_READ/WRITE 让路、pending 写缓冲、close_notify 即 EOF),证书校验默认开启、opts 可换 CA 或跳过,服务端只把完成握手的连接交给 onConn。`loop.http` 则是第一个纯 Lua 面——HTTP/1.1 客户端跑在 net.connect/connectTls 之上,一个请求一次聚合回调,body 按 content-length、chunked 或 EOF 三路分帧,重定向链与整请求超时也都在 Lua 里闭包成状态机,不动 C 内核一行;服务端一面同在 Lua 里——`http.listen` 把 net 的 server 接过来,整个请求落地才调 handler,res.send 三种重载写完整响应即关,handler 抛错补 500;大响应不必整块进内存——onHead/onData 把 body 转成流式观察,content-length 与无帧两路真增量,分帧判定照旧。`loop.os` 是唯一的同步一面——主机名、网卡、CPU、内存这些系统信息直读直返,不进循环,归在 loop 名下只因它同出自 libuv(后来按 Node os 的键名补齐 arch/release/EOL/userInfo/availableParallelism 五件,arch 把 uname 的 `x86_64`/`aarch64` 换成 Node 的 `x64`/`arm64`)。最新一批补上 `loop.process`:子进程的聚合执行(无 shell spawn、stdout/stderr 捕获、`proc:kill`),交付条件是"退出 + 双管道 EOF",spawn 失败像 listen 一样同步抛错,后来又叠了两个糖——`exec` 是 `run("sh", {"-c", cmd})` 的逐字直通(shell 语义),`execSync` 是 popen 同步面(读尽 stdout,非零退出码 raise);`process.spawn` 再给出流式反面——三路 stdio 直接交成普通的 `loop.net` sock,退出回调对齐 Node 的 `'exit'`(不等流排空),半关闭用 `sock:shutdown`。全句柄族的 `unref`/`ref` 把 keep-alive 的账本交到用户手里——句柄照常运行,只是可以"在,但不留人",后台周期任务与旁观者不再绑住脚本的寿命。脚本尾部还有一道自动排水——`luna script.lua`/`luna -e` 的主块正常结束后,loop 里还撑着的句柄被自动跑到空再退出(Node 的"事件循环跑到空"契约),主块出错不排、REPL 不排,`^C` 落在排水段照旧 130。
 
 **底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/loop-backend-design)。
 

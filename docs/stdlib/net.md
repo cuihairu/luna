@@ -9,7 +9,7 @@ TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):*
 | `net.tcp()` | 新 TCP master socket(`:connect(host, port)` 后用) |
 | `net.connect(host, port)` | 直连,返回 client socket;失败 `nil, err`(如 `connection refused`) |
 | `net.bind(address, port)` | 绑 master socket(`:listen()` + `:accept()`) |
-| `net.serve(host, port, handler)` | 一行起阻塞 TCP 服务:bind → accept 循环,`handler(client)` 每连接一调;handler 内部出错打到 stderr、服务不倒,返回 `false` 停服;实际监听地址播报 stderr(`port` 传 0 拿临时端口) |
+| `net.serve(host, port, handler)` | 一行起阻塞 TCP 服务:bind → accept 循环,`handler(client)` 每连接一调;handler 内部出错打到 stderr、服务不倒,返回 `false` 停服;实际监听地址播报 stderr(`port` 传 0 拿临时端口);accept 带 250ms 期限让循环定期转身——挂起的 `^C` 照 130 停服,期限只挂在 master 上,handler 拿到的 client 超时不受影响 |
 | `net.udp()` | 新 UDP socket |
 | `net.select(socksT, socksR[, timeout])` | 就绪集轮询 |
 | `net.dns` | DNS 面(`resolve`/`toip` …) |

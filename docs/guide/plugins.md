@@ -30,6 +30,8 @@ return { modules = { hellox = { greet = "hi" } } }
 
 `return` 的表可带 `modules` 键:每项注入 `package.preload`,之后会话里任何 `require("hellox")` 都能拿到。普通值会被包成 loader;给函数则原样作为 loader 使用。
 
+这副骨架不必手敲:`luna new plugin hello` 一步生成(含 `%hello` 注册与清单,见[示例与脚手架](/guide/examples)),本节从零展开原理。
+
 ## 发现与优先级
 
 就近优先,与 node_modules 同思路:

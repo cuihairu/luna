@@ -49,3 +49,5 @@ GTAGS
 
 # test
 Testing/
+# build-tool example output
+examples/build-tool/dist/

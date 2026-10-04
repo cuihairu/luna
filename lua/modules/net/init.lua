@@ -39,20 +39,33 @@ function M.serve(host, port, handler)
     io.stderr:write(string.format("net.serve: listening on %s:%s\n",
         tostring(ip), tostring(bound)))
     io.stderr:flush()
+    -- Accept against a deadline so the loop turns at a fixed cadence:
+    -- the ^C path (kernel.count_hook — interrupt check plus attach
+    -- poll) only runs on Lua instructions, and a blocked accept never
+    -- reaches one. 250ms keeps the ^C latency well under human
+    -- tolerance; handlers receive clients with their own default
+    -- (blocking) timeouts — the deadline lives on the master only.
+    master:settimeout(0.25)
+    local kernel = require("kernel")
     while true do
         local client, aerr = master:accept()
         if not client then
-            io.stderr:write("net.serve: accept failed ("
-                .. tostring(aerr) .. ")\n")
-            io.stderr:flush()
-            break
-        end
-        local ok, stop = pcall(handler, client)
-        if not ok then
-            io.stderr:write("net.serve: " .. tostring(stop) .. "\n")
-            io.stderr:flush()
-        elseif stop == false then
-            break
+            if aerr == "timeout" then
+                kernel.count_hook() -- raises "interrupted" on pending ^C
+            else
+                io.stderr:write("net.serve: accept failed ("
+                    .. tostring(aerr) .. ")\n")
+                io.stderr:flush()
+                break
+            end
+        else
+            local ok, stop = pcall(handler, client)
+            if not ok then
+                io.stderr:write("net.serve: " .. tostring(stop) .. "\n")
+                io.stderr:flush()
+            elseif stop == false then
+                break
+            end
         end
     end
     master:close()

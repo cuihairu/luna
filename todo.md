@@ -1886,9 +1886,11 @@
   零新 loop.xxx;唯一 C 改动是修 luna_loop.c 既有崩溃(回调落
   创建线程→挂起协程上 pcall 即坏,现落驱动态 g_L,与 attach 轮询
   同款),本地 15/15 组全绿含 loop;
-- ☐ **P3 生态**——plugin/package/template + 官方示例 hello-cli/
-  http-server/tcp-server/file-tool/web-scraper/build-tool/
-  game-script/automation;
+- ☑ **P3 生态**——`luna new plugin/package/script` 内置脚手架(嵌
+  策略层,拒覆盖 + 名字校验 + --list)+ `examples/` 八官方示例
+  全真实走查;顺带修 net.serve 吃 ^C 的真实缺陷(accept 永阻塞,
+  "^C 即停/130" 承诺落空 → 250ms 期限 + count_hook 转身),
+  automation 例补 http.serve 同款心跳,loop.md ^C 条目补齐前提;
 - ☐ **P4 安全运行时**——sandbox/permissions/module allowlist/
   resource limits,trusted vs sandbox 双模。
 
@@ -1919,6 +1921,25 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   success,含 loop/rocks 全量组——P0 巡检全绿;docs 部署
   (37181976485/37182548831)为 Pages 发布,不计门禁,与每日
   schedule 的 Daily Build(37184473423)同受 pool 拥堵,不阻塞;
+- 2026-10-05 P3 生态:①脚手架 `luna new`(lua/luna/new.lua 走
+  __LUNA_*_SRC 嵌入路径;plugin/package/script 三模板,名字校验禁
+  `..`、目标已存在即拒、--list;epilog 补行,luna.lua 与 rocks/
+  serve/ps 同款截获分发);②examples/ 八例(hello-cli 用 `--`
+  分隔脚本旗标——入口 argparse 先吃旗标;http-server;tcp-server;
+  file-tool;web-scraper 仅 http://,离线配 luna serve 走查;
+  build-tool csv→json 流水带计时与单段运行;game-script 表驱动
+  + json 存档,无 ECS/Actor/Zone 红线内;automation fs.watch)
+  全例真实走查(一次性四例 stdout 全对,常驻三例 ^C 全 130);
+  ③顺带修 net.serve 真缺陷:accept 永阻塞使 README/net.md 的
+  "^C 即停/退出码 130" 落空(实测 137 = 靠 -k SIGKILL 才死)——
+  master settimeout(0.25) + kernel.count_hook 定期转身,已存在的
+  "Ctrl-C stops it too" 注释由假转真;handler 拿到的 client 超时
+  不受影响(慢客户端 1s 后照常回话实测);loop.md ^C 条目补
+  "静默循环不转 EINTR" 前提(http.serve 心跳注释的公开化),
+  automation 例补 100ms 心跳同口径;④docs:guide/examples.md 新页
+  (示例与脚手架,八例表格 + 五段真实抓取会话 + luna new 契约)
+  + 侧栏 + cli-repl 启动模式行 + plugins/modules 生成器指路 +
+  README 工具集两行与文档 bullet 补齐;Feature-first 零新测试;
 - 2026-10-05 P2 异步模型:lua/modules/task/init.lua(AWAIT 哨兵
   yield 协议,裸 coroutine.yield 记任务错误;promise 一次性结算,
   双 settle 抛错;cancel 协作式,CANCELLED 落 await 点可被捕获,

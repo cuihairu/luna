@@ -30,6 +30,7 @@ package.preload["luna.modules"] = assert(load(__LUNA_MODULES_SRC, luna_chunkname
 package.preload["luna.plugins"] = assert(load(__LUNA_PLUGINS_SRC, luna_chunkname("plugins")))
 package.preload["luna.rocks"] = assert(load(__LUNA_ROCKS_SRC, luna_chunkname("rocks")))
 package.preload["luna.serve"] = assert(load(__LUNA_SERVE_SRC, luna_chunkname("serve")))
+package.preload["luna.new"] = assert(load(__LUNA_NEW_SRC, luna_chunkname("new")))
 
 -- Node-style resolution for project packages: relative requires and
 -- bare names walking up luna_modules/ directories, manifests honored.
@@ -53,7 +54,9 @@ examples:
                                 `python -m http.server`)
   luna ps                       list attachable luna processes
   luna --attach <pid>           open a console on a running luna's
-                                live state (see also `luna ps`)]])
+                                live state (see also `luna ps`)
+  luna new <template> <name>    scaffold a plugin, package, or script
+                                (luna new --list)]])
 
 parser:flag("-i --interactive",
     "after the script (or instead of it), start the interactive console")
@@ -95,6 +98,14 @@ end
 -- socket opens here.
 if arg[1] == "ps" then
     os.exit(require("luna.serve").psCli())
+end
+
+-- Scaffolding: `luna new <template> <name>` writes a plugin, package,
+-- or script starter from a built-in template. Intercepted before
+-- argparse like the subcommands above; read/write only inside the
+-- target paths (refuses to overwrite), the attach socket never opens.
+if arg[1] == "new" then
+    os.exit(require("luna.new").run({ table.unpack(arg, 2) }))
 end
 
 local opts = parser:parse(arg)

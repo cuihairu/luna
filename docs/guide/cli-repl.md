@@ -13,6 +13,7 @@ REPL 是 luna 的入口形态,CLI 的三种模式都是它的变体。本页按"
 | `luna serve [dir] [port]` | 静态文件服务到 `^C`(默认当前目录、8000 端口);退出码 130 同 `^C` 契约 | `python -m http.server` |
 | `luna --attach <pid>` | 交互式连到另一个运行中的 luna 进程 | gdb attach / ipython `%connect_info` |
 | `luna ps` | 列出当前可 attach 的 luna 进程(pid / live/stale / 命令行) | `ps` / `pgrep` |
+| `luna new <template> <name>` | 从内置模板生成起步代码:`plugin`(目录插件)/ `package`(`luna_modules/` 包)/ `script`(单文件 CLI);`--list` 列模板,目标已存在即拒 | `cargo new` |
 
 模式可组合通用开关 `--no-color` 与 `--no-plugins`;插件对**每种**启动模式都生效——脚本可能 `require` 插件注入的模块。`luna ps` 是只读目录视图:扫 `$LUNA_SOCK_DIR`(默认 `/tmp`)里的 `luna-<pid>.sock`,逐个 pid 做存活探针(`kill(pid, 0)`),进程已死只剩 socket 的标记为 `stale`;空结果退出码 0,不作错误。
 

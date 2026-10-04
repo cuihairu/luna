@@ -236,6 +236,7 @@ file(READ "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua" LUNA_LUA_MODULES)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua" LUNA_LUA_PLUGINS)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/rocks.lua" LUNA_LUA_ROCKS)
 file(READ "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua" LUNA_LUA_SERVE)
+file(READ "${PROJECT_SOURCE_DIR}/lua/luna/new.lua" LUNA_LUA_NEW)
 # Each source becomes ordinary C string literals — one quoted line per
 # source line, concatenated by the compiler. This header used to emit
 # C++ raw string literals (R"…") instead: a C++-only feature that
@@ -263,6 +264,7 @@ luna_c_string_literal(LUNA_LUA_MODULES "${LUNA_LUA_MODULES}")
 luna_c_string_literal(LUNA_LUA_PLUGINS "${LUNA_LUA_PLUGINS}")
 luna_c_string_literal(LUNA_LUA_ROCKS "${LUNA_LUA_ROCKS}")
 luna_c_string_literal(LUNA_LUA_SERVE "${LUNA_LUA_SERVE}")
+luna_c_string_literal(LUNA_LUA_NEW "${LUNA_LUA_NEW}")
 # re-configure when the embedded sources change
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna.lua"
@@ -274,7 +276,8 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/lua/luna/modules.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/plugins.lua"
         "${PROJECT_SOURCE_DIR}/lua/luna/rocks.lua"
-        "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua")
+        "${PROJECT_SOURCE_DIR}/lua/luna/serve.lua"
+        "${PROJECT_SOURCE_DIR}/lua/luna/new.lua")
 configure_file("${PROJECT_SOURCE_DIR}/cmake/luna_lua.h.in"
                "${PROJECT_BINARY_DIR}/generated/luna_lua.h" @ONLY)
 include_directories("${PROJECT_BINARY_DIR}/generated")

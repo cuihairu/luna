@@ -32,4 +32,7 @@ static const char LUNA_LUA_ROCKS[] =
 static const char LUNA_LUA_SERVE[] =
 @LUNA_LUA_SERVE@;
 
+static const char LUNA_LUA_NEW[] =
+@LUNA_LUA_NEW@;
+
 #endif

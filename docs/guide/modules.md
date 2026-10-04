@@ -28,6 +28,8 @@ luna_modules/hello/
 - 没有 `main` 时用 `init.lua` 约定;
 - 清单经 dkjson 解析;结果照常进入 `package.loaded`,二次 `require` 直接命中缓存。
 
+清单骨架同样不必手敲:`luna new package mylib` 直接生成(package.json + init.lua,见[示例与脚手架](/guide/examples)),挪进 `luna_modules/` 即被解析。
+
 ## 内置模块
 
 全部随二进制一体分发,C 后端在内核注册,纯 Lua 薄层在 `luna_modules/`:

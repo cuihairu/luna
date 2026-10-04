@@ -412,6 +412,8 @@ int main(int argc, char *argv[])
     lua_setglobal(L, "__LUNA_ROCKS_SRC");
     lua_pushlstring(L, LUNA_LUA_SERVE, sizeof(LUNA_LUA_SERVE) - 1);
     lua_setglobal(L, "__LUNA_SERVE_SRC");
+    lua_pushlstring(L, LUNA_LUA_NEW, sizeof(LUNA_LUA_NEW) - 1);
+    lua_setglobal(L, "__LUNA_NEW_SRC");
     lua_pushstring(L, LUNA_LEXERS_DIR);
     lua_setglobal(L, "__LUNA_LEXERS_DIR");
 

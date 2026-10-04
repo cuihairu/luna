@@ -1894,4 +1894,21 @@
 经 require("game") 或 plugin 接入);LuaRocks 只包装不自建 registry;
 C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异步)。
 
-**增量账**:(随做随记)
+**增量账**:
+
+- 2026-10-04 ①文档批(e7a65e7e 前身 78add60):README 定位句/三例/
+  Node 降参考 + docs 三层模型主结构 + stdlib 四类分法(总览页分节 +
+  sidebar 分组)+ 安装面文案核销(README:66-68/faq:39/getting-started:
+  21 的"无 tag 无 Release"过时语全部翻新为滚动 nightly Release
+  口径);VitePress 本地 build 12.8s 过;
+- 2026-10-04 ③P1(f2bec84):kernel.alive(kill(pid,0) 探针,Windows
+  下恒 false 有注释)+ kernel.started(启动锚点);`luna ps`(扫
+  $LUNA_SOCK_DIR,lfs.dir 经 pcall 拆分 (iter,state) 对后 state 要
+  显式回传——踩坑实录见 serve.lua 注释,for 协议缺 state 报
+  "directory metatable expected");七个魔法 %info/%modules/%gc/
+  %stats/%globals/%eval/%load,REPL 与 attach 同一执行面,%load 按
+  __attach 换挡(REPL 缓冲、attach 直跑);实测:pty 目标全链 attach
+  绿、luna ps live/stale 正确、12 门禁组本地全绿(loop/rocks 组拖
+  CI 全量门);
+- 2026-10-04 ②P0:本轮无 P0 专属代码——现状即 P0,守门禁:上述
+  12 组 + CI 全量(含 loop/rocks)为 P0 巡检口径,未做新增功能;

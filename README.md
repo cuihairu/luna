@@ -83,7 +83,8 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 | 能力 | 说明 | 文档 |
 | --- | --- | --- |
 | REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回、`In[n]`/`Out[n]` | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
+| 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%eval` `%load` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
+| 运行时内省 | `luna ps` 列出可 attach 进程(live/stale + 命令行);`%info` `%modules` `%stats` `%gc` `%globals` 探活本进程;`luna --attach <pid>` 远程同款 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
 | 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/guide/loop) |
 | 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |

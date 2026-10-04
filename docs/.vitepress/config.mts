@@ -7,7 +7,7 @@ export default defineConfig({
   base: '/luna/',
   title: 'luna',
   description:
-    '通用的 Lua 集成环境:REPL、模块解析、标准库与插件,集成在一个二进制里',
+    'A batteries-included Lua runtime for scripting, tooling, and lightweight services:REPL、标准库、Node 式模块、插件与包管理,集成在一个二进制里',
   themeConfig: {
     logo: '/logo.svg',
     siteTitle: '🌙 luna',
@@ -33,23 +33,34 @@ export default defineConfig({
       {
         text: '标准库',
         items: [
-          { text: '总览', link: '/stdlib/' },
-          { text: 'json', link: '/stdlib/json' },
-          { text: 'fs', link: '/stdlib/fs' },
-          { text: 'path', link: '/stdlib/path' },
-          { text: 'util', link: '/stdlib/util' },
-          { text: 'events', link: '/stdlib/events' },
-          { text: 'stream', link: '/stdlib/stream' },
-          { text: 'net', link: '/stdlib/net' },
-          { text: 'http', link: '/stdlib/http' },
-          { text: 'crypto', link: '/stdlib/crypto' },
-          { text: 'zlib', link: '/stdlib/zlib' },
-          { text: 'csv', link: '/stdlib/csv' },
-          { text: 'ini', link: '/stdlib/ini' },
-          { text: 'toml', link: '/stdlib/toml' },
-          { text: 'yaml', link: '/stdlib/yaml' },
-          { text: 'xml', link: '/stdlib/xml' },
-          { text: 'logging', link: '/stdlib/logging' }
+          { text: '总览(四类分法)', link: '/stdlib/' },
+          { text: 'Core', collapsed: false, items: [
+            { text: 'json', link: '/stdlib/json' },
+            { text: 'fs', link: '/stdlib/fs' },
+            { text: 'path', link: '/stdlib/path' },
+            { text: 'util', link: '/stdlib/util' },
+            { text: 'events', link: '/stdlib/events' },
+            { text: 'stream', link: '/stdlib/stream' },
+            { text: 'net', link: '/stdlib/net' },
+            { text: 'http', link: '/stdlib/http' },
+            { text: 'crypto', link: '/stdlib/crypto' }
+          ] },
+          { text: 'Data-Format', collapsed: false, items: [
+            { text: 'csv', link: '/stdlib/csv' },
+            { text: 'ini', link: '/stdlib/ini' },
+            { text: 'toml', link: '/stdlib/toml' },
+            { text: 'yaml', link: '/stdlib/yaml' },
+            { text: 'xml', link: '/stdlib/xml' },
+            { text: 'zlib', link: '/stdlib/zlib' }
+          ] },
+          { text: 'Dev tooling', collapsed: false, items: [
+            { text: 'logging', link: '/stdlib/logging' }
+          ] },
+          { text: 'Ecosystem', collapsed: false, items: [
+            { text: '包管理(LuaRocks)', link: '/guide/rocks' },
+            { text: '插件', link: '/guide/plugins' },
+            { text: '模块系统', link: '/guide/modules' }
+          ] }
         ]
       },
       {

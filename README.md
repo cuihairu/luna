@@ -4,7 +4,7 @@
 
 <h1 align="center">luna</h1>
 
-<p align="center">通用的 Lua 集成环境</p>
+<p align="center">A batteries-included Lua runtime for scripting, tooling, and lightweight services</p>
 
 <p align="center">
   <a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a>
@@ -19,18 +19,20 @@
 
 ## 定位
 
-luna 把一批通用工具集成进同一个二进制:交互式 REPL、Node 式的模块解析、现代标准库、目录插件、事件循环。每件工具都能单独用,也可以互相咬合;直接用、挑着用,或者把它们当零件拼成自己的工作流,都行。
+luna 是**开箱即用的 Lua 通用运行时**,服务三类场景:脚本(scripting)、开发工具(tooling)与轻量服务(lightweight services)。一个二进制里带齐 REPL、现代标准库、Node 式模块解析、目录插件与可选异步 I/O——*Lua with a REPL, batteries-included standard library, Node-style modules, plugins, package management and opt-in async I/O*。
 
 Lua 生态里趁手的通用工具不多,每开一个新项目,周边设施都要先搭一遍。luna 想把这一层提前备好,把时间还给业务本身。
+
+Node.js 只是**架构参考,不是产品身份**:luna 先是 Lua 运行时,再谈 Node 式体验——模块解析、标准库形状这些工程习惯对齐 Node,解释都在文档站[架构设计](https://cuihairu.github.io/luna/architecture)的对照表里;身份与内核仍是 Lua。
 
 IPython 式的 REPL 是其中一件工具,不是全部。
 
 ## 三十秒
 
 ```bash
-luna                     # 交互控制台(像 node)
-luna hello.lua           # 跑一个脚本(像 lua)
-luna serve ./docs 8000   # 秒起一个静态文件服务(像 python -m http.server)
+luna                     # 裸 REPL:查值、试库、拼代码片段
+luna build.lua           # 跑一个脚本文件(构建/自动化/工具,像 lua)
+luna -e 'require("http").serve(...)'   # 一行起一个轻量服务
 ```
 
 接口服务一行也够,`^C` 即停:
@@ -63,9 +65,9 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-Actions 产物的下载需要 GitHub 凭据:脚本会自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(macOS 与 Windows 项为试运行,见下)。
+产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(Windows 资产待源代码移植收尾后自动上线,见下)。
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily.yml) 每天定时构建+全量测试,artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层,保留 14 天);Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中(见 todo),两者均红不拖垮其余平台;CI 产物分发,无 tag 无 Release。
+- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily.yml) 每天定时构建+全量测试,per-run artifact 按平台命名(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层,保留 14 天)以及挥发行 Release 的同一包;Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中(见 todo),两者均红不拖垮其余平台。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
 - **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash

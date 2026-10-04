@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-Actions 产物的下载需要 GitHub 凭据:脚本自动探测 `gh` CLI 登录态,也可传 `GITHUB_TOKEN` 环境变量(`install.sh` 另收 `--token` 参数);拿到匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 直接指过去,全程不出网关。
+产物来自**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发):公共仓库资产公开可下,**匿名直拉,不需要任何凭据**;每个 zip 带 `.sha256` 侧车,脚本下载后自动校验(不匹配只告警——nightly 可能在下载间隙被重发,重跑一次即可)。`--token`/`GITHUB_TOKEN`/`LUNA_INSTALL_MIRROR`/`LUNA_MIRROR` 保留作私有 fork 与直链兜底。
 
-**每日构建产物**(手动下载):[Daily Build 工作流](https://github.com/cuihairu/luna/actions/workflows/daily.yml)每天定时构建并跑全量测试,artifact 按平台命名——直取 **`luna-nightly-<os>-<arch>`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`),内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用),保留 14 天。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中,两者均红不拖垮其余平台。这是 CI 构建产物分发,不对应任何 tag 或 Release。
+**手动下载**:直接去 [nightly Release 页](https://github.com/cuihairu/luna/releases/tag/nightly)取 **`luna-nightly-<os>-<arch>.zip`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`)+ `.sha256` 侧车,内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用)。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),macOS 项构建与产物已通、运行期测试按平台移植清单收敛中,两者均红不拖垮其余平台。Daily Build 工作流([daily.yml](https://github.com/cuihairu/luna/actions/workflows/daily.yml))是这些资产的来源,per-run artifact 只是本地副本,交付通道是 Release。
 
 解压后验证:
 

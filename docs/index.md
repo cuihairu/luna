@@ -4,8 +4,8 @@ layout: home
 hero:
   name: luna
   image: /logo.svg
-  text: 通用的 Lua 集成环境
-  tagline: 把常用工具集成进一个二进制:REPL、模块解析、标准库、插件,怎么组合由你决定。
+  text: Lua runtime for scripting, tooling, and lightweight services
+  tagline: A batteries-included Lua runtime — REPL、标准库、Node 式模块、插件、包管理,集成在一个二进制里。
   actions:
     - theme: brand
       text: 快速上手

@@ -2,52 +2,48 @@
 
 本文回答四个问题:**代码怎么分层、第三方怎么选、插件边界在哪、事件循环为何推迟**。
 
-## 分层
+## 分层:三层模型
 
-排布与 Node.js 官方的依赖分层图同构:你的脚本↔app、`luna_modules/`↔npm modules、标准库↔Node core、C 内核↔Node bindings、底部 vendor 一排↔V8/libuv/zlib/OpenSSL 那一排。
+luna 的形态用三层模型讲清楚——**User Space(用户空间)/ Luna Runtime(Luna 运行时)/ Native Runtime(原生运行时)**。产品身份是 Lua 通用运行时;与 Node.js 官方依赖分层图的同构只发生在架构参考的意义上(对照见下节)。
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                                 你的脚本                                 │
-│                  luna script.lua · luna -e · REPL 会话                   │
-├──────────────────────────────────────────────────────────────────────────┤
-│  luna_modules/ 包 —— LuaRocks 装的第三方包 · 项目内模块                  │
-├──────────────────────────────────────────────────────────────────────────┤
-│  标准库(随二进制,require 即得)                                          │
-│    同步面   json fs net http csv ini toml yaml xml zlib crypto           │
-│             path util events stream —— 十六件                            │
-│    异步面   loop:timers fs(+watch) net(+TLS) udp dns signal              │
-│             process os http —— libuv 驱动,opt-in                         │
-├──────────────────────────────────────────────────────────────────────────┤
-│  插件 plugins/(项目 → 用户 → $LUNA_PLUGIN_PATH,失败隔离)                 │
-│    四个扩展点:magic.register · complete.add_source                       │
-│               highlight.set · modules 注入                               │
-├──────────────────────────────────────────────────────────────────────────┤
-│  REPL 策略层(纯 Lua,编译期嵌进二进制)                                    │
-│    repl · complete · highlight · magic · introspect                      │
-│    modules · plugins                                                     │
-├──────────────────────────────────────────────────────────────────────────┤
-│  C 内核(薄:信号 · 毫秒时钟 · isatty · 输出汇聚)                          │
-│    luna_main 入口/CLI · luna_kernel 状态/绑定注册                        │
-│    luna_line replxx 桥/attach 唤醒 · luna_hook 计数钩子                  │
-│    luna_loop libuv 接线 · luna_toml tomlc17 桥                           │
-├──────────────┬──────────────┬──────────────┬──────────────┬──────────────┤
-│Lua 5.5       │libuv         │OpenSSL       │replxx        │luasocket     │
-├──────────────┼──────────────┼──────────────┼──────────────┼──────────────┤
-│LPeg          │lfs           │lua-zlib      │luaossl       │tomlc17       │
-├──────────────────────────────────────────────────────────────────────────┤
-│  libyaml + lyaml · expat + lua-expat · dkjson(纯 Lua vendor)             │
+┌─ User Space ────────────────────────────────────────────────────────────┐
+│  你的脚本 · REPL 会话 · CLI · app                                        │
+│  luna script.lua · luna build.lua · luna -e · luna --attach <pid>       │
+├─ Luna Runtime ──────────────────────────────────────────────────────────┤
+│  luna_modules/ 包(Node 式解析:相对 require · 逐级上溯 · 清单 main)      │
+│  LuaRocks 包装:luna install/search/list/update → .luna/rocks 树         │
+│  标准库(随二进制,require 即得,四类分法见标准库总览)                    │
+│    Core        json fs path util events stream net http crypto          │
+│    Data-Format csv ini toml yaml xml zlib                               │
+│    Dev tooling logging · repl/introspect/magic/complete/highlight       │
+│    Ecosystem   plugins · LuaRocks · luna_modules 的接入面               │
+│  插件 plugins/(项目 → 用户 → $LUNA_PLUGIN_PATH,失败隔离)                │
+│    扩展点:magic.register · complete.add_source · highlight.set · 模块注入│
+│  REPL 策略层(纯 Lua,编译期嵌进二进制)                                  │
+│    repl · complete · highlight · magic · introspect · serve(attach)    │
+├─ Native Runtime ────────────────────────────────────────────────────────┤
+│  C 内核(薄):信号 · 毫秒时钟 · isatty · 输出汇聚 · replxx 桥             │
+│    luna_main 入口/CLI · luna_kernel 状态/绑定注册 · luna_line           │
+│    luna_hook 计数钩子 · luna_loop libuv 接线 · luna_toml tomlc17 桥     │
+│  vendor 一排:                                                            │
+│    Lua 5.5 · libuv · OpenSSL · replxx · luasocket                       │
+│    LPeg · lfs · lua-zlib · luaossl · tomlc17                            │
+│    libyaml + lyaml · expat + lua-expat · dkjson(纯 Lua)                 │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 **分层理由:**
 
-- **C 内核尽量薄**:只做 C 擅长且必须进 C 的事——信号(SIGINT)、毫秒时钟、isatty、输出汇聚点(sink)、replxx 桥。REPL 的行为逻辑全是 Lua,因为逻辑变化频率高,放 Lua 层改起来不需要懂 C,插件也能读懂并替换;
-- **策略层随二进制分发**:repl/highlight/… 在编译期由 CMake 嵌成 C raw string(`cmake/luna_lua.h.in` 生成头),用户拿到的单文件二进制行为完整;同时源文件即文档,`lua/luna/` 可直接阅读;
+- **User Space 是壳,不是内容**:脚本只用标准接口(require、CLI、REPL、attach),不知道 Luna Runtime 内部怎么排布——策略层重构不破坏用户代码;
+- **Luna Runtime 是本体**:模块/标准库/插件/包管理与 REPL 策略层都住这里,纯 Lua + 包装层,随二进制一体分发,源文件即文档(`lua/` 可直接阅读),插件能读懂也能替换;
+- **C 内核尽量薄**:Native Runtime 只做 C 擅长且必须进 C 的事——信号(SIGINT)、毫秒时钟、isatty、输出汇聚点(sink)、replxx 桥。REPL 的行为逻辑全是 Lua,因为逻辑变化频率高,放 Lua 层改起来不需要懂 C;
 - **扩展点即边界**:四组注册 API(`magic.register`、`complete.add_source`、`highlight.set`、返回 `modules` 表)是插件唯一入口。策略层内部结构对插件不可见,策略层重构不破坏插件;
 - **官方 Lua 是内核**:luna 不含自制解释器;所有"语言层"能力来自官方 Lua 5.5 + LPeg,升级 Lua 只动 `deps/`。
 
-## 与 Node.js 的对照
+## 与 Node.js 的关系:架构参考,不是身份
+
+luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模块解析、标准库形状、CLI 入口这些**习惯**照搬,因为它们在 Lua 生态里是公认好用的形态。但这不是身份:身份是 Lua 运行时,Node 对照只回答"体验为什么这样设计";凡是 Lua 语义更强的地方(require 缓存、chunk 与 `...`、官方搜索器),一律保持官方行为。逐模块能力对照见 [node-parity](/node-parity)。
 
 | 概念 | Node.js | luna |
 | --- | --- | --- |

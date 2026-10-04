@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-产物是 GitHub Actions 的 nightly artifact(`luna-nightly-<os>-<arch>`,内含二进制与 `luna_modules/` 模块侧车,保留 14 天),没有 tag 也没有 Release。artifact 下载需要 GitHub 凭据:脚本自动探测 `gh` 登录态,或传 `GITHUB_TOKEN`(`install.sh` 另收 `--token`);有匿名直链时用 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 指过去,全程不出网关。详见[快速上手](/guide/getting-started)。
+产物是**滚动 nightly Release**:固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,资产 `luna-nightly-<os>-<arch>.zip`(内含二进制与 `luna_modules/` 模块侧车)+ `.sha256` 侧车。公共仓库资产匿名直拉,**不需要任何凭据**;`--token`/`GITHUB_TOKEN` 与 `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` 保留作私有 fork 与直链兜底。Actions artifact 只是 run 的本地副本,交付通道是 Release。详见[快速上手](/guide/getting-started)。
 
 ## 为什么 `require("crypto")` 报错说没链接 OpenSSL?
 

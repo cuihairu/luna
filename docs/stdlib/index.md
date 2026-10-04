@@ -1,6 +1,8 @@
 # 标准库总览
 
-全部随二进制一体分发,`require` 即用,不需要装任何东西。绑定成熟 C 库或 LPeg 语法的模块负责格式与底层;纯 Lua 模块按 Node 语义补齐日常面。
+全部随二进制一体分发,`require` 即用,不需要装任何东西。标准库按**四类**组织——Core、Data-Format、Dev tooling、Ecosystem:每个新模块入类前先回答"属于哪一类",不属于任何一类的功能不进标准库(防"什么都往里塞")。
+
+## Core — 运行时与通用面
 
 | 模块 | 一句话 | 后端 | 页面 |
 | --- | --- | --- | --- |
@@ -13,20 +15,36 @@
 | net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/stdlib/net) |
 | http | 一行起服 `serve()` + luasocket 客户端面 | luasocket + 纯 Lua | [http](/stdlib/http) |
 | crypto | sha1/256/384/512、HMAC、随机字节(需 OpenSSL) | luaossl | [crypto](/stdlib/crypto) |
-| zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |
+
+## Data-Format — 数据格式编解码
+
+| 模块 | 一句话 | 后端 | 页面 |
+| --- | --- | --- | --- |
 | csv | RFC 4180 CSV 编解码与逐行迭代 | LPeg | [csv](/stdlib/csv) |
 | ini | 经典 .ini 编解码 | LPeg | [ini](/stdlib/ini) |
 | toml | TOML 1.0 编解码,datetime 组件表 | tomlc17 (C) | [toml](/stdlib/toml) |
 | yaml | YAML 1.1 编解码、多文档 | lyaml | [yaml](/stdlib/yaml) |
 | xml | DOM 编解码 + SAX 透传 | expat (lxp) | [xml](/stdlib/xml) |
+| zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |
+
+## Dev tooling — 开发工具面
+
+| 模块 | 一句话 | 后端 | 页面 |
+| --- | --- | --- | --- |
 | logging | 级别化日志,console/文件/滚动文件/socket appender(上游原样透出) | lualogging | [logging](/stdlib/logging) |
+
+REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策略模块)同属这一类,通过 REPL 与[CLI 与 REPL](/guide/cli-repl) 使用,不占 require 名。
+
+## Ecosystem — 生态接入面
+
+不设独立 stdlib 页,入口在指南:[LuaRocks 包装](/guide/rocks)(`luna install` 等,包管理)、[目录插件](/guide/plugins)(扩展点接入)、[模块系统](/guide/modules)(`luna_modules/` 解析)。这一类的职责是"把外面的代码接进来",不是"再造外面的东西"——LuaRocks 只包装不自建 registry 即此口径。
+
+异步面(TCP/TLS/异步 fs/子进程/定时器,`require "loop"` 显式进入)单列在[事件循环](/guide/loop),不并入四类——它是 opt-in 的第二世界,见架构页 rationale。
 
 两个贯穿契约:
 
 - **数据错误不抛,参数错误才抛**:格式类模块(json/csv/ini/toml/xml/yaml)的 `decode`/`encode` 遇到坏数据返回 `nil, err`(消息带行列);传错参数类型(比如 `decode(42)`)直接 raise。循环/脚本里喂不可信数据建议 `pcall` 或显式接第二个返回值。
 - **字符串按字节计**:所有模块对 Lua 字符串不做编码转换;UTF-8 只是"透传并尽量在错误定位里数对"。
-
-事件循环一侧的异步面(TCP/TLS/异步 fs/子进程/定时器)在 [loop](/guide/loop) 与 `loop.http`,不在本区。
 
 ## 随二进制分发的底层模块
 

@@ -54,11 +54,18 @@ local function caller_dir()
     while info and depth < 16 do
         local src = info.source or ""
         if src ~= self_src and src:sub(1, 1) == "@" then
-            local dir = src:sub(2):match("^(.*)/[^/]+") or "."
-            if dir:sub(1, 1) ~= "/" then
+            -- Windows hands out backslash paths (argv spelling) and
+            -- drive-letter absolutes ("D:/x", "D:\x") that the slash
+            -- splits below would misread: normalize to forward slashes
+            -- (every CRT file call accepts them) and count a drive
+            -- letter or UNC double slash as absolute.
+            local path = src:sub(2):gsub("\\", "/")
+            local dir = path:match("^(.*)/[^/]+") or "."
+            local absolute = dir:sub(1, 1) == "/" or dir:match("^%a:/") ~= nil
+            if not absolute then
                 local okl, lfs = pcall(require, "lfs")
                 if okl and lfs.currentdir then
-                    dir = lfs.currentdir() .. "/" .. dir
+                    dir = lfs.currentdir():gsub("\\", "/") .. "/" .. dir
                 end
             end
             return dir
@@ -70,6 +77,7 @@ local function caller_dir()
 end
 
 local function parent(dir)
+    dir = dir:gsub("\\", "/") -- keep the walk slash-uniform on Windows
     local up = dir:match("^(.*)/[^/]+")
     if up == nil or up == dir then
         return nil

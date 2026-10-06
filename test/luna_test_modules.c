@@ -305,10 +305,14 @@ static void test_fs_append_mkdir_roundtrip(void **state)
 static void test_fs_readdir_sort_and_error_paths(void **state)
 {
     (void)state;
+    /* os.tmpname() on Windows is a root-relative name with a trailing
+     * dot (tmpnam spelling) that Win32 refuses to mkdir under; anchor
+     * the scratch dir at the cwd instead */
     assert_true(eval_bool(
         "local fs = require('fs')\n"
-        "local base = os.tmpname()\n"
-        "os.remove(base)\n"
+        "local lfs = require('lfs')\n"
+        "local base = lfs.currentdir():gsub('\\\\', '/') .. '/luna-mod-readdir-tmp'\n"
+        "fs.rmdir(base) -- stale dir from a crashed earlier run\n"
         "fs.mkdirSync(base .. '/zdir', true)\n"
         "fs.mkdirSync(base .. '/adir', true)\n"
         "fs.writeFileSync(base .. '/mfile', '')\n"
@@ -1977,7 +1981,9 @@ static void test_util_format_conversions(void **state)
     assert_string_equal(
         eval_string("local f = require('util').format\n"
                     "local s = f('%j', {f = print})\n"
-                    "return tostring(s:find('{ f = function: 0x', 1, true) ~= nil)"),
+                    /* %p renders with a 0x prefix on POSIX, without one
+                     * on Windows — match the stable part only */
+                    "return tostring(s:find('{ f = function: ', 1, true) ~= nil)"),
         "true");
     /* %j 走 json.encode (dkjson); %% 成对折叠, 单串无参原样返回 */
     assert_string_equal(
@@ -2042,9 +2048,9 @@ static void test_util_inspect_shapes(void **state)
         eval_string("local i = require('util').inspect\n"
                     "local th = coroutine.create(function() end)\n"
                     "local t = i({[print] = 1, [true] = 2})\n"
-                    "return tostring(i(th):find('thread: 0x', 1, true) ~= nil) .. ','\n"
+                    "return tostring(i(th):find('thread: ', 1, true) ~= nil) .. ','\n"
                     "  .. tostring(t:find('[true] = 2', 1, true) ~= nil) .. ','\n"
-                    "  .. tostring(t:find('[function: 0x', 1, true) ~= nil)"),
+                    "  .. tostring(t:find('[function: ', 1, true) ~= nil)"),
         "true,true,true");
     /* 深度: 默认 2; 超深塌缩 [Object]/[Array]; 负数顶层即塌缩 */
     assert_string_equal(
@@ -2071,7 +2077,7 @@ static void test_util_inspect_shapes(void **state)
                     "local s = i(function() end)\n"
                     "local c = i(print)\n"
                     "return tostring(s:find('<function ', 1, true) ~= nil) .. ','\n"
-                    "  .. tostring(c:find('function: 0x', 1, true) ~= nil)"),
+                    "  .. tostring(c:find('function: ', 1, true) ~= nil)"),
         "true,true");
 }
 

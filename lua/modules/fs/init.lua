@@ -54,8 +54,15 @@ function fs.appendFileSync(path, data)
 end
 
 -- fs.readdirSync(dir) -> sorted array of entry names ("."/".."
--- excluded, like Node). Unreadable dirs raise from lfs itself.
+-- excluded, like Node). Unreadable dirs raise from lfs itself —
+-- except on Windows, where lfs.dir's constructor defers failure to
+-- the iterator (nil + message, which a generic-for reads as an
+-- empty listing), so a bad dir is detected up front and raised
+-- here with the same message POSIX lfs.dir produces.
 function fs.readdirSync(dir)
+    if lfs.attributes(dir, "mode") ~= "directory" then
+        error("fs.readdirSync: cannot open " .. dir, 2)
+    end
     local out = {}
     for entry in lfs.dir(dir) do
         if entry ~= "." and entry ~= ".." then

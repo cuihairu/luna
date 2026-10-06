@@ -1911,6 +1911,23 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
 
 **增量账**:
 
+- 2026-10-07 Windows CI 运行期修复(续上条;run 37540571704=5efc3cb
+  实录:**ubuntu success**,windows 编链全通(守护手术生效)后唯一红
+  组=modules 9 例,三类根因):①lua/luna/modules.lua 的 caller_dir
+  只按 "/" 切分——Windows argv 反斜杠路径切不出目录,且 "D:/x" 不以
+  "/" 开头被误判相对、再拼 cwd 成垃圾根 → bare require 向上走查必空
+  (walk-up 六例同根:file_dir/manifest_main/walks_up/subpath×2/
+  loaded_caches);修=source 先归一 \\→/,盘符(^%a:/)与 UNC(//)
+  计为绝对,parent() 同步归一。②fs.readdir 用例的 os.tmpname() 在
+  Windows 是 tmpnam 式带尾点根相对名,Win32 拒绝在其下 mkdir(且
+  289 行同款用例在 CI 磁盘根扔了临时物)→ 改 lfs.currentdir() 锚定
+  + 预清理。③MSVC 的 %p 渲染无 0x 前缀(function: 00A41208),测试
+  四处硬编码 "0x"(util format %j 回退、inspect thread/function 两
+  族,含一处前序断言失败后未跑到的潜伏位点)改配稳定子串。修复
+  ccbe17b 推送;本地 ctest -E rocks 15/15(58.7s,modules 91/91 直
+  跑)+ mingw -D_WIN32 语法验证;windows 腿以新 run 核销(本轮教训:
+  门禁前 grep "error" 计数当过构建健康信号,实测构建失败被旧二进制
+  假绿掩盖——**门禁必看退出码**,已纠正)。
 - 2026-10-07 Windows CI 腿修复轮(CMake@main 红链
   37519918175→37523518248,用户点火令"修到绿为止,以 CI 实测为准"):
   ①run 37523518248(6fa5903)取证:编译层已过(mode_t/S_IS* 那修
@@ -1937,6 +1954,22 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   TRACE ×2;双臂语法验证(Linux 原生 + mingw -D_WIN32)全绿后全量
   门禁。③排队 run 37537062661(27747d4)预计仍在测试编译层红
   (其树无守护),本笔推送后以新 run 双腿核销。
+- 2026-10-07 Windows CI 运行期修复·二(run 37544942908=ccbe17b 实录:
+  windows 腿 9 红→1 红,唯一幸存=modules 组
+  test_fs_readdir_sort_and_error_paths,Lua 片段第 11 行断言)。
+  根因=产品级平台分歧:lfs.dir 构造器(dir_iter_factory)在 POSIX
+  侧 opendir 失败即 luaL_error "cannot open %s: %s"(lfs.c:713),
+  _WIN32 侧构造器永不失败(只拼 pattern、hFile=0,lfs.c:704-709),
+  失败推迟到迭代器 _findfirst==-1L 时返回 nil+strerror——generic-for
+  把 nil 读成遍历结束 → fs.readdirSync(不存在路径)在 Windows 返回
+  空表(静默成功),pcall 不炸,断言 `not okr` 必挂。修复=产品面
+  lua/modules/fs/init.lua 的 readdirSync 入口先验 lfs.attributes
+  mode~="directory" 即 error "cannot open",两平台消息同构、行为
+  归一(examples 的 build-tool 是唯一调用方,无静默依赖)。落盘链
+  核实:CMakeLists 的 file(COPY) 是 configure 期 + CONFIGURE_DEPENDS,
+  改动自动触发 reconfigure 进 build 树(diff 校验 STAGED_COPY_IN_SYNC)。
+  本地 ctest -E rocks 15/15(70.4s,负载 30;构建退出码显式核验
+  BUILD_RC=0);外来会话 ctest 撞车窗口按协调规则轮询避让 20s。
 - 2026-10-04 ①文档批(e7a65e7e 前身 78add60):README 定位句/三例/
   Node 降参考 + docs 三层模型主结构 + stdlib 四类分法(总览页分节 +
   sidebar 分组)+ 安装面文案核销(README:66-68/faq:39/getting-started:

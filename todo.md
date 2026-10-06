@@ -1961,8 +1961,24 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   等价实现=重写测试本体,按「写明理由整体 #ifdef」处置;TLS 层属
   产品面推迟(降级可用),不算测试跳过。验证:全仓
   x86_64-w64-mingw32-gcc 交叉编译 src 8/8 + test 16/16 绿;Linux
-  重建 + ctest -E rocks 15/15 全绿;Windows CI 实跑待网络恢复随下
-  一笔 push 核销。
+  重建 + ctest -E rocks 15/15 全绿。**Windows CI 实跑(run
+  37519918175,Ubuntu 腿绿)**:首层即 MSBuild 下界兑现——
+  luna_loop.c:549 `mode_t` 未声明(MinGW 有 mode_t,本地交叉编译
+  抓不到;正是 2026-10-03 登记「修完上述后可能再浮出」的那层)。
+  取 UCRT sys/stat.h 原文核对,实锤三缺口:无 mode_t、无任何 S_IS*
+  谓词(luna_loop.c:448 旧注「MSVC 拼法相同」是错的)、连 S_IFLNK
+  都不声明(旧 S_IF* 别名全在 _CRT_INTERNAL_NONSTDC_NAMES 后)。
+  修法:mode_t→uint64_t 直取 uv_stat_t.st_mode;sys/stat.h include
+  **之后**补 #ifndef 兜底块(S_IFMT/S_IFREG/S_IFDIR/S_IFLNK +
+  S_ISREG/S_ISDIR/S_ISLNK,include 后定义避开与 UCRT 旧别名重定义);
+  头部原孤立 S_ISLNK 兜底移除(宏展开点在 448 行 include 之后,
+  孤立定义保证不了 S_IFLNK 到场)。全量敌意面清扫(MSVC 未测面
+  luna_loop/luna_main/luna_line/luna_test_loop/luna_test_main 主体):sig 名表/保留位/sigaction/SIGPIPE/
+  readlink/unistd/fork 面全在守卫内,strcasecmp/strdup/VLA/复合
+  字面量/指定初始化零命中,ssize_t 由 uv/win.h `typedef intptr_t
+  ssize_t` 供应,冒烟分支链接面(eval_string:73、setup_loop:245、
+  teardown 的 rlimit 变量)全在可移植区或 #ifndef 内;15/15 复绿
+  后推进,Windows 腿结果随下轮 CI 核销。
 - 2026-10-05 P4 安全运行时:进程级 `luna --sandbox`(-S)同一 Lua 态四层
   加固。C 侧 `lua_newstate(luna_alloc, NULL, luaL_makeseed(NULL))` 定制
   分配器(收缩回收的双向字节账,上限 0 逐字节等价默认)+ 计数钩子扣

@@ -54,12 +54,10 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <signal.h>
-/* MSVC's sys/stat.h stops at S_IFMT — no S_ISLNK. libuv's lstat does
- * fill the POSIX S_IFLNK mode bit on Windows (reparse points), so the
- * standard-test spelling works once defined here. */
-#ifndef S_ISLNK
-#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
-#endif
+/* the stat classification macros live beside <sys/stat.h> further
+ * down: UCRT defines none of the S_IS* predicates, so the fallbacks
+ * must be defined after that include to avoid redefining whatever
+ * legacy spellings it does provide */
 #endif
 
 #include <uv.h>
@@ -445,7 +443,39 @@ static const luaL_Reg loop_funcs[] = {
  * itself is uv_fs throughout, no POSIX fd flags of its own */
 #include <fcntl.h>
 #endif
-#include <sys/stat.h> /* S_ISREG/S_ISDIR: MSVC spells these the same */
+#include <sys/stat.h>
+
+#ifdef _WIN32
+/* UCRT's sys/stat.h defines the _S_IF* constants but none of the
+ * S_IS* predicates (S_ISREG/S_ISDIR/S_ISLNK), and it declares no
+ * S_IFLNK in any SDK version — the legacy S_IF* aliases it does have
+ * sit behind _CRT_INTERNAL_NONSTDC_NAMES. libuv fills POSIX mode bits
+ * into uv_stat_t on Windows too (reparse points surface as S_IFLNK),
+ * so classify over our own constants: plain masks, no CRT dependency.
+ * Defined AFTER the include so whatever legacy spellings UCRT does
+ * provide are seen first and these stay out of their way. */
+#ifndef S_IFMT
+#define S_IFMT 0xF000
+#endif
+#ifndef S_IFREG
+#define S_IFREG 0x8000
+#endif
+#ifndef S_IFDIR
+#define S_IFDIR 0x4000
+#endif
+#ifndef S_IFLNK
+#define S_IFLNK 0xA000
+#endif
+#ifndef S_ISREG
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+#ifndef S_ISLNK
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#endif
+#endif /* _WIN32: stat classification fallbacks */
 
 enum { FS_READ, FS_WRITE, FS_STAT, FS_READDIR, FS_ONCE, FS_PATH };
 
@@ -544,9 +574,11 @@ static void fs_finish(struct fsop *op)
             lua_pushinteger(L, (lua_Integer)op->req.statbuf.st_mode);
             lua_setfield(L, -2, "mode");
             /* "file"/"dir"/"link"/"other": link only surfaces from
-             * lstat — stat follows symlinks by definition */
+             * lstat — stat follows symlinks by definition. uint64_t
+             * straight from uv_stat_t: MSVC has no mode_t (this is
+             * the classification that C2065'd on the Windows leg) */
             const char *ty;
-            mode_t m = op->req.statbuf.st_mode;
+            uint64_t m = op->req.statbuf.st_mode;
             if (S_ISREG(m)) {
                 ty = "file";
             } else if (S_ISDIR(m)) {

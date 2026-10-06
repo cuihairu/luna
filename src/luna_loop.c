@@ -1863,7 +1863,6 @@ static void server_close(struct lserver *sv);
 static void on_server_closed(uv_handle_t *handle)
 {
     struct lserver *sv = (struct lserver *)handle;
-    fprintf(stderr, "TRACE on_server_closed closeref=%d\n", sv->closeref);
     keepalive_close();
     /* the close callback must land while selfref still pins the
      * userdata: delivering it runs arbitrary Lua, which can allocate
@@ -3742,7 +3741,6 @@ static void tserver_close(struct tserver *sv);
 static void on_tserver_closed(uv_handle_t *handle)
 {
     struct tserver *sv = (struct tserver *)handle;
-    fprintf(stderr, "TRACE on_tserver_closed closeref=%d\n", sv->closeref);
     keepalive_close();
     if (sv->closeref != LUA_NOREF) {
         int ref = sv->closeref;

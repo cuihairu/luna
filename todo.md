@@ -1911,6 +1911,32 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
 
 **增量账**:
 
+- 2026-10-07 Windows CI 腿修复轮(CMake@main 红链
+  37519918175→37523518248,用户点火令"修到绿为止,以 CI 实测为准"):
+  ①run 37523518248(6fa5903)取证:编译层已过(mode_t/S_IS* 那修
+  生效),新断点=链接层——luna.exe/luna_test_main.exe LNK2019
+  `__imp_replxx_*` ×10。根因:replxx.h 在 _WIN32 且未定义
+  REPLXX_STATIC 时把 API 声成 `__declspec(dllimport)`,消费者
+  (luna_line.obj)引用 `__imp_` 导入 thunk 而 STATIC 库从不产生
+  该符号(库自身同装饰下另有 C4273 inconsistent dll linkage)。
+  本地 mingw 链接级双臂复现:无 define 消费者 `U __imp_replxx_*`
+  →ld undefined reference(与 CI 错误逐字同构),有 define 链接
+  通过;win_write(terminal.cxx 的 _WIN32 依赖)要求 windows.cxx
+  回源列表,否则修完 dllimport 后 replxx 自身 LNK2019——修复
+  (REPLXX_STATIC PUBLIC + 恢复 windows.cxx,撤 9e306e5 的历史排除)
+  由并行会话落为 27747d4 推送;Linux 14/14 组绿,loop 组同 C 树有
+  6fa5903 提交时的 15/15 实录(当日两次 loop 红=宿主负载 55–86 的
+  flake,两轮挂点不同互证)。②74fe229(并行会话)以 109 例新世系
+  整体替换 test/luna_test_loop.c(-4173/+775),Windows 守护层
+  (文件头注/头分流/SIGPIPE 守卫/整组 #ifndef + 10 例冒烟 #else)
+  随之丢失——Windows 腿在测试编译层必炸;同笔混入 2 根 TRACE
+  fprintf 调试桩进 src/luna_loop.c(on_server_closed/
+  on_tserver_closed)。本轮修复:新世系上重做同构手术(理由注记按
+  新世系更新:/tmp 落盘的 fs 与 fs.watch 家族、SIGUSR2 递送、
+  /bin/sh process 助手、pthread/裸 socket/TLS 面全 POSIX),剥
+  TRACE ×2;双臂语法验证(Linux 原生 + mingw -D_WIN32)全绿后全量
+  门禁。③排队 run 37537062661(27747d4)预计仍在测试编译层红
+  (其树无守护),本笔推送后以新 run 双腿核销。
 - 2026-10-04 ①文档批(e7a65e7e 前身 78add60):README 定位句/三例/
   Node 降参考 + docs 三层模型主结构 + stdlib 四类分法(总览页分节 +
   sidebar 分组)+ 安装面文案核销(README:66-68/faq:39/getting-started:

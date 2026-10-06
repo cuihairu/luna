@@ -15,7 +15,18 @@
  *
  * The uv loop is process-global, so every test leaves it empty: each
  * case clears what it scheduled, then runs the loop until the close
- * callbacks drain. */
+ * callbacks drain.
+ *
+ * Windows note: the harness underneath these cases is POSIX end to end
+ * — pthread echo/TLS servers, raw sockets and AF_UNIX paths, /tmp
+ * scratch files (the fs and fs.watch families), signal delivery via
+ * SIGUSR2 and /bin/sh-flavoured process helpers — so the whole group
+ * compiles out behind #ifndef _WIN32 (the same wholesale treatment
+ * cli/line/serve/rocks/covsum already take; CMake never excluded the
+ * tests on Windows, ENABLE_UNIT_TESTS defaults on, so an empty main
+ * would be a false green). The #else branch keeps a smoke suite on the
+ * portable core: timers, immediates, stop/unref keep-alive semantics,
+ * the prepare hook and ^C interruption, all riding libuv alone. */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -23,6 +34,9 @@
 #include <setjmp.h>
 #include <string.h>
 #include <stdlib.h>
+#ifndef _WIN32
+/* the POSIX harness layer: pthread echo servers, raw sockets and
+ * signal delivery have no Win32 counterpart here */
 #include <signal.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -31,6 +45,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
+#endif /* !_WIN32 */
 #include <cmocka.h>
 
 #include "lua.h"
@@ -62,10 +77,13 @@ static const char *eval_string(const char *code)
 static int setup_loop(void **state)
 {
     (void)state;
+#ifndef _WIN32
     /* the binary ignores SIGPIPE (see luna_main.c) so a write to a dead
      * peer surfaces as EPIPE; the harness bypasses main(), so it adopts
      * that protection itself — the tls cases write to a closed conn */
     signal(SIGPIPE, SIG_IGN);
+#endif /* !_WIN32: MSVC signal.h has no SIGPIPE (a dead peer surfaces
+        * as WSAECONNRESET instead) */
     L = luaL_newstate();
     assert_non_null(L);
     luaL_openlibs(L); /* the cases use assert/table/tostring */
@@ -101,6 +119,13 @@ static int teardown_loop(void **state)
     L = NULL;
     return 0;
 }
+
+/* The POSIX case group: everything below leans on the harness layer —
+ * pthread echo/TLS servers, raw sockets, AF_UNIX paths, /tmp scratch
+ * files (fs/fs.watch families), signal delivery and /bin/sh-flavoured
+ * process helpers — so it compiles out wholesale on Windows, where the
+ * #else below keeps a smoke suite on the portable core. */
+#ifndef _WIN32
 
 static void test_run_with_nothing_scheduled_returns(void **state)
 {
@@ -3066,3 +3091,155 @@ int main(void)
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }
+#else /* _WIN32: smoke suite on the portable core, see the file note */
+
+/* The cases below are the loop's own control flow — timers, immediates,
+ * stop/unref keep-alive, the prepare hook and ^C interruption — all of
+ * it riding libuv alone, so the Windows leg runs them instead of an
+ * empty main. They are the same shapes as their POSIX-side namesakes
+ * (each is defined once per branch); everything that needs a pthread
+ * server, an AF_UNIX path, an rlimit window or /proc stays out. */
+
+static void test_run_with_nothing_scheduled_returns(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string("return loop.run()"), "true");
+}
+
+static void test_settimeout_fires_in_order_with_args(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "t = {}\n"
+        "loop.setTimeout(function(...) t[#t+1] = {...} end, 30, 'late')\n"
+        "loop.setTimeout(function(...) t[#t+1] = {...} end, 5, 'early', 42)\n"
+        "assert(loop.run())\n"
+        "return t[1][1] .. t[1][2] .. ',' .. t[2][1]"), "early42,late");
+}
+
+static void test_interval_runs_until_cleared(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "n = 0\n"
+        "h = loop.setInterval(function()\n"
+        "  n = n + 1\n"
+        "  if n == 3 then\n"
+        "    loop.clearInterval(h)\n"
+        "    loop.setTimeout(function() assert(n == 3) end, 0)\n"
+        "  end\n"
+        "end, 5)\n"
+        "assert(loop.run())\n"
+        "return (n == 3) and 'stopped' or n"), "stopped");
+}
+
+static void test_immediate_runs_within_the_run(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "t = {}\n"
+        "loop.setImmediate(function() t[#t+1] = 'imm' end)\n"
+        "loop.setTimeout(function() t[#t+1] = 'time' end, 10)\n"
+        "assert(loop.run())\n"
+        "table.sort(t)\n"
+        "return table.concat(t, ',')"), "imm,time");
+}
+
+static void test_clear_of_a_fired_oneshot_is_harmless(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "fired = false\n"
+        "h = loop.setTimeout(function() fired = true end, 5)\n"
+        "assert(loop.run())\n"
+        "loop.clearTimeout(h)  -- already closed: no-op, must not crash\n"
+        "return tostring(fired)"), "true");
+}
+
+static void test_stop_ends_the_run_handles_stay_scheduled(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "n = 0\n"
+        "h = loop.setInterval(function() n = n + 1 end, 100)\n"
+        "loop.setImmediate(function() loop.stop() end)\n"
+        "assert(loop.run())\n"
+        "local after = n\n"
+        "loop.clearInterval(h)\n"
+        "assert(loop.run())  -- drain the closing interval\n"
+        "return (after >= 0 and after <= 1) and 'stopped' or after"),
+        "stopped");
+}
+
+static void test_prepare_hook_steps_serve(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "served = 0\n"
+        "__LUNA_SERVE_STEP = function() served = served + 1 end\n"
+        "loop.setTimeout(function() end, 30)\n"
+        "assert(loop.run())\n"
+        "__LUNA_SERVE_STEP = nil\n"
+        "return served > 0 and 'polled' or 'silent'"), "polled");
+}
+
+static void test_interrupt_stops_the_run(void **state)
+{
+    (void)state;
+    luna_kernel_request_interrupt();
+    assert_string_equal(eval_string(
+        "h = loop.setTimeout(function() end, 10000)\n"
+        "local ok, err = pcall(loop.run)\n"
+        "loop.clearTimeout(h)\n"
+        "assert(loop.run())  -- drain the cleared handle\n"
+        "return tostring(ok) .. ',' .. tostring(tostring(err):find('interrupted') ~= nil)"),
+        "false,true");
+}
+
+static void test_unref_interval_does_not_keep_loop_alive(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "local iv\n"
+        "iv = loop.setInterval(function() end, 40)\n"
+        "iv:unref()\n"
+        "loop.setTimeout(function()\n"
+        "  loop.clearInterval(iv)\n"
+        "  out = 'drained'\n"
+        "end, 120)\n"
+        "assert(loop.run())\n"
+        "return 'drained'"), "drained");
+}
+
+static void test_ref_restores_keepalive(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local loop = loop or require('loop')\n"
+        "out = 'none'\n"
+        "local t = loop.setTimeout(function() out = 'fired' end, 80)\n"
+        "t:unref()\n"
+        "t:ref()\n"
+        "assert(loop.run())\n"
+        "return out"), "fired");
+}
+
+int main(void)
+{
+    const struct CMUnitTest tests[] = {
+        cmocka_unit_test_setup_teardown(test_run_with_nothing_scheduled_returns, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_settimeout_fires_in_order_with_args, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_interval_runs_until_cleared, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_immediate_runs_within_the_run, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_clear_of_a_fired_oneshot_is_harmless, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_stop_ends_the_run_handles_stay_scheduled, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_prepare_hook_steps_serve, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_interrupt_stops_the_run, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_unref_interval_does_not_keep_loop_alive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_ref_restores_keepalive, setup_loop, teardown_loop),
+    };
+    return cmocka_run_group_tests(tests, NULL, NULL);
+}
+
+#endif /* _WIN32 */

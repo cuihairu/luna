@@ -42,9 +42,25 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <arpa/inet.h>
+#ifndef _WIN32
+#include <arpa/inet.h> /* ntohs/htons, the byte-order helpers */
 #include <signal.h>
-#include <sys/wait.h>
+#include <sys/wait.h> /* WIFEXITED family, execSync's pclose status */
+#else
+/* Winsock owns the byte-order helpers and the address structs on
+ * Windows; sys/wait.h has no counterpart there — execSync reads
+ * _pclose's return as the plain exit code, since Windows does not
+ * fold signals into a wait status. */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <signal.h>
+/* MSVC's sys/stat.h stops at S_IFMT — no S_ISLNK. libuv's lstat does
+ * fill the POSIX S_IFLNK mode bit on Windows (reparse points), so the
+ * standard-test spelling works once defined here. */
+#ifndef S_ISLNK
+#define S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
+#endif
+#endif
 
 #include <uv.h>
 
@@ -424,8 +440,12 @@ static const luaL_Reg loop_funcs[] = {
  * it finishes — and counts as a live user handle, so the loop stays
  * keep-alive while any IO is in flight. */
 
+#ifndef _WIN32
+/* the blocking->nonblocking switch in the TLS layer; the fs face
+ * itself is uv_fs throughout, no POSIX fd flags of its own */
 #include <fcntl.h>
-#include <sys/stat.h>
+#endif
+#include <sys/stat.h> /* S_ISREG/S_ISDIR: MSVC spells these the same */
 
 enum { FS_READ, FS_WRITE, FS_STAT, FS_READDIR, FS_ONCE, FS_PATH };
 
@@ -1158,8 +1178,15 @@ static int l_signal(lua_State *L)
 {
     lua_Integer sig = luaL_checkinteger(L, 1);
     luaL_argcheck(L, sig > 0 && sig < 65, 1, "signal number out of range");
+#ifndef _WIN32
     luaL_argcheck(L, sig != SIGINT && sig != SIGUSR1, 1,
                   "signal is reserved (SIGINT: ^C interrupt, SIGUSR1: attach)");
+#else
+    /* no SIGUSR1 on Windows: nothing to reserve, ^C rides the console
+     * handler outside loop.signal */
+    luaL_argcheck(L, sig != SIGINT, 1,
+                  "signal is reserved (SIGINT: ^C interrupt)");
+#endif
     luaL_checktype(L, 2, LUA_TFUNCTION);
     struct sigwatch *w = lua_newuserdata(L, sizeof(*w));
     memset(w, 0, sizeof(*w));
@@ -2399,7 +2426,11 @@ static const luaL_Reg udp_funcs[] = {
  * errors as strings; the callback is registry-pinned until delivery
  * and the lookup counts as a live user handle, like loop.fs. */
 
-#include <netdb.h>
+#ifndef _WIN32
+#include <netdb.h> /* struct addrinfo behind the uv_getaddrinfo face */
+#else
+/* ws2tcpip.h (included up top) spells struct addrinfo the same way */
+#endif
 
 struct dnsop {
     union {
@@ -2537,8 +2568,6 @@ static const luaL_Reg dns_funcs[] = {
  * loop. They live under loop because libuv is where they come from
  * (uv_os_homedir and friends), the same face Node calls "os". */
 
-#include <sys/utsname.h>
-
 /* loop.os.home() — $HOME or the passwd entry, via uv_os_homedir */
 static int l_os_home(lua_State *L)
 {
@@ -2575,11 +2604,12 @@ static int l_os_hostname(lua_State *L)
     return 1;
 }
 
-/* loop.os.type() — the kernel name ("Linux"), like Node's os.type */
+/* loop.os.type() — the kernel name ("Linux", "Windows_NT" on that
+ * side), like Node's os.type; uv_os_uname spans both platforms */
 static int l_os_type(lua_State *L)
 {
-    struct utsname un;
-    if (uname(&un) != 0) {
+    uv_utsname_t un;
+    if (uv_os_uname(&un) != 0) {
         return luaL_error(L, "loop.os: uname failed");
     }
     lua_pushstring(L, un.sysname);
@@ -2813,8 +2843,14 @@ static const luaL_Reg os_funcs[] = {
  * against the system store with SNI + hostname checking on; opts
  * {insecure = true} turns both off, opts {ca = path} pins a store. */
 
-#ifdef LUNA_LOOP_HAVE_OPENSSL
+#if defined(LUNA_LOOP_HAVE_OPENSSL) && !defined(_WIN32)
 
+/* POSIX sockets end to end: this layer drives raw fds (socket/connect/
+ * accept + fcntl O_NONBLOCK + uv_poll on an int fd) and reads errno
+ * directly, so it compiles out on Windows — SOCKET handles, ioctlsocket
+ * and the WSA error space are a separate port, not an include fix.
+ * With the layer absent, connectTls on Windows reports the same
+ * "how to enable TLS" notice the no-OpenSSL build already does. */
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <sys/socket.h>
@@ -3902,7 +3938,7 @@ static int l_net_listen_tls(lua_State *L)
         "module's dependency); this binary was built without it");
 }
 
-#endif /* LUNA_LOOP_HAVE_OPENSSL */
+#endif /* TLS layer: OpenSSL, POSIX sockets — see the file's _WIN32 notes */
 
 /* -- async child processes (loop.process) ---------------------------------
  *
@@ -4432,7 +4468,14 @@ static int l_process_exec(lua_State *L)
 static int l_process_exec_sync(lua_State *L)
 {
     const char *cmd = luaL_checkstring(L, 1);
+#ifndef _WIN32
     FILE *fh = popen(cmd, "r");
+#else
+    /* the CRT spells it _popen, and _pclose returns the child's exit
+     * code directly — Windows does not fold signals into a wait
+     * status, so the WIFEXITED leg below compiles out */
+    FILE *fh = _popen(cmd, "r");
+#endif
     if (!fh) {
         return luaL_error(L, "loop.process.execSync: cannot run '%s'", cmd);
     }
@@ -4443,17 +4486,26 @@ static int l_process_exec_sync(lua_State *L)
     while ((n = fread(buf, 1, sizeof(buf), fh)) > 0) {
         luaL_addlstring(&b, buf, n);
     }
+#ifndef _WIN32
     int status = pclose(fh);
+#else
+    int status = _pclose(fh);
+#endif
     luaL_pushresult(&b); /* stdout, whatever the exit status was */
     if (status == -1) {
         return luaL_error(L, "loop.process.execSync: cannot reap '%s'", cmd);
     }
+#ifndef _WIN32
     if (!WIFEXITED(status)) {
         return luaL_error(L,
             "loop.process.execSync: '%s' was killed by signal %d",
             cmd, WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     }
     int code = WEXITSTATUS(status);
+#else
+    /* the exit code is the wait status on Windows — no signal leg */
+    int code = status;
+#endif
     if (code != 0) {
         return luaL_error(L,
             "loop.process.execSync: '%s' exited with code %d", cmd, code);
@@ -4503,7 +4555,7 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
-#ifdef LUNA_LOOP_HAVE_OPENSSL
+#if defined(LUNA_LOOP_HAVE_OPENSSL) && !defined(_WIN32)
     if (luaL_newmetatable(L, "loop.tsock")) {
         luaL_newlib(L, tsock_funcs);
         lua_setfield(L, -2, "__index");
@@ -4574,7 +4626,10 @@ int luaopen_luna_loop(lua_State *L)
     lua_setfield(L, -2, "EOL"); /* the POSIX line ending, like os.EOL */
     lua_setfield(L, -2, "os");
     /* named signal numbers for loop.signal, Linux-standard; SIGKILL and
-     * SIGSTOP are listed but the kernel never delivers them */
+     * SIGSTOP are listed but the kernel never delivers them. Windows
+     * keeps only the six the CRT defines — names without a constant
+     * there would not even typecheck. */
+#ifndef _WIN32
     static const struct { const char *name; int num; } sig_names[] = {
         { "HUP", SIGHUP },       { "INT", SIGINT },       { "QUIT", SIGQUIT },
         { "ILL", SIGILL },       { "ABRT", SIGABRT },     { "FPE", SIGFPE },
@@ -4584,6 +4639,12 @@ int luaopen_luna_loop(lua_State *L)
         { "STOP", SIGSTOP },     { "TSTP", SIGTSTP },     { "TTIN", SIGTTIN },
         { "TTOU", SIGTTOU },
     };
+#else
+    static const struct { const char *name; int num; } sig_names[] = {
+        { "INT", SIGINT },       { "ILL", SIGILL },       { "ABRT", SIGABRT },
+        { "FPE", SIGFPE },       { "SEGV", SIGSEGV },     { "TERM", SIGTERM },
+    };
+#endif
     lua_createtable(L, 0, (int)(sizeof(sig_names) / sizeof(sig_names[0])));
     for (size_t i = 0; i < sizeof(sig_names) / sizeof(sig_names[0]); i++) {
         lua_pushinteger(L, sig_names[i].num);

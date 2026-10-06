@@ -12,6 +12,12 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+/* CRT spellings for the two POSIX calls this file uses: _putenv_s is
+ * the pair, and assigning an empty value removes the variable. */
+#define setenv(name, value, overwrite) _putenv_s((name), (value))
+#define unsetenv(name) _putenv_s((name), "")
+#endif
 
 #include <cmocka.h>
 

@@ -2,7 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+/* readlink/ssize_t behind the __linux__ exe_dir branch; MSVC has no
+ * unistd.h and the Windows build reaches none of its symbols */
 #include <unistd.h>
+#endif
 #if defined(__APPLE__)
 #include <stdint.h>
 #include <mach-o/dyld.h>
@@ -350,6 +354,7 @@ static void coverage_shutdown(lua_State *L)
 
 int main(int argc, char *argv[])
 {
+#ifndef _WIN32
     /* SIGINT without SA_RESTART (glibc's signal() would restart the
      * blocked syscall): a ^C landing while loop.run() blocks in epoll
      * must EINTR it, or the flag luna_on_sigint sets is never seen —
@@ -365,6 +370,13 @@ int main(int argc, char *argv[])
      * (luasocket's send, the attach frame) — never as a process-killing
      * signal: pcall can't catch SIGPIPE */
     signal(SIGPIPE, SIG_IGN);
+#else
+    /* Windows: the C runtime routes ^C through signal() too (no
+     * SA_RESTART semantics to opt out of — there is no EINTR on the
+     * Win32 side). No SIGPIPE exists: a dead socket peer surfaces as
+     * WSAECONNRESET through Winsock, not as a process signal. */
+    signal(SIGINT, luna_on_sigint);
+#endif
     install_sigusr1();
 
     /* capped allocator: the sandbox's memory ceiling goes through

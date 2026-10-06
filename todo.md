@@ -1603,7 +1603,10 @@
      domain socket,Windows 无,目标整体跳过(socket.unix 是 attach 面);
      **✅已修(2026-10-03)**;
   4. `src/luna_loop.c(45)` `arpa/inet.h`——loop 网络层 POSIX 头,需
-     winsock2 等价面或走 libuv 抽象(设计裁定点);**仍开,本轮不动**;
+     winsock2 等价面或走 libuv 抽象(设计裁定点);**✅已修(2026-10-05,
+     用户派发跨平台修,冻结解除):_WIN32 分支 include winsock2.h +
+     ws2tcpip.h(ntohs/htons/addrinfo 同义),TLS 手写层(1179 行,fd/
+     errno 语义 POSIX 专属)整层编译出,connectTls 走无 TLS 既有降级;
   5. `test/luna_test_linedit.c(28)` `poll.h`——测试 harness 同修。
      **✅已修(2026-10-03)**。
   正式依赖口径(源码 vendor 与否)待决。daily.yml matrix windows 项
@@ -1929,6 +1932,37 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   success,含 loop/rocks 全量组——P0 巡检全绿;docs 部署
   (37181976485/37182548831)为 Pages 发布,不计门禁,与每日
   schedule 的 Daily Build(37184473423)同受 pool 拥堵,不阻塞;
+- 2026-10-05 跨平台修(_WIN32,用户点名 src/test include 面,冻结项 4
+  同批解冻):六文件。src/luna_loop.c 头部分流——_WIN32 收
+  winsock2.h+ws2tcpip.h(ntohs/htons/addrinfo 同义)、自补 S_ISLNK
+  宏(MSVC sys/stat.h 没有,libuv Windows lstat 照填 S_IFLNK 位),
+  arpa/inet/signal/sys/wait 收进 #ifndef;fcntl/netdb 条件化;TLS
+  手写层(1179 行,raw fd/fcntl/errno 全 POSIX 语义)双条件
+  `LUNA_LOOP_HAVE_OPENSSL && !_WIN32` 整层编出,Windows 下
+  connectTls 走既有「无 TLS」降级(独立移植另议);execSync 换
+  _popen/_pclose,退出码即 wait status(WIFEXITED 折叠是 POSIX 专属,
+  Windows 分支直接取值);l_signal 预留位 Windows 仅 SIGINT,信号名表
+  6 项(MSVC signal.h 无 SIGUSR1/SIGPIPE/HUP/CHLD…);os.type 改
+  uv_os_uname 摘掉 sys/utsname.h。src/luna_main.c:unistd.h 守护,
+  main() 的 sigaction/SIGPIPE 改 Windows 直 signal(SIGINT),
+  install_sigusr1 整体编出(SIGUSR1 不存在)。test/luna_test_loop.c:
+  可移植头/POSIX 头分流,rlimit+fd 注入块、SIGPIPE/setup/teardown
+  段守护,POSIX 例组 203 例(pthreads 回显与 TLS 服务、AF_UNIX、
+  rlimit 探针、/tmp 落盘、信号语义)整体 #ifndef 编出;#else 留 10
+  例纯 libuv 冒烟组(定时器/立即/stop/unref/prepare/^C,与 POSIX
+  同名同体)+ 独立 main,文件头注明「CMake 从未在 Windows 排除测试
+  (ENABLE_UNIT_TESTS 默认 ON),不能靠空组假绿,故留可跑冒烟」。
+  test/luna_test_main.c:CRT 宏映射 setenv/unsetenv→_putenv_s。
+  .github/workflows/cmake.yml:matrix 加 windows-latest 腿——vcpkg
+  zlib:x64-windows-static + vcpkg toolchain,build/ctest 带 -C
+  (单配置生成器);POSIX harness 各组(cli/rocks/covsum/line/linedit/
+  serve)Windows 编空组空过、loop 跑冒烟组、其余七组全量(注释写明)。
+  跳过面与理由:上述六组是 forkpty/fork/waitpid/poll 专属 harness,
+  等价实现=重写测试本体,按「写明理由整体 #ifdef」处置;TLS 层属
+  产品面推迟(降级可用),不算测试跳过。验证:全仓
+  x86_64-w64-mingw32-gcc 交叉编译 src 8/8 + test 16/16 绿;Linux
+  重建 + ctest -E rocks 15/15 全绿;Windows CI 实跑待网络恢复随下
+  一笔 push 核销。
 - 2026-10-05 P4 安全运行时:进程级 `luna --sandbox`(-S)同一 Lua 态四层
   加固。C 侧 `lua_newstate(luna_alloc, NULL, luaL_makeseed(NULL))` 定制
   分配器(收缩回收的双向字节账,上限 0 逐字节等价默认)+ 计数钩子扣

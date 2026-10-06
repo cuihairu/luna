@@ -52,10 +52,18 @@ target_include_directories(lpeg PUBLIC "${PROJECT_SOURCE_DIR}/deps/lpeg")
 # interactive console; the C bridge lives in src/luna_line.c.
 file(GLOB REPLXX_SOURCES "${PROJECT_SOURCE_DIR}/deps/replxx/src/*.cxx"
      "${PROJECT_SOURCE_DIR}/deps/replxx/src/*.cpp")
-list(FILTER REPLXX_SOURCES EXCLUDE REGEX "/windows\\.cxx$")
 list(LENGTH REPLXX_SOURCES REPLXX_SOURCE_COUNT)
 add_library(replxx STATIC ${REPLXX_SOURCES})
 target_include_directories(replxx PUBLIC "${PROJECT_SOURCE_DIR}/deps/replxx/include")
+# replxx.h decorates its API with __declspec(dllimport) on _WIN32 unless
+# REPLXX_STATIC is set — without it MSVC consumers link against
+# __imp_replxx_* import thunks that a static lib never defines (and the
+# lib's own sources emit C4273 "inconsistent dll linkage"). PUBLIC so
+# luna_line and the test shim see the same plain declarations.
+# windows.cxx (win_write) is #ifdef _WIN32 all the way through and is
+# referenced by terminal.cxx's _WIN32 branch, so it must stay in the
+# source list for Windows links (empty TU elsewhere).
+target_compile_definitions(replxx PUBLIC REPLXX_STATIC)
 
 add_library(luna_line STATIC src/luna_line.c src/luna_line.h)
 target_link_libraries(luna_line PUBLIC replxx lualib)

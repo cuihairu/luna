@@ -1970,6 +1970,9 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   改动自动触发 reconfigure 进 build 树(diff 校验 STAGED_COPY_IN_SYNC)。
   本地 ctest -E rocks 15/15(70.4s,负载 30;构建退出码显式核验
   BUILD_RC=0);外来会话 ctest 撞车窗口按协调规则轮询避让 20s。
+  **终局核销:run 37549008691(354050d)双腿 success**(windows 214s
+  / ubuntu 141s)——CMake@main 红链 37523518248→37540571704→
+  37544942908→37549008691 全程闭环,Windows 腿修复收官。
 - 2026-10-04 ①文档批(e7a65e7e 前身 78add60):README 定位句/三例/
   Node 降参考 + docs 三层模型主结构 + stdlib 四类分法(总览页分节 +
   sidebar 分组)+ 安装面文案核销(README:66-68/faq:39/getting-started:

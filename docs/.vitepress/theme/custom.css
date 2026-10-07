@@ -40,13 +40,8 @@
   --vp-button-brand-active-text: #ffffff;
   --vp-button-brand-active-bg: #24503a;
 
-  /* hero 名字:同色相两站渐变,不再三色 */
-  --vp-home-hero-name-color: transparent;
-  --vp-home-hero-name-background: linear-gradient(
-    120deg,
-    #1b3c2b 25%,
-    #4d7d5c 90%
-  );
+  /* hero 名字:纯品牌色,不设 name-color/name-background,
+     回落 --vp-c-brand-1 纯色(2026-10 主题审核批:字体渐变全站禁用) */
 
   /* logo 后面一圈同色晕,代替空白 */
   --vp-home-hero-image-background-image: radial-gradient(
@@ -87,12 +82,6 @@
   --vp-button-brand-bg: #2f6648;
   --vp-button-brand-hover-bg: #3f7a58;
   --vp-button-brand-active-bg: #24503a;
-
-  --vp-home-hero-name-background: linear-gradient(
-    120deg,
-    #a9c48f 20%,
-    #6f8f5a 90%
-  );
 
   --vp-home-hero-image-background-image: radial-gradient(
     closest-side,
@@ -207,3 +196,10 @@
     transform: none;
   }
 }
+
+/* hero 名用纯品牌色,不用 VitePress 默认渐变名 */
+:root {
+  --vp-home-hero-name-color: var(--vp-c-brand-1);
+  --vp-home-hero-name-background: transparent;
+}
+

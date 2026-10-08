@@ -12,6 +12,8 @@
  * at a time. */
 #ifndef _WIN32
 
+#include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #if defined(__APPLE__)
@@ -130,7 +132,27 @@ static int teardown_serve(void **state)
     lua_close(L);
     L = NULL;
     unsetenv("LUNA_SOCK_DIR");
-    assert_int_equal(rmdir(sockdir), 0);
+    if (rmdir(sockdir) != 0) {
+        /* forensics: name whatever stopped the cleanup — on macOS a
+         * leftover socket file here is the whole rebind mystery */
+        char left[512] = "";
+        DIR *d = opendir(sockdir);
+        if (d) {
+            struct dirent *e;
+            size_t n = 0;
+            while ((e = readdir(d)) != NULL && n < sizeof(left) - 2) {
+                if (e->d_name[0] == '.' &&
+                    (e->d_name[1] == '\0' ||
+                     (e->d_name[1] == '.' && e->d_name[2] == '\0')))
+                    continue;
+                n += (size_t)snprintf(left + n, sizeof(left) - n, "%s%s",
+                                      n ? " " : "", e->d_name);
+            }
+            closedir(d);
+        }
+        fail_msg("rmdir(%s): %s; entries left: [%s]", sockdir,
+                 strerror(errno), left);
+    }
     return 0;
 }
 
@@ -142,11 +164,9 @@ static void test_socket_file_created(void **state)
              (int)getpid()); /* kernel.pid() is this process */
     assert_string_equal(eval_string("return S.path_for(kernel.pid())"),
                         expected);
-    /* fopen on a socket file fails (ENXIO); rename proves existence */
-    assert_string_equal(eval_string(
-                            "return tostring(os.rename(S.path_for(kernel.pid()),"
-                            " S.path_for(kernel.pid())))"),
-                        "true");
+    /* existence and owner-only-ness are the stat pair below; the old
+     * rename probe died on macOS, where rename(2) refuses socket files
+     * (EPERM) while Linux no-ops the same-name rename */
     /* and it is owner-only from creation: the umask wraps the bind */
     struct stat st;
     assert_int_equal(stat(expected, &st), 0);
@@ -378,6 +398,44 @@ static void test_sigusr1_then_clean_exit(void **state)
     assert_int_equal(access(path, F_OK), -1);
 }
 
+/* Wait (up to 10s) for a freshly exec'd luna child to bind its attach
+ * socket. Bind failures inside the child are quiet by design (attach
+ * is a convenience, luna.lua swallows them), so on timeout this drains
+ * the child's own stdout/stderr pipe — the only place its death note
+ * lands — kills the leftover, and returns the wire for fail_msg. */
+static const char *wait_child_socket(pid_t child, int wire_rd,
+                                     const char *path)
+{
+    static char wire[2048];
+    int waited = 0;
+    while (waited < 10000 && access(path, F_OK) != 0) {
+        usleep(20 * 1000);
+        waited += 20;
+    }
+    if (access(path, F_OK) == 0)
+        return NULL;
+    size_t got = 0;
+    fcntl(wire_rd, F_SETFL, O_NONBLOCK);
+    while (got + 1 < sizeof(wire)) {
+        ssize_t n = read(wire_rd, wire + got, sizeof(wire) - 1 - got);
+        if (n <= 0)
+            break;
+        got += (size_t)n;
+    }
+    wire[got] = '\0';
+    kill(child, SIGKILL);
+    waitpid(child, NULL, 0);
+    return wire;
+}
+
+#define WAIT_CHILD_SOCKET_OR_WIRE(child, wire_fd, pathvar)                 \
+    do {                                                                   \
+        const char *w_ = wait_child_socket((child), (wire_fd), (pathvar)); \
+        if (w_)                                                            \
+            fail_msg("child %d never bound %s; wire=[%s]", (int)(child),   \
+                     pathvar, w_);                                         \
+    } while (0)
+
 /* The attach channel's reason to exist: a busy — even looping — script
  * stays reachable from `luna --attach`. No line editor is involved, so
  * the only poll points are the kernel's count hook (every 200k
@@ -414,12 +472,9 @@ static void test_attach_reaches_a_busy_script(void **state)
      * instruction, so the wait is only about process startup */
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
-    int waited = 0;
-    while (waited < 10000 && access(path, F_OK) != 0) {
-        usleep(20 * 1000);
-        waited += 20;
-    }
+    WAIT_CHILD_SOCKET_OR_WIRE(pid, pipes[0], path);
     assert_int_equal(access(path, F_OK), 0);
+    int waited = 0;
 
     /* the client runs headless (piped stdin): replies land on stdout */
     char cmd[1024];
@@ -508,12 +563,9 @@ static void test_attach_shows_error_frames_on_stderr(void **state)
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
-    int waited = 0;
-    while (waited < 10000 && access(path, F_OK) != 0) {
-        usleep(20 * 1000);
-        waited += 20;
-    }
+    WAIT_CHILD_SOCKET_OR_WIRE(pid, pipes[0], path);
     assert_int_equal(access(path, F_OK), 0);
+    int waited = 0;
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "%s --attach %d < %s 2>&1", LUNA_BINARY,
@@ -577,12 +629,9 @@ static void test_attach_reports_when_the_target_dies(void **state)
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
-    int waited = 0;
-    while (waited < 10000 && access(path, F_OK) != 0) {
-        usleep(20 * 1000);
-        waited += 20;
-    }
+    WAIT_CHILD_SOCKET_OR_WIRE(pid, pipes[0], path);
     assert_int_equal(access(path, F_OK), 0);
+    int waited = 0;
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "%s --attach %d < %s 2>&1", LUNA_BINARY,
@@ -679,12 +728,9 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
-    int waited = 0;
-    while (waited < 10000 && access(path, F_OK) != 0) {
-        usleep(20 * 1000);
-        waited += 20;
-    }
+    WAIT_CHILD_SOCKET_OR_WIRE(target, tpipe[0], path);
     assert_int_equal(access(path, F_OK), 0);
+    int waited = 0;
 
     int master;
     pid_t attacher = forkpty(&master, NULL, NULL, NULL);
@@ -761,12 +807,9 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
-    int waited = 0;
-    while (waited < 10000 && access(path, F_OK) != 0) {
-        usleep(20 * 1000);
-        waited += 20;
-    }
+    WAIT_CHILD_SOCKET_OR_WIRE(target, tpipe[0], path);
     assert_int_equal(access(path, F_OK), 0);
+    int waited = 0;
 
     int master;
     pid_t attacher = forkpty(&master, NULL, NULL, NULL);
@@ -929,7 +972,8 @@ static void test_start_idempotent_and_disabled(void **state)
                             "S.enabled = false\n"
                             "local ok, err = S.start()\n"
                             "S.enabled = true\n"
-                            "assert(S.start(), 'listener back for later tests')\n"
+                            "local ok2, err2 = S.start()\n"
+                            "assert(ok2, 'listener back for later tests: ' .. tostring(err2))\n"
                             "C = require('socket.unix')()\n"
                             "assert(C:connect(S.path_for(kernel.pid())))\n"
                             "C:settimeout(2)\n"
@@ -950,7 +994,8 @@ static void test_bind_failure_reports_error(void **state)
         "os.execute('mkdir -p \"' .. path .. '\"/jail')\n"
         "local ok, err = S.start()\n"
         "os.execute('rm -rf \"' .. path .. '\"')\n"
-        "assert(S.start(), 'bind works again once the squat is gone')\n"
+        "local ok3, err3 = S.start()\n"
+        "assert(ok3, 'bind works again once the squat is gone: ' .. tostring(err3))\n"
         "C = require('socket.unix')()\n"
         "assert(C:connect(S.path_for(kernel.pid())))\n"
         "C:settimeout(2)\n"
@@ -976,7 +1021,8 @@ static void test_start_without_socket_unix(void **state)
                             "package.preload['socket.unix'] = sup\n"
                             "package.loaded['luna.serve'] = nil\n"
                             "S = require('luna.serve')\n"
-                            "assert(S.start(), 'listener restored')\n"
+                            "local ok4, err4 = S.start()\n"
+                            "assert(ok4, 'listener restored: ' .. tostring(err4))\n"
                             "C = require('socket.unix')()\n"
                             "assert(C:connect(S.path_for(kernel.pid())))\n"
                             "C:settimeout(2)\n"

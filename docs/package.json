@@ -9,7 +9,9 @@
   "devDependencies": {
     "vitepress": "^2.0.0-alpha.20"
   },
-  "overrides": {
-    "source-map-js": "^1.2.2"
+  "pnpm": {
+    "overrides": {
+      "source-map-js": "^1.2.2"
+    }
   }
 }

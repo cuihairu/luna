@@ -99,11 +99,18 @@ if(WIN32)
 else()
     list(APPEND LUASOCKET_SOURCES
             deps/luasocket/src/usocket.c
-            # unix domain sockets: the attach/serve channel (luna --attach)
-            deps/luasocket/src/unix.c deps/luasocket/src/unixstream.c
+            # unix domain sockets: the attach/serve channel (luna --attach).
+            # unixstream comes from the patched copy next door: upstream
+            # binds with sizeof(sun_family) + len, one byte short on macOS
+            # (1-byte sa_family_t), landing the socket file one character
+            # before the path — see the note in that file
+            deps/luasocket/src/unix.c
+            deps/luasocket-patched/unixstream.c
             deps/luasocket/src/unixdgram.c)
 endif()
 add_library(luasocket STATIC ${LUASOCKET_SOURCES})
+# the patched unixstream copy still compiles against the vendored headers
+target_include_directories(luasocket PRIVATE "${PROJECT_SOURCE_DIR}/deps/luasocket/src")
 if(NOT WIN32)
     # inet_pton/inet_ntop fallback for platforms without them. Upstream's
     # Windows build leaves this unset: ws2tcpip.h declares inet_pton with

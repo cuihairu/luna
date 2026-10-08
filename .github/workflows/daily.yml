@@ -17,8 +17,9 @@ jobs:
   nightly:
     name: ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
-    # Windows 是首飞试运行:源码还有未打 Windows 守卫的 POSIX 面
-    # (getpid/kill/zlib 系统库),红了不拖垮夜间绿,待移植落定再转正
+    # 试运行豁免现只剩 macOS(病根见下方矩阵注释);Windows 已转正
+    # (2026-10-08)——POSIX 面守卫全落,CMake 工作流 windows 全量测试
+    # 连日绿,构建红回归拉响夜间
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -43,7 +44,7 @@ jobs:
           - os: windows-latest
             artifact: luna-nightly-windows-x86_64
             binary: luna.exe
-            experimental: true
+            experimental: false
 
     steps:
       - uses: actions/checkout@v4
@@ -52,10 +53,9 @@ jobs:
         if: runner.os != 'Windows'
         run: cmake -B build -DCMAKE_BUILD_TYPE=$BUILD_TYPE
 
-      # 试运行探针:runner 预装 vcpkg,静态三元组装 zlib 让 Configure 过关,
-      # 编译器才能把下一层未移植面全数报出来——正式口径(源码 vendor 与否)
-      # 是设计裁定,维持 todo 转正清单待决
-      - name: Provision zlib (Windows probe)
+      # zlib 依赖走 runner 预装 vcpkg 的静态三元组——正式口径(源码
+      # vendor 与否)是设计裁定,待决前维持 vcpkg(见 todo 转正清单)
+      - name: Provision zlib (Windows)
         if: runner.os == 'Windows'
         run: vcpkg install zlib:x64-windows-static
 
@@ -71,7 +71,7 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --build build --config Release -j
 
-      # 试运行腿(Windows/macOS)的测试红不拦 Stage:产物要出,失败记在
+      # 试运行腿(macOS)的测试红不拦 Stage:产物要出,失败记在
       # 步骤图标里,转正后关掉
       - name: Test
         if: runner.os != 'Windows'

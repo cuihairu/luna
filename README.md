@@ -1,3 +1,5 @@
+[English](README.md) | [中文](README.zh.md)
+
 <p align="center">
   <img src="assets/logo.svg" alt="luna logo" width="140"/>
 </p>
@@ -14,46 +16,46 @@
 </p>
 
 <p align="center">
-  <img src="assets/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码,输出与高亮为真实抓取" width="560"/>
+  <img src="assets/terminal.svg" alt="A luna terminal session: REPL evaluation, a multiline function definition, %timeit and JSON encoding; output and highlighting captured from a real session" width="560"/>
 </p>
 
-## 定位
+## What luna is
 
-luna 是**开箱即用的 Lua 通用运行时**,服务三类场景:脚本(scripting)、开发工具(tooling)与轻量服务(lightweight services)。一个二进制里带齐 REPL、现代标准库、Node 式模块解析、目录插件与可选异步 I/O——*Lua with a REPL, batteries-included standard library, Node-style modules, plugins, package management and opt-in async I/O*。
+luna is a **batteries-included, general-purpose Lua runtime** serving three kinds of work: scripting, tooling, and lightweight services. A single binary ships a REPL, a modern standard library, Node-style module resolution, directory-based plugins, package management, and opt-in async I/O.
 
-Lua 生态里趁手的通用工具不多,每开一个新项目,周边设施都要先搭一遍。luna 想把这一层提前备好,把时间还给业务本身。
+The Lua ecosystem has few general-purpose tools worth reaching for: every new project starts by assembling the surrounding infrastructure. luna prepares that layer in advance and hands the time back to the work itself.
 
-Node.js 只是**架构参考,不是产品身份**:luna 先是 Lua 运行时,再谈 Node 式体验——模块解析、标准库形状这些工程习惯对齐 Node,解释都在文档站[架构设计](https://cuihairu.github.io/luna/architecture)的对照表里;身份与内核仍是 Lua。
+Node.js is an **architectural reference, not a product identity**. luna is a Lua runtime first; the Node-style experience comes second. Engineering habits such as module resolution and the shape of the standard library follow Node, and the comparison table lives in the [architecture notes](https://cuihairu.github.io/luna/architecture) on the docs site. Identity and core remain Lua.
 
-IPython 式的 REPL 是其中一件工具,不是全部。
+The IPython-style REPL is one of these tools, not the whole of luna.
 
-## 三十秒
+## Thirty seconds
 
 ```bash
-luna                     # 裸 REPL:查值、试库、拼代码片段
-luna build.lua           # 跑一个脚本文件(构建/自动化/工具,像 lua)
-luna -e 'require("http").serve(...)'   # 一行起一个轻量服务
+luna                     # bare REPL: inspect values, try libraries, sketch snippets
+luna build.lua           # run a script file (build / automation / tooling, like lua)
+luna -e 'require("http").serve(...)'   # a lightweight service in one line
 ```
 
-接口服务一行也够,`^C` 即停:
+An HTTP service is one line as well; `^C` stops it:
 
 ```bash
 luna -e 'require("http").serve(function(req, res)
   res:json({ hello = "luna", path = req.path }) end)'
 ```
 
-TCP echo 同样一行(收一行回一行,`^C` 即停),另开终端 `echo hi | nc 127.0.0.1 9000` 即见 `echo: hi`:
+TCP echo is equally one line (reads a line, echoes it back; `^C` stops it). From another terminal, `echo hi | nc 127.0.0.1 9000` prints `echo: hi`:
 
 ```bash
 luna -e 'require("net").serve("*", 9000, function(c)
   c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
 ```
 
-REPL 里 `6 * 7` 回答 `Out[1]: 42`,`%timeit` 随手测性能,`%whos` 看当前全部全局;细节见[CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl)。
+In the REPL, `6 * 7` answers `Out[1]: 42`, `%timeit` measures performance on the spot, and `%whos` lists every global defined so far. Details in [CLI & REPL](https://cuihairu.github.io/luna/guide/cli-repl).
 
-## 获取
+## Get luna
 
-**一键安装**(装最新每日构建进 PATH,装完即验 `luna --version`,重跑即升级):
+**One-line install** (installs the latest daily build into PATH, verifies with `luna --version` once done; rerun to upgrade):
 
 ```bash
 # Linux / macOS
@@ -65,44 +67,44 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`(Windows 资产待源代码移植收尾后自动上线,见下)。
+Artifacts ship as a **rolling nightly Release** (fixed tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly): every green run clears the old assets, uploads fresh ones, and re-publishes, with `.sha256` sidecars for verification). Assets on a public repository are public and pull anonymously, no credentials of any kind; the installer self-verifies with `luna --version`. Actions artifacts are per-run local copies, not a delivery channel. Current artifact matrix: `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `windows-x86_64`.
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项为首飞试运行(源码的 Windows 移植未完,尚无产物),红不拖垮其余平台;macOS 项构建与产物已通,运行期测试按平台移植清单收敛中(见 todo)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
-- **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
+- **Daily build**: the [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) workflow runs on a schedule (UTC 01:23): Release-type build plus smoke checks, publishing the rolling nightly Release. It is a pure artifact pipeline; full test coverage is the job of the CI on every push, and the nightly window does not carry the network-dependent rocks suite. The platform zips `luna-nightly-<os>-<arch>` (the binary plus the `luna_modules/` module sidecar; the binary resolves the Lua strategy layer from its own directory first) and their `.sha256` sidecars are cleared and re-uploaded each run; run-page artifacts (`pkg-<os>-<arch>` for 3 days, aggregate `daily-build` for 14 days) are reference copies only. The Windows leg now builds green and ships with the nightly, still under the canary exemption (a red leg does not fail the other platforms); macOS builds and artifacts are green, with runtime tests converging per the porting checklist (see todo). The nightly Release is the lifeline; the artifact page and the Release page corroborate each other.
+- **From source**: the only dependencies are CMake ≥ 3.16 and a C compiler; everything else lives in `deps/`:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
-ctest --test-dir build       # 全部测试组应全绿
+ctest --test-dir build       # every test suite should be green
 ```
 
-macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYMENT_TARGET="10.6"`;可选 `libssl-dev` 启用 crypto 模块。详见[快速上手](https://cuihairu.github.io/luna/guide/getting-started)。
+On macOS, `brew install pkg-config autoconf cmake` and `export MACOSX_DEPLOYMENT_TARGET="10.6"`; the optional `libssl-dev` enables the crypto module. See [Getting started](https://cuihairu.github.io/luna/guide/getting-started).
 
-## 工具集
+## Toolset
 
-| 能力 | 说明 | 文档 |
+| Capability | Description | Docs |
 | --- | --- | --- |
-| REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回、`In[n]`/`Out[n]` | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%eval` `%load` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 运行时内省 | `luna ps` 列出可 attach 进程(live/stale + 命令行);`%info` `%modules` `%stats` `%gc` `%globals` 探活本进程;`luna --attach <pid>` 远程同款 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/guide/loop) |
-| 异步任务 | `task`:`task.run/await/sleep/promise/promisify`,句柄 `:cancel` 协作取消;`%tasks` 观测 | [异步任务](https://cuihairu.github.io/luna/guide/tasks) |
-| 脚手架 | `luna new plugin/package/script <name>` 内置模板一键生成起步代码;`--list` 列模板,已存在即拒 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
-| 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
-| 沙箱运行时 | `luna --sandbox`:模块白名单、禁原生加载、无子进程/文件写/环境,`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 限算力与内存 | [沙箱运行时](https://cuihairu.github.io/luna/guide/sandbox) |
-| 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
-| 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
-| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
-| 日志 | `logging`:六级阈值,console/文件/滚动文件/socket 等 log4j 式 appender(lualogging 1.8,随二进制) | [标准库 · logging](https://cuihairu.github.io/luna/stdlib/logging) |
-| 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |
-| 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/architecture) |
+| REPL | replxx line editing, scintillua/LPeg live highlighting, `^C` interruption, history recall, `In[n]`/`Out[n]` | [CLI & REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
+| Magic commands | `%time` `%timeit` `%hist` `%whos` `%eval` `%load` `%reset` `%plugins` `%help` …, registrable by plugins | [CLI & REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
+| Runtime introspection | `luna ps` lists attachable processes (live/stale + command line); `%info` `%modules` `%stats` `%gc` `%globals` probe the current process; `luna --attach <pid>` offers the same remotely | [CLI & REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
+| Event loop | `loop`: timers, TCP/Unix/TLS, async fs, signals, subprocesses; automatic drain at script end | [Event loop](https://cuihairu.github.io/luna/guide/loop) |
+| Async tasks | `task`: `task.run/await/sleep/promise/promisify`, handles support cooperative `:cancel`; `%tasks` to observe | [Async tasks](https://cuihairu.github.io/luna/guide/tasks) |
+| Scaffolding | `luna new plugin/package/script <name>` generates starter code from built-in templates; `--list` enumerates templates, refuses existing targets | [Examples & scaffolding](https://cuihairu.github.io/luna/guide/examples) |
+| Official examples | Eight ready-to-run examples in `examples/`: CLI, HTTP/TCP services, scraping, build, game scripting, automation; documented output is captured from real runs | [Examples & scaffolding](https://cuihairu.github.io/luna/guide/examples) |
+| Sandbox runtime | `luna --sandbox`: module whitelist, native loading disabled, no subprocesses / file writes / environment; `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` cap compute and memory | [Sandbox runtime](https://cuihairu.github.io/luna/guide/sandbox) |
+| One-line servers | `luna serve` for a static directory; `http.serve()` static or programmable; `net.serve()` TCP echo | [Standard library · http](https://cuihairu.github.io/luna/stdlib/http) |
+| Modules | Relative require, `luna_modules/` walk-up, `package.json`-style manifest `main`, `package.loaded` cache semantics | [Module system](https://cuihairu.github.io/luna/guide/modules) |
+| Standard library | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto bind mature C libraries or LPeg; path/util/events/stream are pure Lua following Node semantics; shipped inside the binary | [Standard library overview](https://cuihairu.github.io/luna/stdlib/) |
+| Logging | `logging`: six threshold levels, log4j-style appenders (console / file / rolling file / socket; lualogging 1.8, bundled) | [Standard library · logging](https://cuihairu.github.io/luna/stdlib/logging) |
+| Plugins | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`, manifest + entry point, isolated failures | [Plugin development](https://cuihairu.github.io/luna/guide/plugins) |
+| Architecture | Thin C kernel + embedded Lua strategy layer + extension points; design comparisons and event-loop rationale | [Architecture](https://cuihairu.github.io/luna/architecture) |
 
-## 文档
+## Documentation
 
-- 文档站:**https://cuihairu.github.io/luna** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架 / 沙箱运行时)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;
-- 源码在 [`docs/`](docs/),VitePress:`cd docs && pnpm install && pnpm run docs:dev` 本地预览。
+- Docs site: **https://cuihairu.github.io/luna** — guides (getting started / CLI & REPL / module system / plugin development / package management / event loop / async tasks / examples & scaffolding / sandbox runtime), per-module standard-library reference, configuration and environment variables, build and testing, FAQ, architecture;
+- Source lives in [`docs/`](docs/), built with VitePress: `cd docs && pnpm install && pnpm run docs:dev` for a local preview.
 
-## 开发
+## Development
 
-- 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/other/build);
-- 推送 main 后 CI 自动构建并发布文档站到 Pages(部署不计为发布)。
+- Tests: sixteen ctest suites (luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum); run `ctest --test-dir build` after changes. Coverage uses a separate Profiling-instrumented tree, see [Build and testing](https://cuihairu.github.io/luna/other/build);
+- Pushes to main trigger CI to build and publish the docs site to Pages (deployment does not count as a release).

@@ -306,6 +306,59 @@ static int pty_collect(int fd, char *buf, size_t cap, int timeout_ms)
     return (int)got;
 }
 
+/* Failure-path sweep: a cmocka assert longjmps straight past every
+ * kill/waitpid/close tail a test owns, so children and pty masters
+ * registered here are reaped by the per-case teardown instead. This is
+ * not tidiness for its own sake: a pty master left open while the
+ * exec'd child holds the slave strands the pair in the host's finite
+ * pty pool, and the NEXT suite's forkpty then fails with -1 (the
+ * macOS runner's linedit group died exactly that way behind this
+ * group's failures). kill/waitpid on an already-reaped pid fail
+ * harmlessly, and the teardown runs right after each case, far inside
+ * any pid-reuse window. */
+static pid_t sweep_kids[4];
+static int sweep_n;
+static int sweep_master = -1;
+
+static void track_child(pid_t pid)
+{
+    if (pid > 0 &&
+        sweep_n < (int)(sizeof(sweep_kids) / sizeof(sweep_kids[0])))
+        sweep_kids[sweep_n++] = pid;
+}
+
+static void track_pty(pid_t pid, int master)
+{
+    track_child(pid);
+    if (master >= 0)
+        sweep_master = master;
+}
+
+static void sweep_done(pid_t pid) /* normal-path reap: stop tracking */
+{
+    for (int i = 0; i < sweep_n; i++) {
+        if (sweep_kids[i] == pid) {
+            sweep_kids[i] = sweep_kids[--sweep_n];
+            return;
+        }
+    }
+}
+
+static int sweep_teardown(void **state)
+{
+    (void)state;
+    if (sweep_master >= 0) {
+        close(sweep_master);
+        sweep_master = -1;
+    }
+    for (int i = 0; i < sweep_n; i++) {
+        kill(sweep_kids[i], SIGKILL);
+        waitpid(sweep_kids[i], NULL, 0);
+    }
+    sweep_n = 0;
+    return 0;
+}
+
 /* SIGUSR1 must release a blocked line editor on a real pty: the wake
  * thread's synthetic Enter commits the empty line, the prompt is
  * repainted (In[n] intentionally not advanced), and the REPL loop is
@@ -322,6 +375,7 @@ static void test_sigusr1_releases_idle_editor(void **state)
         execv(LUNA_BINARY, argv); /* inherits LUNA_SOCK_DIR */
         _exit(127);
     }
+    track_pty(pid, master); /* the teardown sweep owns the reap+close */
     char buf[4096];
     int n = pty_collect(master, buf, sizeof(buf), 10000);
     assert_int_not_equal(n, 0);
@@ -337,7 +391,6 @@ static void test_sigusr1_releases_idle_editor(void **state)
     kill(pid, SIGTERM);
     int wstatus;
     waitpid(pid, &wstatus, 0);
-    close(master);
     /* the killed REPL cannot clean up after itself */
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
@@ -360,6 +413,7 @@ static void test_sigusr1_then_clean_exit(void **state)
         execv(LUNA_BINARY, argv); /* inherits LUNA_SOCK_DIR */
         _exit(127);
     }
+    track_pty(pid, master);
     char buf[4096];
     int n = pty_collect(master, buf, sizeof(buf), 10000);
     assert_int_not_equal(n, 0);
@@ -383,7 +437,6 @@ static void test_sigusr1_then_clean_exit(void **state)
         usleep(20 * 1000);
         waited += 20;
     }
-    close(master);
     if (waited >= 5000) {
         kill(pid, SIGKILL);
         waitpid(pid, &wstatus, 0);
@@ -425,6 +478,7 @@ static const char *wait_child_socket(pid_t child, int wire_rd,
     wire[got] = '\0';
     kill(child, SIGKILL);
     waitpid(child, NULL, 0);
+    sweep_done(child);
     return wire;
 }
 
@@ -467,6 +521,7 @@ static void test_attach_reaches_a_busy_script(void **state)
         _exit(127);
     }
     close(pipes[1]);
+    track_child(pid); /* the teardown sweep owns the reap */
 
     /* serve.start() opens the socket before the script's first
      * instruction, so the wait is only about process startup */
@@ -560,6 +615,7 @@ static void test_attach_shows_error_frames_on_stderr(void **state)
         _exit(127);
     }
     close(pipes[1]);
+    track_child(pid); /* the teardown sweep owns the reap */
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
@@ -626,6 +682,7 @@ static void test_attach_reports_when_the_target_dies(void **state)
         _exit(127);
     }
     close(pipes[1]);
+    track_child(pid); /* the teardown sweep owns the reap */
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)pid);
@@ -680,6 +737,7 @@ static void test_attach_reports_when_the_target_dies(void **state)
         usleep(20 * 1000);
         waited += 20;
     }
+    sweep_done(pid);
     close(pipes[0]);
 
     const char *second = "return 2\n";
@@ -725,6 +783,7 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
         _exit(127);
     }
     close(tpipe[1]);
+    track_child(target); /* the teardown sweep owns the reap */
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
@@ -743,6 +802,7 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
         execv(LUNA_BINARY, argv);
         _exit(127);
     }
+    track_pty(attacher, master); /* the teardown sweep owns reap+close */
 
     char wire[32768];
     wire[0] = '\0';
@@ -757,6 +817,7 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
      * reply) or hit EPIPE at once (went away). Either way exit 1. */
     assert_int_equal(kill(target, SIGKILL), 0);
     waitpid(target, NULL, 0);
+    sweep_done(target);
     assert_int_equal(write(master, "z\t", 2), 2);
     pty_collect(master, wire, sizeof(wire), 500);
     assert_int_equal(write(master, "x\r", 2), 2);
@@ -774,12 +835,10 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
     if (waited >= 30000) {
         kill(attacher, SIGKILL);
         waitpid(attacher, &status, 0);
-        close(master);
         fail_msg("attacher never left; wire=[%s]", wire);
     }
     assert_true(WIFEXITED(status));
     assert_int_equal(WEXITSTATUS(status), 1);
-    close(master);
     unlink(marker);
 }
 
@@ -804,6 +863,7 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
         _exit(127);
     }
     close(tpipe[1]);
+    track_child(target); /* the teardown sweep owns the reap */
 
     char path[256];
     snprintf(path, sizeof(path), "%s/luna-%d.sock", sockdir, (int)target);
@@ -822,6 +882,7 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
         execv(LUNA_BINARY, argv);
         _exit(127);
     }
+    track_pty(attacher, master); /* the teardown sweep owns reap+close */
 
     char wire[32768];
     wire[0] = '\0';
@@ -859,7 +920,6 @@ static void test_attach_pty_completes_and_leaves_via_exit_magic(void **state)
     }
     assert_true(WIFEXITED(status));
     assert_int_equal(WEXITSTATUS(status), 0);
-    close(master);
 
     /* the target survived the client's %exit and leaves via marker */
     FILE *m = fopen(marker, "w");
@@ -894,6 +954,7 @@ static void test_console_percent_clear_paints_the_screen(void **state)
         execv(LUNA_BINARY, argv); /* inherits LUNA_SOCK_DIR */
         _exit(127);
     }
+    track_pty(pid, master); /* the teardown sweep owns reap+close */
 
     char wire[32768];
     wire[0] = '\0';
@@ -914,7 +975,6 @@ static void test_console_percent_clear_paints_the_screen(void **state)
     }
     assert_true(WIFEXITED(status));
     assert_int_equal(WEXITSTATUS(status), 0);
-    close(master);
 }
 
 /* %exit from the console leaves with code 0 (the magic calls os.exit
@@ -932,6 +992,7 @@ static void test_console_percent_exit_leaves_cleanly(void **state)
         execv(LUNA_BINARY, argv);
         _exit(127);
     }
+    track_pty(pid, master); /* the teardown sweep owns reap+close */
 
     char wire[32768];
     wire[0] = '\0';
@@ -949,7 +1010,6 @@ static void test_console_percent_exit_leaves_cleanly(void **state)
     }
     assert_true(WIFEXITED(status));
     assert_int_equal(WEXITSTATUS(status), 0);
-    close(master);
     /* %exit bypasses the clean shutdown (os.exit), so the console's
      * socket file needs the manual sweep */
     char path[256];
@@ -1236,6 +1296,7 @@ static void test_a_broken_attach_poll_never_kills_the_chunk(void **state)
         _exit(127);
     }
     close(pipes[1]);
+    track_child(pid); /* the teardown sweep owns the reap */
 
     /* "spin" comes off stderr (unbuffered into a pipe) once the poll is
      * installed and the loop is running; ticks fail from then on */
@@ -1324,17 +1385,17 @@ int main(void)
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
-        cmocka_unit_test(test_sigusr1_releases_idle_editor),
-        cmocka_unit_test(test_sigusr1_then_clean_exit),
-        cmocka_unit_test(test_attach_reaches_a_busy_script),
+        cmocka_unit_test_setup_teardown(test_sigusr1_releases_idle_editor, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_sigusr1_then_clean_exit, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_attach_reaches_a_busy_script, NULL, sweep_teardown),
         cmocka_unit_test(test_attach_reports_a_failed_connect),
-        cmocka_unit_test(test_attach_shows_error_frames_on_stderr),
-        cmocka_unit_test(test_attach_reports_when_the_target_dies),
-        cmocka_unit_test(test_attach_pty_completes_and_leaves_via_exit_magic),
-        cmocka_unit_test(test_attach_pty_when_the_target_dies_mid_session),
-        cmocka_unit_test(test_console_percent_clear_paints_the_screen),
-        cmocka_unit_test(test_console_percent_exit_leaves_cleanly),
-        cmocka_unit_test(test_a_broken_attach_poll_never_kills_the_chunk),
+        cmocka_unit_test_setup_teardown(test_attach_shows_error_frames_on_stderr, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_attach_reports_when_the_target_dies, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_attach_pty_completes_and_leaves_via_exit_magic, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_attach_pty_when_the_target_dies_mid_session, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_console_percent_clear_paints_the_screen, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_console_percent_exit_leaves_cleanly, NULL, sweep_teardown),
+        cmocka_unit_test_setup_teardown(test_a_broken_attach_poll_never_kills_the_chunk, NULL, sweep_teardown),
     };
     /* group-level setup: one shared state, tests build on each other
      * (statement then expression), order as declared */

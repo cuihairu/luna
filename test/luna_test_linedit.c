@@ -41,6 +41,7 @@
 #include <pty.h>
 #endif
 #include <setjmp.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -746,6 +747,30 @@ static int wait_for_prompt(int master, const char *needle, int timeout_ms)
     return 0;
 }
 
+/* Failure-path sweep for the pty case: a cmocka assert longjmps past
+ * the kill/waitpid/close tail below, and a master left open while the
+ * re-exec'd child holds the slave strands the pair in the host's
+ * finite pty pool — on the macOS runner that surfaced as the NEXT
+ * suite's forkpty failing with -1. The per-case teardown reaps what
+ * the test body did not reach. */
+static int pty_master = -1;
+static pid_t pty_child = -1;
+
+static int pty_case_teardown(void **state)
+{
+    (void)state;
+    if (pty_master >= 0) {
+        close(pty_master);
+        pty_master = -1;
+    }
+    if (pty_child > 0) {
+        kill(pty_child, SIGKILL);
+        waitpid(pty_child, NULL, 0);
+        pty_child = -1;
+    }
+    return 0;
+}
+
 static void test_read_cancels_wakes_and_reports_eof(void **state)
 {
     (void)state;
@@ -755,7 +780,10 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
     ws.ws_col = 80;
     int master;
     pid_t pid = forkpty(&master, NULL, NULL, &ws);
-    assert_int_not_equal(pid, -1);
+    if (pid == -1) {
+        fail_msg("forkpty: %s (errno %d)", strerror(errno), errno);
+        return;
+    }
     if (pid == 0) {
         if (master > 2)
             close(master);
@@ -763,6 +791,8 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
         execv(self_path, child_argv);
         _exit(127);
     }
+    pty_master = master; /* the teardown sweep owns the reap+close */
+    pty_child = pid;
 
     /* ^C: the line is gone, the session is not */
     assert_true(wait_for_prompt(master, "> ", 5000));
@@ -789,7 +819,6 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
         usleep(50 * 1000);
         waited += 50;
     }
-    close(master);
     if (waited >= 5000) {
         kill(pid, SIGKILL);
         waitpid(pid, &wstatus, 0);
@@ -854,7 +883,8 @@ int main(int argc, char **argv)
         cmocka_unit_test(test_history_save_into_a_missing_dir_reports),
         cmocka_unit_test(test_history_add_must_get_a_string),
         /* last: it re-executes this binary on a pty */
-        cmocka_unit_test(test_read_cancels_wakes_and_reports_eof),
+        cmocka_unit_test_setup_teardown(test_read_cancels_wakes_and_reports_eof,
+                                        NULL, pty_case_teardown),
     };
     return cmocka_run_group_tests(tests, setup_linedit, teardown_linedit);
 }

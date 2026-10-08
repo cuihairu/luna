@@ -1610,7 +1610,11 @@
   5. `test/luna_test_linedit.c(28)` `poll.h`——测试 harness 同修。
      **✅已修(2026-10-03)**。
   正式依赖口径(源码 vendor 与否)待决。daily.yml matrix windows 项
-  experimental:true 待转正。
+  experimental:true **✅已转正(2026-10-08,12c90bd)**:POSIX 面守卫全落
+  (luna_main/luna_line/luna_test_main 等),CMake 工作流 windows 全量
+  测试连日绿(37549008691 双腿 success 以降);转正首跑 run 37799557602
+  windows 腿 success——experimental:false 下构建红即拉响夜间。
+  macOS 腿 experimental 维持(运行期病根另立,见 macOS 节)。
 
   **1/2/3/5 消项实录(2026-10-03,run 37038767850 九处报错定清单)**:
   1. k_chmod 的 `_WIN32` 臂走 `_chmod(path,(int)m)`(`<io.h>`,CRT 的
@@ -1743,7 +1747,9 @@
     MSBuild 失败即停的调度特性意味着这张表是下界,修完上述后
     可能再浮出。
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
-  `continue-on-error` 随之归零(daily.yml 已注明)。
+  `continue-on-error` 随之归零(daily.yml 已注明)。**windows 侧已落
+  (2026-10-08,12c90bd;首跑 run 37799557602 windows 腿 success 实证)**;
+  macOS 侧待其运行期病根清零后再落。
 - **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,
   固定名 `daily-build` 产物 + `pkg-*`,3 天保留,不跑测试)与
   `daily.yml`(新,21:13 UTC + 手动,`luna-nightly-<os>-<arch>` 矩阵,

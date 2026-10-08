@@ -676,9 +676,9 @@ static void test_fs_watch_reports_events(void **state)
         "  if e then out = 'ERR:' .. e return end\n"
         "  got[#got + 1] = tostring(name) .. '|' .. ev\n"
         "end)\n"
-        "loop.setImmediate(function()\n"
+        "loop.setTimeout(function()\n"
         "  fs.writeFile('/tmp/luna-loop-fs-watch/note.txt', 'x', function() end)\n"
-        "end)\n"
+        "end, 300)\n"
         "loop.setTimeout(function()\n"
         "  local ok = #got >= 1\n"
         "  for _, s in ipairs(got) do\n"
@@ -687,12 +687,17 @@ static void test_fs_watch_reports_events(void **state)
         "      ok = false\n"
         "    end\n"
         "  end\n"
-        "  out = tostring(ok)\n"
+        "  out = ok and 'true' or ('got[' .. table.concat(got, ';') .. ']')\n"
         "  w:close()\n"
-        /* macOS FSEvents coalesces deliveries and a loaded runner can
-         * hold one well past 300ms; the check is membership and event
-         * type, never speed, so the window only guards the hang */
-        "end, 2000)\n"
+        /* the FIRST watch in the process races its own startup: the
+         * CF thread creates and starts the FSEvents stream only after
+         * watch() returns, and on macOS a write that lands before the
+         * start is never reported (widening the window didn't help —
+         * the event is lost, not slow; later watches in the same
+         * process run against a warm CF loop and deliver at once).
+         * The grace gives the stream time to go live; the raw dump in
+         * the failure branch names what actually arrived */
+        "end, 2300)\n"
         "assert(loop.run())\n"
         "return out"), "true");
 }

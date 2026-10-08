@@ -296,8 +296,29 @@ static void test_wake_thread_failure_leaves_the_session_running(void **state)
     tight.rlim_cur = 1;
     int limited = (setrlimit(RLIMIT_NPROC, &tight) == 0);
     start_wake_thread();
-    if (limited)
-        setrlimit(RLIMIT_NPROC, &saved); /* restore before any assertion */
+    if (limited) {
+        /* restore before any assertion — and make it stick. macOS has
+         * been observed accepting the tightening but refusing the raise
+         * back to `saved` (runner probe: rlim_cur still 1 twenty-four
+         * cases later, and the group's only fork failing EAGAIN for
+         * it), so climb down the ladder and verify: a test that cannot
+         * un-poison forks must fail here at the cause, not there */
+        if (setrlimit(RLIMIT_NPROC, &saved) != 0) {
+            struct rlimit climb = saved;
+            if (climb.rlim_cur > (rlim_t)4096)
+                climb.rlim_cur = (rlim_t)4096;
+            if (setrlimit(RLIMIT_NPROC, &climb) != 0) {
+                climb.rlim_cur = 64;
+                (void)setrlimit(RLIMIT_NPROC, &climb);
+            }
+        }
+        struct rlimit now;
+        assert_int_equal(getrlimit(RLIMIT_NPROC, &now), 0);
+        if (now.rlim_cur < 64)
+            fail_msg("RLIMIT_NPROC restore failed: rlim_cur %llu of %llu",
+                     (unsigned long long)now.rlim_cur,
+                     (unsigned long long)saved.rlim_cur);
+    }
     int after = thread_count();
     /* the pipe exists whether or not the helper did ... */
     assert_true(g_wake_fd >= 0);
@@ -783,13 +804,14 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
     int master;
     pid_t pid = -1;
     int perr = 0;
-    /* forkpty has been failing with EAGAIN (errno 35) on the macOS
-     * runner even with every earlier suite's ptys reaped: either a
-     * neighbour's brief pressure on the shared process table or this
-     * group's own RLIMIT_NPROC window (test_wake_thread_failure_...)
-     * leaving the soft limit behind. A bounded retry rides out the
-     * first; for the second the report below names the numbers that
-     * decide fork(), because macOS has no /proc to read them from */
+    /* forkpty failed with EAGAIN (errno 35) on the macOS runner every
+     * run for years: not the pty pool (the serve suites reaping theirs
+     * changed nothing) but this group's own RLIMIT_NPROC window in
+     * test_wake_thread_failure_... — the runner probe read rlim_cur 1
+     * here while the tightening test's restore had silently failed, so
+     * every fork after it failed deterministically. The restore now
+     * climbs and verifies at the cause; the retry and the report below
+     * stay as the tripwire should anything strand the limit again */
     for (int i = 0; i < 10; i++) {
         errno = 0;
         pid = forkpty(&master, NULL, NULL, &ws);

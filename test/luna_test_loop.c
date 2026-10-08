@@ -2281,15 +2281,27 @@ static void test_net_read_survives_multiple_chunks(void **state)
 static void test_net_sock_addr_tcp(void **state)
 {
     (void)state;
+    /* the two callbacks' ORDER is not part of the contract: the
+     * client's connect can land before the server's accept, and a
+     * bare cshared:close() in the client half then indexes nil — the
+     * loop swallows the raise, neither side ever closes, and run()
+     * blocks forever (this is exactly what timed out the macOS leg;
+     * the TLS namesake below already gates the same race) */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "out = 'none'\n"
-        "local cshared\n"
+        "local cshared, cdone, gaddr, gport, srv\n"
+        "local function finish()\n"
+        "  if not (cshared and cdone) then return end\n"
+        "  cshared:close()\n"
+        "  srv:close()\n"
+        "end\n"
         "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
         "  local p = c:peer()   -- the server sees the client's address\n"
         "  gport = p.port > 0\n"
         "  gaddr = p.address\n"
         "  cshared = c\n"
+        "  finish()\n"
         "end)\n"
         "local a = srv:address()\n"
         "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
@@ -2308,8 +2320,8 @@ static void test_net_sock_addr_tcp(void **state)
         "    tostring(gport),\n"
         "    tostring(not ok),\n"
         "  }, ',')\n"
-        "  cshared:close()\n"
-        "  srv:close()\n"
+        "  cdone = true\n"
+        "  finish()\n"
         "end)\n"
         "assert(loop.run())\n"
         "return out"),
@@ -2319,15 +2331,23 @@ static void test_net_sock_addr_tcp(void **state)
 static void test_net_sock_addr_pipe(void **state)
 {
     (void)state;
+    /* the same callback-order gate as the tcp case above */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "local path = '/tmp/luna-test-addrpipe.sock'\n"
         "os.remove(path)\n"
         "out = 'none'\n"
-        "local cshared\n"
+        "local cshared, cdone, gfamily, psrv, s0\n"
+        "local function finish()\n"
+        "  if not (cshared and cdone) then return end\n"
+        "  s0:close()\n"
+        "  cshared:close()\n"
+        "  psrv:close()\n"
+        "end\n"
         "psrv = net.listenPipe(path, function(e, c)\n"
         "  cshared = c\n"
         "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
+        "  finish()\n"
         "end)\n"
         "local a = psrv:address()\n"
         "net.connectPipe(path, function(e, s)\n"
@@ -2341,9 +2361,9 @@ static void test_net_sock_addr_pipe(void **state)
         "    tostring(sn.family == 'unix'),\n"
         "    gfamily,\n"
         "  }, ',')\n"
-        "  s:close()\n"
-        "  cshared:close()\n"
-        "  psrv:close()\n"
+        "  s0 = s\n"
+        "  cdone = true\n"
+        "  finish()\n"
         "end)\n"
         "assert(loop.run())\n"
         "return out"),

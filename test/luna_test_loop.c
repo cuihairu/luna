@@ -489,13 +489,18 @@ static void test_fs_access_probes_existence(void **state)
 static void test_fs_realpath_resolves(void **state)
 {
     (void)state;
+    /* the roundabout path must resolve to the same file the direct
+     * path names; the literal differs per platform (/tmp is a symlink
+     * to /private/tmp on macOS) so compare resolutions, not spelling */
     assert_string_equal(eval_string(
         "local fs = loop.fs\n"
         "out = 'none'\n"
         "fs.writeFile('/tmp/luna-loop-fs-real.txt', 'x', function(e)\n"
         "  assert(e == nil, e)\n"
-        "  fs.realpath('/tmp/../tmp/luna-loop-fs-real.txt', function(e2, p)\n"
-        "    out = tostring(e2 == nil) .. ':' .. tostring(p == '/tmp/luna-loop-fs-real.txt')\n"
+        "  fs.realpath('/tmp/luna-loop-fs-real.txt', function(e1, direct)\n"
+        "    fs.realpath('/tmp/../tmp/luna-loop-fs-real.txt', function(e2, p)\n"
+        "      out = tostring(e2 == nil) .. ':' .. tostring(e1 == nil and p == direct)\n"
+        "    end)\n"
         "  end)\n"
         "end)\n"
         "assert(loop.run())\n"
@@ -768,9 +773,13 @@ static void test_signal_self_delivery(void **state)
         "end)\n"
         "return 'armed'"), "armed");
     kill(getpid(), SIGUSR2);
+    /* the watcher reports the signal number: SIGUSR2 is 12 on Linux
+     * but 31 on macOS, so the expectation comes from the constant */
+    char expected[32];
+    snprintf(expected, sizeof(expected), "got:%d", SIGUSR2);
     assert_string_equal(eval_string(
         "assert(loop.run())\n"
-        "return out"), "got:12");
+        "return out"), expected);
 }
 
 static void test_signal_reserved_refused(void **state)
@@ -929,18 +938,27 @@ static void test_os_basics_report_sane_values(void **state)
 {
     (void)state;
     /* loop.os is synchronous — no run() needed, values come straight
-     * from libuv's info calls */
-    assert_string_equal(eval_string(
+     * from libuv's info calls. os.type() passes uname's sysname
+     * through, so the expectation is the OS this suite compiles on */
+    char snippet[512];
+    snprintf(snippet, sizeof(snippet),
         "local loop = loop or require('loop')\n"
         "local os = loop.os\n"
         "local la = os.loadavg()\n"
         "return tostring(os.home():sub(1, 1) == '/') .. ',' ..\n"
         "  tostring(os.tmpdir():sub(1, 1) == '/') .. ',' ..\n"
         "  tostring(#os.hostname() > 0) .. ',' ..\n"
-        "  tostring(os.type() == 'Linux') .. ',' ..\n"
+        "  tostring(os.type() == '%s') .. ',' ..\n"
         "  tostring(os.uptime() > 0) .. ',' ..\n"
         "  tostring(#la == 3) .. ',' ..\n"
-        "  tostring(os.freemem() > 0 and os.totalmem() > 0)"), "true,true,true,true,true,true,true");
+        "  tostring(os.freemem() > 0 and os.totalmem() > 0)",
+#ifdef __APPLE__
+        "Darwin"
+#else
+        "Linux"
+#endif
+    );
+    assert_string_equal(eval_string(snippet), "true,true,true,true,true,true,true");
 }
 
 static void test_os_cpus_lists_each_with_times(void **state)
@@ -959,13 +977,13 @@ static void test_os_cpus_lists_each_with_times(void **state)
 static void test_os_network_interfaces_lists_loopback(void **state)
 {
     (void)state;
-    /* the loopback interface is always there; its first address is a
-     * loopback address, and internal is true — family may be either
-     * v4 or v6 depending on ordering */
+    /* the loopback interface is always there (lo on Linux, lo0 on
+     * macOS); its first address is a loopback address, and internal
+     * is true — family may be either v4 or v6 depending on ordering */
     assert_string_equal(eval_string(
         "local loop = loop or require('loop')\n"
         "local ni = loop.os.networkInterfaces()\n"
-        "local lo = ni.lo and ni.lo[1]\n"
+        "local lo = (ni.lo or ni.lo0) and (ni.lo or ni.lo0)[1]\n"
         "if not lo then return 'no-lo' end\n"
         "local ok = lo.address == '127.0.0.1' or lo.address == '::1'\n"
         "return tostring(ok) .. ',' .. tostring(lo.internal) .. ',' ..\n"
@@ -2170,13 +2188,15 @@ static void test_proc_run_exit_code_and_stderr(void **state)
 static void test_proc_run_cwd_option(void **state)
 {
     (void)state;
+    /* /tmp is a symlink to /private/tmp on macOS and pwd prints the
+     * resolved path — accept either spelling of the same directory */
     assert_string_equal(eval_string(
         "local out\n"
         "local process = loop.process\n"
         "process.run('pwd', {}, {cwd = '/tmp'},\n"
         "  function(e, r) out = r.stdout end)\n"
         "assert(loop.run())\n"
-        "return out"), "/tmp\n");
+        "return tostring(out == '/tmp\\n' or out == '/private/tmp\\n')"), "true");
 }
 
 static void test_proc_kill_reports_signal(void **state)

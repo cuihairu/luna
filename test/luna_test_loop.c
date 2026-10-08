@@ -689,7 +689,10 @@ static void test_fs_watch_reports_events(void **state)
         "  end\n"
         "  out = tostring(ok)\n"
         "  w:close()\n"
-        "end, 300)\n"
+        /* macOS FSEvents coalesces deliveries and a loaded runner can
+         * hold one well past 300ms; the check is membership and event
+         * type, never speed, so the window only guards the hang */
+        "end, 2000)\n"
         "assert(loop.run())\n"
         "return out"), "true");
 }

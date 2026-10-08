@@ -50,6 +50,9 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h> /* no /proc on macOS: the fork() numbers come from sysctl */
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -750,9 +753,8 @@ static int wait_for_prompt(int master, const char *needle, int timeout_ms)
 /* Failure-path sweep for the pty case: a cmocka assert longjmps past
  * the kill/waitpid/close tail below, and a master left open while the
  * re-exec'd child holds the slave strands the pair in the host's
- * finite pty pool — on the macOS runner that surfaced as the NEXT
- * suite's forkpty failing with -1. The per-case teardown reaps what
- * the test body did not reach. */
+ * finite pty pool. The per-case teardown reaps what the test body did
+ * not reach. */
 static int pty_master = -1;
 static pid_t pty_child = -1;
 
@@ -779,9 +781,40 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
     ws.ws_row = 24;
     ws.ws_col = 80;
     int master;
-    pid_t pid = forkpty(&master, NULL, NULL, &ws);
+    pid_t pid = -1;
+    int perr = 0;
+    /* forkpty has been failing with EAGAIN (errno 35) on the macOS
+     * runner even with every earlier suite's ptys reaped: either a
+     * neighbour's brief pressure on the shared process table or this
+     * group's own RLIMIT_NPROC window (test_wake_thread_failure_...)
+     * leaving the soft limit behind. A bounded retry rides out the
+     * first; for the second the report below names the numbers that
+     * decide fork(), because macOS has no /proc to read them from */
+    for (int i = 0; i < 10; i++) {
+        errno = 0;
+        pid = forkpty(&master, NULL, NULL, &ws);
+        if (pid != -1)
+            break;
+        perr = errno;
+        usleep(500 * 1000);
+    }
     if (pid == -1) {
-        fail_msg("forkpty: %s (errno %d)", strerror(errno), errno);
+#ifdef __APPLE__
+        struct rlimit np;
+        int procs = -1;
+        size_t plen = 0;
+        int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+        if (sysctl(mib, 4, NULL, &plen, NULL, 0) == 0 && plen > 0)
+            procs = (int)(plen / sizeof(struct kinfo_proc));
+        char extra[96] = "";
+        if (getrlimit(RLIMIT_NPROC, &np) == 0)
+            snprintf(extra, sizeof(extra),
+                     " [nproc rlim_cur %llu, system procs %d]",
+                     (unsigned long long)np.rlim_cur, procs);
+        fail_msg("forkpty: %s (errno %d)%s", strerror(perr), perr, extra);
+#else
+        fail_msg("forkpty: %s (errno %d)", strerror(perr), perr);
+#endif
         return;
     }
     if (pid == 0) {

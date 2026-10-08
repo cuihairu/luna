@@ -2282,32 +2282,23 @@ static void test_net_sock_addr_tcp(void **state)
 {
     (void)state;
     /* the two callbacks' ORDER is not part of the contract: the
-     * client's connect can land before the server's accept, and a
-     * bare cshared:close() in the client half then indexes nil — the
-     * loop swallows the raise, neither side ever closes, and run()
-     * blocks forever (this is exactly what timed out the macOS leg;
-     * the TLS namesake below already gates the same race) */
+     * client's connect can land before the server's accept, so
+     * neither half may touch the other side's socket — and the report
+     * itself assembles inside finish(), where both halves are present
+     * (a report frozen in the client half leaves the server-side
+     * fields nil on macOS, exactly like the bare close that hung the
+     * loop before; the TLS namesake below gates the same race) */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "out = 'none'\n"
-        "local cshared, cdone, gaddr, gport, srv\n"
+        "local cshared, cs, cdone, srv\n"
         "local function finish()\n"
         "  if not (cshared and cdone) then return end\n"
-        "  cshared:close()\n"
-        "  srv:close()\n"
-        "end\n"
-        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
-        "  local p = c:peer()   -- the server sees the client's address\n"
-        "  gport = p.port > 0\n"
-        "  gaddr = p.address\n"
-        "  cshared = c\n"
-        "  finish()\n"
-        "end)\n"
-        "local a = srv:address()\n"
-        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
-        "  local p, sn = s:peer(), s:sockname()\n"
-        "  s:close()\n"
-        "  local ok = pcall(function() return s:peer() end)\n"
+        "  local a = srv:address()\n"
+        "  local p, sn = cs:peer(), cs:sockname()\n"
+        "  local sp = cshared:peer()  -- the server sees the client\n"
+        "  cs:close()\n"
+        "  local ok = pcall(function() return cs:peer() end)\n"
         "  out = table.concat({\n"
         "    tostring(a.address == '127.0.0.1'),\n"
         "    tostring(a.port == srv:port()),\n"
@@ -2316,10 +2307,19 @@ static void test_net_sock_addr_tcp(void **state)
         "    tostring(p.port == srv:port()),\n"
         "    sn.family,\n"
         "    tostring(sn.port > 0),\n"
-        "    tostring(gaddr == '127.0.0.1'),\n"
-        "    tostring(gport),\n"
+        "    tostring(sp.address == '127.0.0.1'),\n"
+        "    tostring(sp.port > 0),\n"
         "    tostring(not ok),\n"
         "  }, ',')\n"
+        "  cshared:close()\n"
+        "  srv:close()\n"
+        "end\n"
+        "srv = net.listen('127.0.0.1', 0, function(e, c)\n"
+        "  cshared = c\n"
+        "  finish()\n"
+        "end)\n"
+        "net.connect('127.0.0.1', srv:port(), function(e, s)\n"
+        "  cs = s\n"
         "  cdone = true\n"
         "  finish()\n"
         "end)\n"
@@ -2331,27 +2331,17 @@ static void test_net_sock_addr_tcp(void **state)
 static void test_net_sock_addr_pipe(void **state)
 {
     (void)state;
-    /* the same callback-order gate as the tcp case above */
+    /* the same finish() gate and in-gate report as the tcp case above */
     assert_string_equal(eval_string(
         "local net = loop.net\n"
         "local path = '/tmp/luna-test-addrpipe.sock'\n"
         "os.remove(path)\n"
         "out = 'none'\n"
-        "local cshared, cdone, gfamily, psrv, s0\n"
+        "local cshared, cs, cdone, gfamily, psrv\n"
         "local function finish()\n"
         "  if not (cshared and cdone) then return end\n"
-        "  s0:close()\n"
-        "  cshared:close()\n"
-        "  psrv:close()\n"
-        "end\n"
-        "psrv = net.listenPipe(path, function(e, c)\n"
-        "  cshared = c\n"
-        "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
-        "  finish()\n"
-        "end)\n"
-        "local a = psrv:address()\n"
-        "net.connectPipe(path, function(e, s)\n"
-        "  local p, sn = s:peer(), s:sockname()\n"
+        "  local a = psrv:address()\n"
+        "  local p, sn = cs:peer(), cs:sockname()\n"
         "  out = table.concat({\n"
         "    tostring(a.family == 'unix'),\n"
         "    tostring(a.address == path),\n"
@@ -2361,7 +2351,17 @@ static void test_net_sock_addr_pipe(void **state)
         "    tostring(sn.family == 'unix'),\n"
         "    gfamily,\n"
         "  }, ',')\n"
-        "  s0 = s\n"
+        "  cs:close()\n"
+        "  cshared:close()\n"
+        "  psrv:close()\n"
+        "end\n"
+        "psrv = net.listenPipe(path, function(e, c)\n"
+        "  cshared = c\n"
+        "  gfamily = c:peer().family  -- anonymous peer is still unix\n"
+        "  finish()\n"
+        "end)\n"
+        "net.connectPipe(path, function(e, s)\n"
+        "  cs = s\n"
         "  cdone = true\n"
         "  finish()\n"
         "end)\n"

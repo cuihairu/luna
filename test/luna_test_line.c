@@ -1117,6 +1117,53 @@ static void test_wake_thread_via_sigusr1(void **state)
     assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
 }
 
+/* The timed face (the REPL drain enabler): a due loop timer breaks the
+ * blocked editor read with an empty-line tick and gets turned — the
+ * callback runs with no user input in between. Contrast the attach
+ * wake above, whose synthetic Enter commits whatever is typed. */
+static void test_due_timer_ticks_the_blocked_read(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "require(\"loop\").setTimeout(function() print(\"tick-42\") end, 300)\r");
+    assert_true(expect(master, "Out[1]: loop.timer", 5000));
+    /* the deadline passes while the read blocks: the tick arrives on
+     * its own, then the session is back at a fresh prompt */
+    assert_true(expect(master, "tick-42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
+/* The contract under the tick: a sentinel that lands while the user is
+ * mid-typing must not break the read — the draft is typed before the
+ * deadline, survives it intact (the deadline passes underneath), and
+ * commits whole on the user's enter; only then does the overdue tick
+ * land on the fresh empty prompt. */
+static void test_timer_never_breaks_a_typed_draft(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "require(\"loop\").setTimeout(function() print(\"tick-42\") end, 300)\r");
+    assert_true(expect(master, "Out[1]: loop.timer", 5000));
+    /* the draft goes down well before the 300ms deadline: the sentinel
+     * keeps retrying under it, so no tick while the deadline passes */
+    mark_step(); /* past the command echo, which contains "tick-42" */
+    type(master, "\"ab");
+    assert_true(expect_no_raw(master, "tick-42", 800));
+    type(master, "cd\"\r");
+    /* the whole string echo proves the draft was never broken up */
+    assert_true(expect(master, "Out[2]: 'abcd'", 5000));
+    /* only now — the read is back at an empty prompt — does the
+     * overdue tick land and turn the loop */
+    assert_true(expect(master, "tick-42", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
+}
+
 /* Notify wake called from another thread: this is hard to exercise
  * from a pty test because it's an internal C API. The function
  * luna_line_notify_wake is only called from signal handlers or
@@ -1169,6 +1216,8 @@ int main(void)
         cmocka_unit_test(test_completion_hook_returns_nil),
         cmocka_unit_test(test_completion_hook_non_integer_span),
         cmocka_unit_test(test_wake_thread_via_sigusr1),
+        cmocka_unit_test(test_due_timer_ticks_the_blocked_read),
+        cmocka_unit_test(test_timer_never_breaks_a_typed_draft),
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }

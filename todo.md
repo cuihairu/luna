@@ -1590,6 +1590,43 @@
     逐断面看。
   - 已修(3 轮 CI 定位):`pty.h`→`util.h` 三处(line/serve/linedit,
     f8abd28)——构建期已通。
+  - **serve 组转绿(2026-10-08,run 37829368692 mac 14/16)**:根因
+    为 vendored luasocket 的 `unixstream_trybind/tryconnect` 以
+    `sizeof(sun_family)+len` 算 sockaddr 长度——Linux 拼法。macOS 的
+    `sa_family_t` 只有 1 字节,sun_path 偏移 2,于是内核把 socket 文件
+    绑到比路径少末字符的短名(`luna-<pid>.sock`→`.soc`,teardown 残留
+    清单 od 实证);bind/connect 同式算短名故通道自洽可用,而
+    stat/os.remove/access 按真名全落空、重绑恒 EADDRINUSE。改传
+    SUN_LEN(offsetof(sun_path)+strlen,unixdgram 本就如此)。子模块
+    保持钉 v3.1.0(上游 master 亦未修),修复以 `deps/luasocket-patched/
+    unixstream.c` 覆盖件承载、CMake 接线(c557baf);Linux 两式同值
+    零行为变化。serve 组 + attach 连坐 + linedit pty 池连锁皆此一根因。
+  - **loop `test_net_sock_addr_tcp/pipe` 竞态(2dfbcce+6edf2d2,run
+    37829368692 mac 实证绿)**:回调次序无契约,客户端 connect 回调可
+    先于服务端 accept 回调到达,报告串若在客户端回调内冻结则服务端侧
+    字段为 nil(报告与关流必须同在 finish() 门内拼装——与 TLS 同名
+    用例一致)。教训:此题 f89bf8d 已修过,74fe229「29 新测试」整体重写
+    luna_test_loop.c 时丢了修复,2dfbcce 重新落地。
+  - **loop fs.watch(6edf2d2 的 300→2000ms 无效;d468676 定案另修)**:
+    失败用例是进程内**首个** watcher——`watch()` 返回后 CF 线程才异步
+    建 FSEventStream,immediate 里的 writeFile 抢在 `FSEventStreamStart`
+    前落地即永久丢事件(加宽窗口无效正说明丢而非慢;同进程后续文件型
+    watch 在热 CF 循环上即时达)。触发写改 setTimeout(300) 让流先活,
+    检查窗 2300,失败分支吐原始事件串。**run 37860858374 mac 实录:loop
+    组转绿**(16 组仅 1 挂,即 linedit)。
+  - **linedit `test_read_cancels_wakes_and_reports_eof` forkpty EAGAIN
+    定案(c9987e7 修)**:亚 errno 35 且 serve 绿后仍挂,非 pty 池连锁。
+    真因是本组 `test_wake_thread_failure` 压 RLIMIT_NPROC soft=1 后
+    **恢复被 macOS 拒绝**(setrlimit 报错、rlim_cur 一直读 1;探针实录
+    `nproc rlim_cur 1, system procs 582~603`),其后本组唯一 fork 必然
+    EAGAIN(与 line 组从不碰 NPROC 而 17 例 forkpty 全过互证)。修复:
+    注入窗口整个搬进 fork 出的子进程,父进程永不碰 limit,子进程以退出
+    位上报(8=注入未被接受/1=管道起/2=无新线程);pty 用例的重试与
+    诊断报告保留为瞬态兜底。
+  - **leak guard / 诊断(8e8e76d, 94c28ac)**:cmocka 断言 longjmp 会
+    跳过测试尾 kill/waitpid/close,挂单 master+slave 占住宿主 pty 池
+    ——10 个 serve 用例 + linedit pty 用例登记 per-case teardown 统一
+    杀子回收 master。
 - **Windows**(探针三层实录,36999185064 轮;run 37009767450 复证
   清单 2–5 五处并发报错、zlib/lfs/lua-zlib 编过,清单 1 `mode_t`
   该轮未现身):vcpkg 静态 zlib →

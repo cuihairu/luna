@@ -245,6 +245,11 @@ function repl.run(argt)
     -- canonical io.read loop.
     local okl, linedit = pcall(require, "linedit")
     local editor = tty and okl
+    -- timed wake face (REPL drain enabler): a disarm is the capability
+    -- probe — false where the editor has no wake thread (Windows keeps
+    -- the plain blocking read)
+    local timer_ok = editor and type(linedit.arm_timer) == "function"
+        and linedit.arm_timer(-1) or false
     local home = os.getenv("HOME")
     local hist_path = home and (home .. "/.luna_history") or nil
     if editor then
@@ -287,6 +292,35 @@ function repl.run(argt)
         kernel.clear_interrupt()
         local line, aborted
         if editor then
+            -- timed face, opt-in by loop being loaded in this session
+            -- (never required here): arm the editor's one-shot for how
+            -- long the loop wants to wait, so due timers break the
+            -- blocked read with an empty line and get turned below.
+            -- Never armed mid-block: an empty line is block content
+            -- there, not a tick.
+            if timer_ok and not session.pending then
+                local loop = package.loaded.loop
+                if loop and loop.waitMs and loop.turn then
+                    local ok, ms = pcall(loop.waitMs, loop)
+                    -- 0 is ambiguous in libuv ("due now" vs "run one
+                    -- pass to update the backend fd state" — a timer
+                    -- armed since the last turn reads 0 too): turn once
+                    -- and ask again, so a fresh timer does not burn an
+                    -- empty-prompt tick before its real deadline
+                    if ok and ms == 0 then
+                        ok, ms = pcall(function()
+                            loop.turn()
+                            return loop.waitMs()
+                        end)
+                    end
+                    if ok and type(ms) == "number" and ms >= 0 then
+                        linedit.arm_timer(ms)
+                    elseif not ok then
+                        emit(paint(tostring(ms) .. "\n", COLOR_ERR,
+                            session.color))
+                    end
+                end
+            end
             line, aborted = linedit.read(session:prompt())
         else
             io.write(paint(session:prompt(), COLOR_IN, session.color))
@@ -301,6 +335,20 @@ function repl.run(argt)
         end
         if editor and line == "" then
             serve.step()
+            -- the timed face's turn: due loop callbacks run here, on
+            -- the empty-line tick the wake thread's sentinel produced
+            -- (or on a plain empty enter, where a turned loop is a
+            -- no-op). Errors report in red; the session continues.
+            if timer_ok then
+                local loop = package.loaded.loop
+                if loop and loop.turn then
+                    local ok, err = pcall(loop.turn)
+                    if not ok then
+                        emit(paint(tostring(err) .. "\n", COLOR_ERR,
+                            session.color))
+                    end
+                end
+            end
         end
         if editor and line and line ~= "" then
             linedit.history_add(line)

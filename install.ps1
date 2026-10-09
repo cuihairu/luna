@@ -16,7 +16,9 @@ needed. Each asset ships a .sha256 sidecar that is verified before
 installing.
 
 Options — via parameters when saved and run as a file
-  .\install.ps1 -Token ghp_xxx
+  .\install.ps1 -Token ghp_xxx    # optional: private forks or Release
+                                   # fallback only — public assets are
+                                   # anonymous
 or via environment variables when piped (param binding does not apply
 through irm | iex):
 

@@ -17,9 +17,8 @@ jobs:
   nightly:
     name: ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
-    # 试运行豁免现只剩 macOS(病根见下方矩阵注释);Windows 已转正
-    # (2026-10-08)——POSIX 面守卫全落,CMake 工作流 windows 全量测试
-    # 连日绿,构建红回归拉响夜间
+    # 全矩阵已转正(Windows 2026-10-08 12c90bd,macOS 2026-10-09):
+    # 构建或测试红回归直接拉响夜间,不再有试运行豁免腿
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -33,14 +32,14 @@ jobs:
             artifact: luna-nightly-linux-aarch64
             binary: luna
             experimental: false
-          # macOS 构建已通,但运行期测试 11/16(cli/rocks 的 GNU timeout
-          # 缺席、loop 的 /tmp→/private/tmp 语义、linedit forkpty、serve
-          # 监听重建)——平台移植待办已登记 todo.md,转正前按试运行带
-          # 产物(Test 步 continue-on-error,Stage 照常出 artifact)
+          # macOS 已转正(2026-10-09):运行期病根三项根因级修复——
+          # serve 组的 unixstream SUN_LEN(c557baf)、fs.watch 首监视器
+          # 对 FSEvents 流启动的竞态(d468676)、linedit 的 RLIMIT_NPROC
+          # 注入搬 fork 子进程(c9987e7),run 37865418197 mac 16/16 实录
           - os: macos-latest
             artifact: luna-nightly-macos-aarch64
             binary: luna
-            experimental: true
+            experimental: false
           - os: windows-latest
             artifact: luna-nightly-windows-x86_64
             binary: luna.exe
@@ -71,8 +70,8 @@ jobs:
         if: runner.os == 'Windows'
         run: cmake --build build --config Release -j
 
-      # 试运行腿(macOS)的测试红不拦 Stage:产物要出,失败记在
-      # 步骤图标里,转正后关掉
+      # macOS 曾以试运行带产物(测试红不拦 Stage);转正后测试红
+      # 与构建红同权拉响
       - name: Test
         if: runner.os != 'Windows'
         working-directory: build

@@ -15,13 +15,14 @@ name: Daily Build
 # 直拉 releases/download/nightly/<资产名>。
 #
 # 与 push 触发的 CMake CI 的差异只有三处：构建类型 Release（产物给人
-# 运行）；关闭单元测试（全量 16 组套件由每次 push 的 CI 负责，夜间构建
-# 是纯产物流水线，不把 rocks 组的网络腿带进每日窗口）；最后打包发布。
+# 运行）；关闭单元测试（夜间验证由 daily.yml 的全量测试矩阵负责，
+# 2026-10-09 起四腿全转正；本管线不把 rocks 组的网络腿带进每日窗口）；
+# 最后打包发布。
 #
-# Windows 是试运行腿：源码还有冻结的 item 4（luna_loop.c arpa/inet.h，
-# 待裁定），编译不过——continue-on-error 红不拖垮夜间绿，移植落定当天
-# 资产自动进 Release，无需再动流水线。zlib 走 vcpkg 静态三元组是试运行
-# 探针口径（让 Configure 过关、把未移植面全数报出来），源码 vendor 与
+# Windows 腿保留 continue-on-error 属交付健壮性口径：item 4 已于
+# 2026-10-05 解冻、Windows 构建连日绿，红不拦发布是免单腿抖动冻结
+# 全平台交付（转正拉响在验证面 daily.yml）。zlib 走 vcpkg 静态三元组
+# 是探针口径沿用（runner 预装 vcpkg，zlib 静态链入），源码 vendor 与
 # 否是设计裁定，挂 todo 转正清单待决。平台面与 README/architecture 的
 # 口径一致：luna 是单二进制（依赖全部静态链，系统侧只留 zlib 与
 # OpenSSL 的动态库），Linux 用发行版包（runner 镜像自带 libssl-dev /
@@ -47,7 +48,7 @@ jobs:
     name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    # Windows 试运行腿:编译不过(item 4 待裁定)红不拖垮夜间绿
+    # Windows 腿红不拖垮夜间绿:交付健壮性(验证面 daily.yml 已转正拉响)
     continue-on-error: ${{ matrix.experimental }}
 
     strategy:
@@ -66,10 +67,10 @@ jobs:
             name: macos-aarch64
             title: macOS (Apple Silicon)
             experimental: false
-          # 首飞试运行:同 daily.yml 的探针口径,红了不拖垮夜间绿
+          # 交付面保留豁免:红不拦发布(验证面已转正,见头注)
           - os: windows-latest
             name: windows-x86_64
-            title: Windows x64 (试运行)
+            title: Windows x64
             experimental: true
 
     steps:

@@ -395,6 +395,58 @@ static int l_maybe_drain(lua_State *L)
     return 1;
 }
 
+/* loop.turn() -> true | error("interrupted")
+ * One non-blocking pass over the loop: run whatever is ready now,
+ * never wait. The REPL's timed face calls it on the empty-line tick
+ * the editor's wake thread produces, so due callbacks run without the
+ * REPL ever calling run(). Raises "interrupted" when ^C landed during
+ * the pass — the REPL reports it in red and the session continues
+ * (the exit-130 convention belongs to the script-mode loop.run). A
+ * nested turn (a callback turning from inside its own pass) returns
+ * immediately: the outer pass already covers it. */
+static int l_turn(lua_State *L)
+{
+    static int turning;
+    if (!g_loop_ready || turning) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    turning = 1;
+    g_L = L;
+    g_interrupted = 0;
+    uv_run(&g_loop, UV_RUN_NOWAIT);
+    turning = 0;
+    if (g_interrupted)
+        return luaL_error(L, "interrupted");
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* loop.waitMs() -> ms | nil
+ * How long the loop wants to wait before the next due callback
+ * (uv_backend_timeout): 0 = work is ready now, n = ms until the next
+ * timer, nil = nothing due. The REPL maps this onto its editor read:
+ * arm the wake thread's sentinel for that long. nil means block in the
+ * prompt as usual — no timers pending, the attach wake unchanged.
+ * uv_backend_timeout alone cannot say "block forever": an empty loop
+ * (uv_run would exit at once) also answers 0, so the answer is only
+ * taken from a live loop — and a live loop with no timers (-1) blocks
+ * too: fd-only wakeups are outside this face's scope. */
+static int l_wait_ms(lua_State *L)
+{
+    int t;
+    if (!g_loop_ready || !uv_loop_alive(&g_loop)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    t = uv_backend_timeout(&g_loop);
+    if (t < 0)
+        lua_pushnil(L);
+    else
+        lua_pushinteger(L, t);
+    return 1;
+}
+
 /* loop.now() -> loop milliseconds (uv_now; timeouts are relative to it) */
 static int l_now(lua_State *L)
 {
@@ -421,6 +473,8 @@ static const luaL_Reg loop_funcs[] = {
     { "clearImmediate", l_clear },
     { "run", l_run },
     { "maybeDrain", l_maybe_drain },
+    { "turn", l_turn },
+    { "waitMs", l_wait_ms },
     { "stop", l_stop },
     { "now", l_now },
     { "signal", l_signal },

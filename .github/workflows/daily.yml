@@ -4,6 +4,11 @@ name: daily-build
 # 不打 tag、不发 release——发布是显式动作,不归机器管。
 # 产物名即安装器的坐标:luna-nightly-<os>-<arch> 内含裸二进制,
 # install.sh / install.ps1 按 OS+uname -m 组名下载。
+# 双管线注记(2026-10-10):本工作流是四平台测试矩阵(每腿全量
+# ctest,红构建/红测试即拉响),产物只是 per-run 副本;nightly
+# Release 交付面由 daily-build.yml(纯产物管线,01:23 UTC)清旧
+# 传新。旧管线是否退役属待裁定,裁前两条腿各司其职;上句「不发
+# release」指本工作流自身,机器发布的唯一交付面在旧管线。
 on:
   schedule:
     # 21:13 UTC ≈ 北京时间次日 05:13,错开整点高峰

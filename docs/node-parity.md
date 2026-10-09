@@ -289,6 +289,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 - **排水中的 `^C` 照 130**:`maybeDrain` 与 `run()` 同款以 `interrupted` 抛错,`exit_code_for` 拿到 130——一张契约贯穿脚本体与排水段;
 - **顺手根因修复一个真 bug**:keep-alive 的 prepare 钩子此前是 ref'd 句柄——只要还有任何用户句柄(unref 与否)它就撑着循环,`run()` 在"只剩 unref 句柄"时**永不返回**(实测 `-e` unref interval + run() 挂死),与"unref 不再绑住脚本寿命"的文档承诺相悖。修复:prepare 改 `uv_unref`——存活账本全归用户句柄自己,钩子照常在循环每一拍照跑(^C 翻译与 attach 轮询不受影响);副作用是把"unref 的一次性定时器在 run() 里照常触发"翻转为 Node 语义(循环不转,永不触发);
 - 全局化与 REPL 集成维持推迟,启用条件不变。
+- **REPL 集成落地(2026-10-10,唤醒线程定时面)**:上条的启用条件(「唤醒线程可定时」)已建成——`linedit.arm_timer(ms)` 给唤醒线程加一次性 deadline,到期注入的哨兵键在**空提示符**上把阻塞读打断成空行 tick(打字中的草稿只顺延,永不打断;判定跑在输入线程内、`replxx_get_state` 的文档口径场景,零竞态),REPL 侧以 `package.loaded.loop` 探测(不自动加载),tick 上 `loop.turn()` 跑一轮。全局 `setTimeout` 维持推迟:它要的是**不 require 就在**,那就得动 REPL 的加载语义,而定时面已经把"循环在会话里转起来"的收益交付了。
 
 ### path(批次 6,纯 Lua)
 

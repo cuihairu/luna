@@ -24,6 +24,8 @@ loop.run()                    -- 驱动循环,直到没有任何句柄
 | `loop.clearTimeout(h)` / `loop.clearInterval(h)` / `loop.clearImmediate(h)` | 清除句柄;对已触发的 one-shot 是无害空操作 |
 | `loop.run(mode?)` | `"default"`(默认,跑到空)、`"once"`(一轮,阻塞等就绪)、`"nowait"`(一轮,不阻塞) |
 | `loop.maybeDrain()` | 有活句柄才排水(等价 `run()`),否则空操作——脚本尾部自动排水的公开面 |
+| `loop.turn()` | 一轮不阻塞的循环(`UV_RUN_NOWAIT`):跑掉眼下就绪的回调,永不等待;`^C` 落在轮内照 `run` 口径以 `interrupted` 抛错 |
+| `loop.waitMs()` | 循环想阻塞多久(`uv_backend_timeout`):`0` 眼下有活、`n` 距下一定时器、`nil` 无所等待(空循环或有句柄无定时器) |
 | `loop.stop()` | 让当前 `run` 尽快返回;句柄保持已调度状态 |
 | `loop.now()` | 循环毫秒时钟(`uv_now`) |
 | `handle:unref()` / `handle:ref()` | 摘掉/恢复句柄的 keep-alive(见下节) |
@@ -81,7 +83,7 @@ end, 500)
 - **unref 语义原样生效**:全 unref 的脚本立即退出,回调不触发;
 - **主块出错不排水**:脚本以错误收场时进程直接退出,和 Node 的未捕获异常一致;
 - **排水中的 `^C` 照 130**:`maybeDrain` 与 `run` 同款以 `interrupted` 抛错,退出码约定不变;
-- **REPL 不排水**:行编辑的阻塞读、`^C`/130、attach 轮询点三张同步契约不动——控制台会话的循环仍然全部显式。
+- **REPL 定时排水,会话级 opt-in**:交互会话里 `require "loop"` 之后,到期定时器会在提示符空等时打断行编辑的阻塞读——以一个空行 tick 的形式,循环跑一轮(`turn`)再回到提示符。探测的是 `package.loaded`,循环不加载就一个字节都不多走;多行块进行中不定时(空行是块内容);打字中的草稿永不被打断(定时只在空提示符落 tick)。行编辑的阻塞读语义、`^C`/130、attach 轮询点三张同步契约不变。
 
 ## loop.fs:异步文件 IO
 

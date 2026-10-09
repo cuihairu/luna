@@ -1701,7 +1701,11 @@
   报错表,疑因 msbuild 失败即停调度);`luna_line.c(20-21)` pthread.h/
   unistd.h、`luna_main.c(5)` unistd.h(两者均挂在 luna.exe/luna_test
   的 item 4 依赖后面,此前从未被调度到);line/serve 两目标的 `util`
-  链接同 linedit 待条件化。
+  链接同 linedit 待条件化。**✅核销(2026-10-10,源码复核)**:四处
+  `#ifndef _WIN32` 守卫全部在位(line/serve harness 注释明言 Windows
+  编空套件,luna_line/luna_main 的 POSIX 头已条件化),Windows 腿
+  2026-10-08 转正后矩阵连绿即实证——预判清单随移植清扫自然消解,
+  无遗留动作。
 
   **CI 实证(run 37059350461,2026-10-03,13e37fb 推送后)**:
   - **清单 1/2/3/5 逐条核销**:windows job 全量 619 处唯一报错中,

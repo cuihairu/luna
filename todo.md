@@ -1516,8 +1516,8 @@
   空 prompt tick 自达(回调独跑,零后续键入)+ 草稿跨 deadline
   完好提交( deadline 在草稿下过去,无 tick;提交后 overdue tick
   才落);门禁 15/15 组全绿(modules 一次负载假挂,单跑 4.4s
-  过,负载 61-67 复现即躲)。docs 同步(loop.md / cli-repl /
-  node-parity timers 节)记下轮方向。REPL 的 `Out[n]` 表格
+  过,负载 61-67 复现即躲)。docs 同步(loop.md API 表 + REPL 排水
+  bullet 改写、node-parity timers 节落地实录)随批落。REPL 的 `Out[n]` 表格
   回显 inspect 化(node-parity.md 登记的可选打磨)已于 2026-10-09
   落地(f861f83):表值走 util.inspect——确定性键序(顺带消掉
   pairs 序跨进程不定的展示面)、stdlib 同款 `[Circular *1]`/

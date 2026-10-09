@@ -1498,7 +1498,8 @@
   `[Object]`/截断标记;标量与函数维持 introspect repr(`'str'`
   带引号、`function(...)` 签名),`%eval` 同通道同渲染;无模块
   侧车时 pcall 回退 introspect(repl 组回退用例 + line 组 pty
-  真路径排序断言双盖)。
+  真路径排序断言双盖,run 37882772868 四腿 success/mac 16/16
+  实录)。
 - **net.connect/connectTls 多地址回退(2026-10-01 CI 勘定)**:**已完成
   (2026-10-01,见上)**。两条拨号路径解析结果留链逐地址回退(Node
   autoSelectFamily 语义):失败句柄关掉重初始化换下一条,全败才报

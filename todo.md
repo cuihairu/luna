@@ -1816,7 +1816,8 @@
   `daily.yml`(新,21:13 UTC + 手动,`luna-nightly-<os>-<arch>` 矩阵,
   14 天保留,跑全量测试)每天各跑一次,产物两套并存。一键安装三件套
   只认新名。旧管线是否退役(删文件或去 schedule)属设计裁定点,未动;
-  文档已统一指向新管线(getting-started/FAQ/README,2026-10-03)。
+  文档已统一指向新管线(getting-started/FAQ/README,2026-10-03);
+  daily.yml 头注已补双管线分工注记(2026-10-10,原口径不动)。
 - **滚动 nightly Release 交付面接通(2026-10-04,巡检派发)**:用户报
   install.ps1 装不上(`no nightly artifact for
   luna-nightly-windows-x86_64`)——根因:安装器查 Actions artifacts
@@ -1875,6 +1876,15 @@
   挂文档站重设计会话口径一并翻新;daily.yml 头注"不打 tag、不发
   release"亦分叉,随双每日管线退役裁定处理;Windows 资产上线条件
   = item 4(luna_loop.c arpa/inet.h)解冻,发布机制已就绪。
+  **清账(2026-10-10)**:①ps1 `-Token` 示例补「私有 fork/回退
+  限定」内联,与 install.sh 同款匿名口径;②README Daily-build
+  弹 canary/移植清单残句改四腿转正口径(Windows 2026-10-08、
+  macOS 2026-10-09;daily.yml 21:13 矩阵红回归即拉响,无豁免
+  腿);③faq:39 与 getting-started:21 复核已是 Release 匿名口径
+  (前批已落地),无需再动;④daily.yml 头注原口径保留、补双管线
+  分工注记(机器发布的唯一交付面在 daily-build.yml,退役仍待
+  裁定);⑤Windows 资产随 luna_loop 修复(2026-10-05)与转正
+  (2026-10-08)已上线,登记闭合。
 
 ## 明确不做(上一轮)
 

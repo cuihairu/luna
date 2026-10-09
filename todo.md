@@ -1491,7 +1491,14 @@
   各批实录见上);B 面表原记「后续批次」的 net.connect/connectTls
   多地址回退亦于 2026-10-01 完成(见上)**。REPL 集成循环(每求值
   后 drain nowait)维持推迟,启用条件:行编辑可超时读或唤醒线程可
-  定时(见 docs/node-parity.md timers 节)。
+  定时(见 docs/node-parity.md timers 节)。REPL 的 `Out[n]` 表格
+  回显 inspect 化(node-parity.md 登记的可选打磨)已于 2026-10-09
+  落地(f861f83):表值走 util.inspect——确定性键序(顺带消掉
+  pairs 序跨进程不定的展示面)、stdlib 同款 `[Circular *1]`/
+  `[Object]`/截断标记;标量与函数维持 introspect repr(`'str'`
+  带引号、`function(...)` 签名),`%eval` 同通道同渲染;无模块
+  侧车时 pcall 回退 introspect(repl 组回退用例 + line 组 pty
+  真路径排序断言双盖)。
 - **net.connect/connectTls 多地址回退(2026-10-01 CI 勘定)**:**已完成
   (2026-10-01,见上)**。两条拨号路径解析结果留链逐地址回退(Node
   autoSelectFamily 语义):失败句柄关掉重初始化换下一条,全败才报

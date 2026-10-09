@@ -324,7 +324,7 @@ Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边�
 
 - **`util.inspect(value, opts?)`**:值格式化——`depth`(默认 2,`math.huge` 全展开,负数顶层即塌缩)、循环引用 `[Circular *1]`(表登记)、长数组截断 `... N more items`(Node 的 breakLength 语义简化为 opts.maxArrayLength/opts.maxStringLength 的个数截断,折行不进 v1)、字符串带引号与转义、函数 `<function: shortsrc:line>`(经 debug.info;C 函数 tostring 兜底)、线程/udata 用 tostring 兜底、键 `["a b"]` 形式按 Lua 语法合法名规则(Lua 关键字加方括号);
 - **`util.format(fmt, ...)`**:`%s`/`%d`/`%i`/`%f`/`%x`/`%X`/`%o`(走 util.inspect,Node 的 %o)/`%j`(JSON,后端 dkjson,同树可 require)/`%%`;无格式符时全参数空格连接(Node 同款);超参尾接;
-- **与 `luna.introspect` 的分工**:introspect 是 REPL 的**内省**(函数签名、help、doc_for、suggest——查"这个函数怎么用");util.inspect 是**值格式化**(把任意值印成人话——查"这个数据长什么样")。不合并;REPL 的 `Out[n]` 表格回显改用 inspect 是可选的后续打磨(记入 todo,不承诺批次)。
+- **与 `luna.introspect` 的分工**:introspect 是 REPL 的**内省**(函数签名、help、doc_for、suggest——查"这个函数怎么用");util.inspect 是**值格式化**(把任意值印成人话——查"这个数据长什么样")。不合并;REPL 的 `Out[n]` 表格回显已改用 util.inspect(2026-10-09 落地):表值走 inspect(确定性键序、与 stdlib 同款的深度/环/截断标记),标量与函数维持 introspect repr(带引号字符串、函数签名),`%eval` 同通道同渲染。
 - **不做**:`promisify`/`callbackify`(Lua 无 promise,契约无锚)、`types`(isDeepStrictEqual 一族)。
 
 **实现勘定(2026-10-01,批次 6,Node v24.21.0 机器实证)**:

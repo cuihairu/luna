@@ -17,7 +17,10 @@
 #include "replxx.h"
 
 #ifndef _WIN32
+#include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 
@@ -35,21 +38,82 @@ static int g_highlight_ref = -1;
  * replxx_emulate_key_press(REPLXX_KEY_ENTER) — from *another* thread,
  * which is the one case replxx's emulate path relays through its
  * self-pipe. replxx sees a synthetic Enter, input() returns the empty
- * line, and the REPL loop polls the attach socket. */
+ * line, and the REPL loop polls the attach socket.
+ *
+ * The same helper grew the timed face (the REPL drain's enabler): the
+ * REPL arms a one-shot deadline (linedit.arm_timer) for how long the
+ * event loop wants its backend poll to wait, and at the deadline the
+ * helper sends a synthetic key instead — a sentinel code above every
+ * replxx KEY_* (max ~0x00110120) and below BASE_SHIFT (0x01000000)
+ * that no terminal byte stream can decode to. The sentinel's handler
+ * runs on the input thread inside replxx — the one context where
+ * replxx_get_state is contractually safe — and decides there: an
+ * empty prompt returns RETURN, which breaks input() with an empty
+ * line while bypassing replxx's commit_line entirely (no history
+ * entry, no repaint beyond input()'s trailing newline) — a
+ * side-effect-free tick the REPL turns the loop on. A non-empty
+ * prompt means the user is mid-typing: CONTINUE leaves their text
+ * untouched and re-arms the retry just past the moment they stop. */
 #ifndef _WIN32
+#define LUNA_TIMER_KEY 0x00800000 /* sentinel, unreachable from a tty */
+
 static int g_wake_fd = -1;  /* read end: the wake thread blocks on it */
-static int g_wake_wfd = -1; /* write end: the signal handler writes it */
+static int g_wake_wfd = -1; /* write end: writers poke it */
+static int g_wake_thread_up = 0;
+static atomic_int_fast64_t g_timer_deadline_ms; /* monotonic; 0 = disarmed */
+
+static int64_t luna_mono_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)(ts.tv_nsec / 1000000);
+}
+
+static void luna_poke_wake(void)
+{
+    if (g_wake_wfd >= 0) {
+        char b = 'a'; /* "something to recompute": timer arm/disarm */
+        ssize_t ignored = write(g_wake_wfd, &b, 1);
+        (void)ignored;
+    }
+}
 
 static void *luna_wake_thread(void *arg)
 {
-    char b;
     (void)arg;
-    while (read(g_wake_fd, &b, 1) == 1) {
-        Replxx *rx = g_rx; /* single assignment at init; process-lived */
-        if (rx)
-            /* COMMIT_LINE is bound to KEY::ENTER (= control('M')), not
-             * the bare '\r' codepoint -- a bare \r just rings the bell */
-            replxx_emulate_key_press(rx, REPLXX_KEY_ENTER);
+    for (;;) {
+        int timeout = -1;
+        int64_t deadline = atomic_load(&g_timer_deadline_ms);
+        if (deadline != 0) {
+            int64_t left = deadline - luna_mono_ms();
+            timeout = left <= 0 ? 0
+                               : (left > 0x7fffffff ? 0x7fffffff
+                                                    : (int)left);
+        }
+        struct pollfd pfd = { .fd = g_wake_fd, .events = POLLIN, .revents = 0 };
+        int rc = poll(&pfd, 1, timeout);
+        if (rc > 0) {
+            char b;
+            if (read(g_wake_fd, &b, 1) <= 0)
+                break; /* write end closed: the wake channel is gone */
+            {
+                Replxx *rx = g_rx; /* single assignment at init; process-lived */
+                /* 'w' = attach wake: an unconditional synthetic Enter
+                 * (its contract — it may commit a partial line — is
+                 * untouched). Any other byte is a rearm/disarm poke:
+                 * fall through and recompute the poll timeout. */
+                if (rx && b == 'w')
+                    /* COMMIT_LINE is bound to KEY::ENTER (= control('M')),
+                     * not the bare '\r' codepoint -- a bare \r just
+                     * rings the bell */
+                    replxx_emulate_key_press(rx, REPLXX_KEY_ENTER);
+            }
+        } else if (rc == 0 && atomic_exchange(&g_timer_deadline_ms, 0) != 0) {
+            Replxx *rx = g_rx;
+            if (rx)
+                replxx_emulate_key_press(rx, LUNA_TIMER_KEY);
+        }
+        /* rc < 0: EINTR or transient — recompute and go again */
     }
     return NULL;
 }
@@ -64,8 +128,10 @@ static void start_wake_thread(void)
         return; /* attach wake unavailable; everything else still works */
     g_wake_fd = fds[0];
     g_wake_wfd = fds[1];
-    if (pthread_create(&tid, NULL, luna_wake_thread, NULL) == 0)
+    if (pthread_create(&tid, NULL, luna_wake_thread, NULL) == 0) {
         pthread_detach(tid);
+        g_wake_thread_up = 1;
+    }
 }
 
 void luna_line_notify_wake(void)
@@ -82,6 +148,29 @@ void luna_line_notify_wake(void)
 }
 #endif
 
+/* The timer sentinel's handler — the emptiness peek that makes the
+ * timed face safe. It runs on replxx's input thread inside
+ * get_input_line, the documented handler context for
+ * replxx_get_state, so reading the live buffer here is race-free by
+ * construction. */
+#ifndef _WIN32
+static ReplxxActionResult luna_timer_key_handler(int code, void *userdata)
+{
+    ReplxxState st;
+    (void)code;
+    (void)userdata;
+    if (!g_rx)
+        return REPLXX_ACTION_RESULT_CONTINUE;
+    replxx_get_state(g_rx, &st);
+    if (st.text && st.text[0] == '\0')
+        return REPLXX_ACTION_RESULT_RETURN;
+    /* user is mid-typing: retry shortly, never break under them */
+    atomic_store(&g_timer_deadline_ms, luna_mono_ms() + 100);
+    luna_poke_wake();
+    return REPLXX_ACTION_RESULT_CONTINUE;
+}
+#endif
+
 static Replxx *ensure_rx(lua_State *L)
 {
     if (!g_rx) {
@@ -90,6 +179,7 @@ static Replxx *ensure_rx(lua_State *L)
         replxx_set_completion_callback(g_rx, NULL, NULL);
 #ifndef _WIN32
         start_wake_thread();
+        replxx_bind_key(g_rx, LUNA_TIMER_KEY, luna_timer_key_handler, NULL);
 #endif
     }
     return g_rx;
@@ -248,6 +338,11 @@ static int lline_read(lua_State *L)
     errno = 0;
     const char *line = replxx_input(rx, prompt);
     int why = errno;
+#ifndef _WIN32
+    /* the one-shot is self-clearing on fire; on any other return it is
+     * obsolete and the next read re-decides its own arm */
+    atomic_store(&g_timer_deadline_ms, 0);
+#endif
     if (!line) {
         if (why == EAGAIN) {
             lua_pushstring(L, ""); /* discarded by replxx already */
@@ -260,6 +355,33 @@ static int lline_read(lua_State *L)
     }
     lua_pushstring(L, line);
     return 1;
+}
+
+/* linedit.arm_timer(ms) -> armed | false
+ *
+ * ms >= 0: arm the one-shot — at the deadline the wake thread sends
+ * its sentinel key and the blocked read breaks with an empty line
+ * (only ever on an empty prompt; mid-typing retries). ms < 0: disarm.
+ * Returns false where the timed face is unavailable (no wake thread —
+ * Windows keeps the plain blocking read), so callers know not to wait
+ * on a tick. */
+static int lline_arm_timer(lua_State *L)
+{
+    lua_Number ms = luaL_checknumber(L, 1);
+#ifndef _WIN32
+    ensure_rx(L); /* binds the sentinel handler if not yet bound */
+    if (ms > 2147483647.0)
+        ms = 2147483647.0;
+    atomic_store(&g_timer_deadline_ms,
+                 ms < 0 ? 0 : luna_mono_ms() + (int64_t)ms);
+    luna_poke_wake(); /* the thread recomputes its poll timeout */
+    lua_pushboolean(L, g_wake_thread_up);
+    return 1;
+#else
+    (void)ms;
+    lua_pushboolean(L, 0);
+    return 1;
+#endif
 }
 
 /* linedit.history_add(line) */
@@ -298,6 +420,7 @@ static int lline_history_save(lua_State *L)
 
 static const luaL_Reg lline_funcs[] = {
     { "read", lline_read },
+    { "arm_timer", lline_arm_timer },
     { "set_completion", lline_set_completion },
     { "set_highlighter", lline_set_highlighter },
     { "set_no_color", lline_set_no_color },

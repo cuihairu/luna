@@ -1489,9 +1489,35 @@
 - **Node 方向补齐(第二十轮立项)**:批次 2–8 逐批实现(见上节),
   每批两树全绿后单提交推进——**批次 2–8 已全部完成(2026-10-01 止,
   各批实录见上);B 面表原记「后续批次」的 net.connect/connectTls
-  多地址回退亦于 2026-10-01 完成(见上)**。REPL 集成循环(每求值
-  后 drain nowait)维持推迟,启用条件:行编辑可超时读或唤醒线程可
-  定时(见 docs/node-parity.md timers 节)。REPL 的 `Out[n]` 表格
+  多地址回退亦于 2026-10-01 完成(见上)**。**✅REPL 集成循环的启用
+  条件已建成(2026-10-10,唤醒线程定时面)**:唤醒线程由纯 attach
+  唤醒扩展出定时面——`linedit.arm_timer(ms)` 设一次性 deadline
+  (毫秒单调钟;`<0` 即撤;返回是否真有线程在跑,Windows 无唤醒
+  线程返回 false 走原阻塞读),wake 线程改 poll(管道,超时=剩余
+  deadline),到期注入哨兵键 0x00800000(高于全部 KEY_*、低于
+  BASE_SHIFT,任何字节流解不出);哨兵 handler 跑在输入线程
+  get_input_line 内——恰是 `replxx_get_state` 的文档口径场景,同
+  线程零竞态地做空缓冲判定:空则 RETURN(不经 commit_line,零
+  history 污染,input() 尾部一次换行即全部副作用,空行= tick),
+  非空(用户打字中)则 CONTINUE+100ms 重试,永不打断草稿;EOF
+  (写端关闭)仍按旧契约收线程( linedit 组 wake 套件依赖)。
+  loop 新增 `turn()`(UV_RUN_NOWAIT 单轮;^C 落在 pass 内照 run()
+  口径 raise "interrupted",REPL 红报后续会话;嵌套 turn 立即返回)
+  与 `waitMs()`(uv_backend_timeout;必须 uv_loop_alive 门控——
+  空 loop 的 uv_run 会立即退出也答 0,不门控就是 tick 风暴,实测
+  踩中;-1 视为 nil,fd-only 唤醒不在本面)。REPL 以
+  package.loaded.loop 探测 opt-in(绝不 require,红线保持);
+  pending 块中不 arm(空行是块内容,定时注入会污染多行定义);
+  arm 前遇 waitMs()==0 先 turn 一轮再问——libuv 对「新 watcher
+  未 poll 过」同样答 0,不消歧则刚 armed 的 timer 会在草稿落键前
+  烧掉一个空 tick(pty 实录)。三张同步契约原样:attach 'w' 仍
+  无条件注 ENTER(可提交半行,原契约)、^C/130 路径不动、空行
+  轮询点不变(serve.step 照旧)。测试:line 组 2 例 pty——
+  空 prompt tick 自达(回调独跑,零后续键入)+ 草稿跨 deadline
+  完好提交( deadline 在草稿下过去,无 tick;提交后 overdue tick
+  才落);门禁 15/15 组全绿(modules 一次负载假挂,单跑 4.4s
+  过,负载 61-67 复现即躲)。docs 同步(loop.md / cli-repl /
+  node-parity timers 节)记下轮方向。REPL 的 `Out[n]` 表格
   回显 inspect 化(node-parity.md 登记的可选打磨)已于 2026-10-09
   落地(f861f83):表值走 util.inspect——确定性键序(顺带消掉
   pairs 序跨进程不定的展示面)、stdlib 同款 `[Circular *1]`/

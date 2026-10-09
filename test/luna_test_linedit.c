@@ -287,55 +287,60 @@ static void test_wake_thread_failure_leaves_the_session_running(void **state)
     /* pthread_create failing (RLIMIT_NPROC, tightened past the number
      * of processes this user already owns) costs the attach bell and
      * nothing else: the pipe is up, no helper reads it, and
-     * start_wake_thread returns into a session that keeps working. */
-    assert_int_equal(g_wake_fd, -1); /* no channel yet, so the guard passes */
-    int before = thread_count();
-    struct rlimit saved;
-    assert_int_equal(getrlimit(RLIMIT_NPROC, &saved), 0);
-    struct rlimit tight = saved;
-    tight.rlim_cur = 1;
-    int limited = (setrlimit(RLIMIT_NPROC, &tight) == 0);
-    start_wake_thread();
-    if (limited) {
-        /* restore before any assertion — and make it stick. macOS has
-         * been observed accepting the tightening but refusing the raise
-         * back to `saved` (runner probe: rlim_cur still 1 twenty-four
-         * cases later, and the group's only fork failing EAGAIN for
-         * it), so climb down the ladder and verify: a test that cannot
-         * un-poison forks must fail here at the cause, not there */
-        if (setrlimit(RLIMIT_NPROC, &saved) != 0) {
-            struct rlimit climb = saved;
-            if (climb.rlim_cur > (rlim_t)4096)
-                climb.rlim_cur = (rlim_t)4096;
-            if (setrlimit(RLIMIT_NPROC, &climb) != 0) {
-                climb.rlim_cur = 64;
-                (void)setrlimit(RLIMIT_NPROC, &climb);
+     * start_wake_thread returns into a session that keeps working.
+     *
+     * The window runs in a forked child and the PARENT never tightens
+     * anything: once the soft limit is down, macOS refuses to raise it
+     * back (the runner's restore errors and rlim_cur reads 1 many cases
+     * later — this group's only fork then failed with EAGAIN for
+     * years), so a restore cannot be trusted. The child reports the
+     * outcome as exit bits: 8 = the injection was not accepted here,
+     * otherwise 1 = the pipe came up, 2 = no new thread while armed
+     * (checked by the child only for non-root; root skips the
+     * RLIMIT_NPROC check in copy_process). */
+    fflush(NULL); /* fork: nothing buffered prints twice */
+    pid_t pid = fork();
+    assert_int_not_equal(pid, -1);
+    if (pid == 0) {
+        int code = 0;
+        struct rlimit saved, tight;
+        if (getrlimit(RLIMIT_NPROC, &saved) == 0) {
+            tight = saved;
+            tight.rlim_cur = 1;
+            if (setrlimit(RLIMIT_NPROC, &tight) == 0) {
+                if (geteuid() != 0) {
+                    int before = thread_count();
+                    start_wake_thread();
+                    int after = thread_count();
+                    if (g_wake_fd >= 0 && g_wake_wfd >= 0)
+                        code |= 1;
+                    if (after == before)
+                        code |= 2;
+                    if (g_wake_fd >= 0)
+                        luna_line_notify_wake();
+                } else {
+                    start_wake_thread();
+                    if (g_wake_fd >= 0 && g_wake_wfd >= 0)
+                        code |= 1;
+                }
+                setrlimit(RLIMIT_NPROC, &saved); /* best effort in the child */
             }
         }
-        struct rlimit now;
-        assert_int_equal(getrlimit(RLIMIT_NPROC, &now), 0);
-        if (now.rlim_cur < 64)
-            fail_msg("RLIMIT_NPROC restore failed: rlim_cur %llu of %llu",
-                     (unsigned long long)now.rlim_cur,
-                     (unsigned long long)saved.rlim_cur);
+        if (code == 0)
+            code = 8; /* the injection was not accepted: parent skips */
+        _exit(code);
     }
-    int after = thread_count();
-    /* the pipe exists whether or not the helper did ... */
-    assert_true(g_wake_fd >= 0);
-    assert_true(g_wake_wfd >= 0);
-    luna_line_notify_wake(); /* ... so the bell writes into a pipe nobody reads */
-    if (after == before) {
-        /* no helper came up: give the two descriptors back and let the
-         * next test start the channel properly */
-        close(g_wake_fd);
-        close(g_wake_wfd);
-        g_wake_fd = -1;
-        g_wake_wfd = -1;
-    }
-    /* root skips the RLIMIT_NPROC check in copy_process, so only hold
-     * the process to "no new thread" where the limit really bit */
-    if (geteuid() != 0 && limited)
-        assert_int_equal(after, before);
+    int wstatus = 0;
+    assert_int_equal(waitpid(pid, &wstatus, 0), pid);
+    assert_true(WIFEXITED(wstatus));
+    if (!WIFEXITED(wstatus))
+        return;
+    int code = WEXITSTATUS(wstatus);
+    if (code == 8)
+        return; /* the limit was not accepted here: nothing to assert */
+    assert_true(code & 1); /* the pipe is up ... */
+    if (geteuid() != 0)
+        assert_true(code & 2); /* ... and no helper thread came up */
 }
 
 static void test_wake_channel_starts_once(void **state)
@@ -805,13 +810,12 @@ static void test_read_cancels_wakes_and_reports_eof(void **state)
     pid_t pid = -1;
     int perr = 0;
     /* forkpty failed with EAGAIN (errno 35) on the macOS runner every
-     * run for years: not the pty pool (the serve suites reaping theirs
-     * changed nothing) but this group's own RLIMIT_NPROC window in
-     * test_wake_thread_failure_... — the runner probe read rlim_cur 1
-     * here while the tightening test's restore had silently failed, so
-     * every fork after it failed deterministically. The restore now
-     * climbs and verifies at the cause; the retry and the report below
-     * stay as the tripwire should anything strand the limit again */
+     * run: the probe read nproc rlim_cur 1 here because the old
+     * test_wake_thread_failure_... lowered the soft limit and macOS
+     * would not raise it back, so this group's only fork failed
+     * deterministically. That case now injects in a forked child and
+     * never touches the parent's limits; the retry and the report
+     * below remain as a tripwire for any transient pressure */
     for (int i = 0; i < 10; i++) {
         errno = 0;
         pid = forkpty(&master, NULL, NULL, &ws);

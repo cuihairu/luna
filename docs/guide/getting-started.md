@@ -18,7 +18,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 产物来自**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发):公共仓库资产公开可下,**匿名直拉,不需要任何凭据**;每个 zip 带 `.sha256` 侧车,脚本下载后自动校验(不匹配只告警——nightly 可能在下载间隙被重发,重跑一次即可)。`--token`/`GITHUB_TOKEN`/`LUNA_INSTALL_MIRROR`/`LUNA_MIRROR` 保留作私有 fork 与直链兜底。
 
-**手动下载**:直接去 [nightly Release 页](https://github.com/cuihairu/luna/releases/tag/nightly)取 **`luna-nightly-<os>-<arch>.zip`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64`)+ `.sha256` 侧车,内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用)。Windows 项为首飞试运行(源码 Windows 移植未完,暂无产物),红不拖垮其余平台;macOS 项构建与产物已通,运行期测试按平台移植清单收敛中。Daily Build 工作流([daily-build.yml](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml))是这些资产的来源,per-run artifact 只是本地副本,交付通道是 Release。
+**手动下载**:直接去 [nightly Release 页](https://github.com/cuihairu/luna/releases/tag/nightly)取 **`luna-nightly-<os>-<arch>.zip`**(`luna-nightly-linux-x86_64` / `luna-nightly-linux-aarch64` / `luna-nightly-macos-aarch64` / `luna-nightly-windows-x86_64`)+ `.sha256` 侧车,内含二进制与 `luna_modules/` 模块侧车(二进制从自身同级目录解析 Lua 策略层,整包拷走即用)。四条腿全矩阵转正(Windows 2026-10-08、macOS 2026-10-09):构建或测试红回归直接拉响夜间,无试运行豁免腿。Daily Build 工作流([daily-build.yml](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml))是这些资产的来源,per-run artifact 只是本地副本,交付通道是 Release。
 
 解压后验证:
 

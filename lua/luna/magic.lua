@@ -9,6 +9,27 @@ local intro = require "luna.introspect"
 
 local magic = {}
 
+-- %eval's Out[n] echo shares the session renderer: table values through
+-- util.inspect when the modules sidecar is present (deterministic key
+-- order), everything else through introspect's repr. See repl.lua.
+local inspect
+do
+    local oku, util = pcall(require, "util")
+    if oku and type(util) == "table" then
+        inspect = util.inspect
+    end
+end
+
+local function echo_repr(v)
+    if inspect and type(v) == "table" then
+        local okr, s = pcall(inspect, v)
+        if okr then
+            return s
+        end
+    end
+    return intro.repr(v)
+end
+
 local function count_keys(t)
     local n = 0
     for _ in pairs(t) do
@@ -62,7 +83,7 @@ function magic.echo_result(session, res)
     _G._ = res[2]
     local parts = {}
     for i = 2, res.n do
-        parts[#parts + 1] = intro.repr(res[i])
+        parts[#parts + 1] = echo_repr(res[i])
     end
     kernel.write("Out[" .. n .. "]: " .. table.concat(parts, "  ") .. "\n")
 end

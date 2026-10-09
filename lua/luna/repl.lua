@@ -38,6 +38,29 @@ local function repr(v)
     return intro.repr(v)
 end
 
+-- Table values in the Out[n] echo render through util.inspect — the
+-- stdlib's value formatter with deterministic key order and shared
+-- depth/cycle markers — while scalars and functions keep the
+-- introspective repr (quoted strings, function signatures). The pcall
+-- keeps the session core runnable without the modules sidecar.
+local inspect
+do
+    local oku, util = pcall(require, "util")
+    if oku and type(util) == "table" then
+        inspect = util.inspect
+    end
+end
+
+local function echo_repr(v)
+    if inspect and type(v) == "table" then
+        local okr, s = pcall(inspect, v)
+        if okr then
+            return s
+        end
+    end
+    return repr(v)
+end
+
 -- Errors go out painted; messages annotating a missing global (Lua's
 -- "attempt to call a nil value (global 'fooo')") additionally earn a
 -- "did you mean" hint from luna.introspect. The hint must never turn
@@ -176,7 +199,7 @@ function Session:feed(line)
         _G._ = res[2] -- last result
         local parts = {}
         for i = 2, res.n do
-            parts[#parts + 1] = repr(res[i])
+            parts[#parts + 1] = echo_repr(res[i])
         end
         emit(paint("Out[" .. n .. "]: ", COLOR_OUT, self.color) ..
             highlight.render(table.concat(parts, "  "), self.color) .. "\n")

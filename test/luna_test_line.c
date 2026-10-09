@@ -334,6 +334,21 @@ static void test_typed_line_commits_and_echoes_out(void **state)
     assert_int_equal(stat(path, &st), 0);
 }
 
+static void test_table_echo_renders_sorted_keys(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    assert_true(expect(master, "In [1]", 10000));
+    mark_step();
+    type(master, "return {z=1, a=2, [10]=5}\r");
+    /* table echo goes through util.inspect: deterministic key order
+     * (numeric ascending, then strings by byte order) whatever the
+     * hash seed landed on */
+    assert_true(expect(master, "Out[1]: { [10] = 5, a = 2, z = 1 }", 5000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
 static void test_backspace_edits_before_commit(void **state)
 {
     (void)state;
@@ -1112,6 +1127,7 @@ int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_typed_line_commits_and_echoes_out),
+        cmocka_unit_test(test_table_echo_renders_sorted_keys),
         cmocka_unit_test(test_backspace_edits_before_commit),
         cmocka_unit_test(test_line_start_and_end_keys_move_the_cursor),
         cmocka_unit_test(test_eof_mid_line_deletes_forward),

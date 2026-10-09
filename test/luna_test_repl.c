@@ -179,6 +179,20 @@ static void test_eval_out_register(void **state)
     assert_non_null(strstr(outbuf, "Out[2]: 'abcd!'")); /* quoted by repr */
 }
 
+static void test_eval_table_echo_without_util_module(void **state)
+{
+    (void)state;
+    out_len_reset();
+    assert_string_equal(feed("t = {a = 1, b = 2}"), "ok");
+    assert_string_equal(feed("return t"), "ok");
+    /* this embedded env has no util module: the echo falls back to
+     * introspect's repr and still shows both members; key order is
+     * hash-seed dependent, so assert presence, not order */
+    assert_non_null(strstr(outbuf, "Out[1]: {"));
+    assert_non_null(strstr(outbuf, "a = 1"));
+    assert_non_null(strstr(outbuf, "b = 2"));
+}
+
 static void test_eval_syntax_error_reported(void **state)
 {
     (void)state;
@@ -454,6 +468,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_eval_statement_no_echo, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_print_captured, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_out_register, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_eval_table_echo_without_util_module, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_syntax_error_reported, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_eval_runtime_error_reported, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_error_object_with_tostring_is_the_message, setup_session, teardown_session),

@@ -1627,6 +1627,21 @@
     跳过测试尾 kill/waitpid/close,挂单 master+slave 占住宿主 pty 池
     ——10 个 serve 用例 + linedit pty 用例登记 per-case teardown 统一
     杀子回收 master。
+  - **fs.watch FSEvents 目录自身事件(5198b54)**:转正首跑
+    run 37877698938 拉响(转正安全网首战建功)——子文件创建时 macOS
+    FSEvents 额外投递被监视目录**自身**的事件(`luna-loop-fs-watch|
+    rename`,inotify 无此形态;libuv 1.44.2 fsevents.c 直通,len==0
+    回溯 basename + Created 置 kFSEventsRenamed 复合掩码),成员判定
+    加收目录自身 basename,平台真相非噪声;失败分支的原始事件串诊断
+    一次定位。
+  - **✅macOS 腿已转正(2026-10-09,e029abf)**:matrix `experimental:
+    true→false`,构建或测试红同权拉响夜间(Test 步 continue-on-error
+    旋钮保留)。转正即验证:首跑 37877698938 立即拉响 fs.watch 目录
+    事件形态(见上条),修后 **run 37879305912 mac 16/16 全绿**——
+    首条全矩阵转正下四腿 success 实录(此前 37865418197 已 16/16)。
+    运行期病根五项全部根因级收口:SUN_LEN(c557baf)、sock_addr
+    finish() 门(2dfbcce+6edf2d2)、fs.watch 首监视器竞态(d468676)、
+    NPROC 注入 fork 隔离(c9987e7)、目录自身事件(5198b54)。
 - **Windows**(探针三层实录,36999185064 轮;run 37009767450 复证
   清单 2–5 五处并发报错、zlib/lfs/lua-zlib 编过,清单 1 `mode_t`
   该轮未现身):vcpkg 静态 zlib →
@@ -1651,7 +1666,7 @@
   (luna_main/luna_line/luna_test_main 等),CMake 工作流 windows 全量
   测试连日绿(37549008691 双腿 success 以降);转正首跑 run 37799557602
   windows 腿 success——experimental:false 下构建红即拉响夜间。
-  macOS 腿 experimental 维持(运行期病根另立,见 macOS 节)。
+  macOS 腿同日跟进转正(e029abf,2026-10-09,实录见 macOS 节)。
 
   **1/2/3/5 消项实录(2026-10-03,run 37038767850 九处报错定清单)**:
   1. k_chmod 的 `_WIN32` 臂走 `_chmod(path,(int)m)`(`<io.h>`,CRT 的
@@ -1786,7 +1801,8 @@
 - 转正动作:matrix 对应项 `experimental: true→false`、Test 步
   `continue-on-error` 随之归零(daily.yml 已注明)。**windows 侧已落
   (2026-10-08,12c90bd;首跑 run 37799557602 windows 腿 success 实证)**;
-  macOS 侧待其运行期病根清零后再落。
+  **macOS 侧已落(2026-10-09,e029abf;run 37879305912 四腿全绿实证,
+  全矩阵至此无试运行豁免腿)**。
 - **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,
   固定名 `daily-build` 产物 + `pkg-*`,3 天保留,不跑测试)与
   `daily.yml`(新,21:13 UTC + 手动,`luna-nightly-<os>-<arch>` 矩阵,

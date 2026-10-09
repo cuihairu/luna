@@ -1811,13 +1811,21 @@
   (2026-10-08,12c90bd;首跑 run 37799557602 windows 腿 success 实证)**;
   **macOS 侧已落(2026-10-09,e029abf;run 37879305912 四腿全绿实证,
   全矩阵至此无试运行豁免腿)**。
-- **待裁定——双每日管线并存**:`daily-build.yml`(旧,01:23 UTC,
-  固定名 `daily-build` 产物 + `pkg-*`,3 天保留,不跑测试)与
-  `daily.yml`(新,21:13 UTC + 手动,`luna-nightly-<os>-<arch>` 矩阵,
-  14 天保留,跑全量测试)每天各跑一次,产物两套并存。一键安装三件套
-  只认新名。旧管线是否退役(删文件或去 schedule)属设计裁定点,未动;
-  文档已统一指向新管线(getting-started/FAQ/README,2026-10-03);
-  daily.yml 头注已补双管线分工注记(2026-10-10,原口径不动)。
+- **已裁定(2026-10-10,巡检拍板授权)——双每日管线:保留,职能分立**:
+  `daily-build.yml`(旧,01:23 UTC)= **交付面**(nightly Release 唯一
+  发布者,tag 重指+清旧传新;run 页 `pkg-*`/`daily-build` 副本),
+  `daily.yml`(新,21:13 UTC + 手动)= **验证面**(全量测试矩阵,四腿
+  已转正)。**依据**:①nightly Release 的唯一发布者是旧管线 collect
+  job;②install.sh/install.ps1 主路径与 README/getting-started/faq
+  全读 `releases/download/nightly/<资产名>`;③「去 schedule」交付
+  停更、「删文件」交付断供,均断一键安装主路径;④产物名不重叠,
+  run 页副本互不干扰。**随裁定的注释修正**(行为零改动):旧管线
+  Windows 腿「item 4 冻结编译不过/试运行」注释失实(item 4 于
+  2026-10-05 解冻、构建连日绿),改交付健壮性口径(红不拦发布,
+  转正拉响在验证面);头注交叉引用补 daily.yml 验证面。
+  **再评估条件**(任一触发即重开):①daily.yml 获得发布职能
+  (绿跑才发并入矩阵)——届时删旧管线;②nightly Release 交付通道
+  更换;③双构建配置漂移造成实际事故。复评窗口:下次巡检点火。
 - **滚动 nightly Release 交付面接通(2026-10-04,巡检派发)**:用户报
   install.ps1 装不上(`no nightly artifact for
   luna-nightly-windows-x86_64`)——根因:安装器查 Actions artifacts

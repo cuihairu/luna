@@ -1422,6 +1422,14 @@ TLS 层不再是 Windows 的降级面,而是在 Windows 上真的能跑。
   (`luna_loop.c` 有/无 OpenSSL、`luna_test_loop.c` 有/无 OpenSSL),
   零错误——运行时行为由 CI 的 windows-latest 腿在下一步核销(vcpkg
   openssl 首次进装机面,属首次真实链接,不在本地可证范围内)。
+- CI 核销(c8b084f,cmake.yml 38054814188):windows 腿 openssl 装机构建
+  成功、14 例 loop 冒烟全跑起来;**3 例共享 TLS 用例挂**——脚手架
+  bug 非产品 bug:`tls_cert_file` 拼出的 Windows 路径 `C:\Users\...`
+  被 `snprintf` 插进 Lua 单引号字面量,Lua 5.4+ 视 `\` 为转义符
+  (`invalid escape sequence near ''C:\U''`)。修:fixture 落盘 Windows
+  分支把分隔符统一归一为 `/`(CRT 与 OpenSSL fopen 均接受),插值文本
+  不再含反斜杠,POSIX 路径零变化。commit 后 windows 腿待跑完核销
+  (13:19 UTC 那轮 13 FAILED→修复后重推即新 run)。
 
 ### 批次 7(stream)实录(2026-10-01)
 

@@ -1269,12 +1269,21 @@ static const char *TLS_TEST_KEY =
 static const char *tls_cert_file(void)
 {
 #ifdef _WIN32
-    /* no /tmp: stage beside the per-user temp dir (computed once) */
+    /* no /tmp: stage beside the per-user temp dir (computed once). The
+     * path is interpolated into a Lua single-quoted literal, and Lua
+     * 5.4+ treats a backslash as an escape there ('\U' is a syntax
+     * error), so normalize the separators to '/': the CRT and OpenSSL
+     * both accept it */
     static char path[MAX_PATH + 32];
     if (path[0] == '\0') {
         size_t n = sizeof path;
         assert_return_code(uv_os_tmpdir(path, &n), 0);
-        strcat(path, "\\luna-loop-tls-cert.pem");
+        for (char *p = path; *p; p++) {
+            if (*p == '\\') {
+                *p = '/';
+            }
+        }
+        strcat(path, "/luna-loop-tls-cert.pem");
     }
 #else
     static const char *path = "/tmp/luna-loop-tls-cert.pem";
@@ -1294,7 +1303,12 @@ static const char *tls_key_file(void)
     if (path[0] == '\0') {
         size_t n = sizeof path;
         assert_return_code(uv_os_tmpdir(path, &n), 0);
-        strcat(path, "\\luna-loop-tls-key.pem");
+        for (char *p = path; *p; p++) {
+            if (*p == '\\') {
+                *p = '/';
+            }
+        }
+        strcat(path, "/luna-loop-tls-key.pem");
     }
 #else
     static const char *path = "/tmp/luna-loop-tls-key.pem";

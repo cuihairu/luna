@@ -1216,6 +1216,30 @@ static void test_timer_never_breaks_a_typed_draft(void **state)
     assert_int_equal(finish_repl(pid, master, "In [3]"), 0);
 }
 
+/* Keystrokes typed before the console's first read sit in the
+ * canonical line discipline: the tty echoes them itself and hands the
+ * editor one buffered run with \r already translated to \n. The editor
+ * must drain that run and commit it — an unbound control-J would leave
+ * it in the buffer uncommitted, the timer sentinel re-arming on the
+ * never-empty buffer every 100ms, the console wedged forever. That is
+ * the deterministic form of the seam the macOS nightly hung on (typed
+ * drafts whose echo lands before the prompt — "abIn [2]: ..." in the
+ * red wire — crossed this same canonical window). The needle is built
+ * by concatenation so the tty's own echo of the source cannot match
+ * it; only the executed output can. */
+static void test_typing_across_the_first_read_commits(void **state)
+{
+    (void)state;
+    int master;
+    pid_t pid = spawn_repl(&master, hist_home, 0);
+    /* no settling: these bytes reach the pty before the console has
+     * even started, so the discipline is canonical by construction */
+    mark_step();
+    type(master, "print('s' .. 'eam')\r");
+    assert_true(expect(master, "seam", 10000));
+    assert_int_equal(finish_repl(pid, master, "In [2]"), 0);
+}
+
 /* Notify wake called from another thread: this is hard to exercise
  * from a pty test because it's an internal C API. The function
  * luna_line_notify_wake is only called from signal handlers or
@@ -1270,6 +1294,7 @@ int main(void)
         cmocka_unit_test(test_wake_thread_via_sigusr1),
         cmocka_unit_test(test_due_timer_ticks_the_blocked_read),
         cmocka_unit_test(test_timer_never_breaks_a_typed_draft),
+        cmocka_unit_test(test_typing_across_the_first_read_commits),
     };
     return cmocka_run_group_tests(tests, setup_line, teardown_line);
 }

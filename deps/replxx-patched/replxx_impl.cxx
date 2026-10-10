@@ -9,8 +9,20 @@
  * that read in different timing windows). get_input_line here bails
  * with -1 (what send_eof delivers for a genuine ^D) when the buffer is
  * empty, and keeps upstream's commit for a stream that ended with a
- * draft still on it. Re-copy upstream's file here and reapply when
- * updating the module. */
+ * draft still on it.
+ *
+ * Second patch: a line feed commits like a carriage return. Keystrokes
+ * typed while the session is between reads land in the canonical line
+ * discipline, which echoes them itself and hands them to the next
+ * editor read as one buffered run with ICRNL's \r-to-\n translation
+ * already applied; upstream dispatches that LF as control-J (the
+ * NEW_LINE binding), and the whole run sits in the buffer uncommitted —
+ * the timer sentinel then re-arms on the never-empty buffer every
+ * 100ms and the console wedges forever (reproduced on Linux: a straced
+ * console draining a canonical-buffered command line, repainting it,
+ * and looping the sentinel). read_char here maps control-J to
+ * control-M, the commit key, exactly like readline's C-j accept-line.
+ * Re-copy upstream's file here and reapply when updating the module. */
 #include <algorithm>
 #include <memory>
 #include <cerrno>
@@ -477,7 +489,18 @@ char32_t Replxx::ReplxxImpl::read_char( HINT_ACTION hintAction_ ) {
 			return ( keyPress );
 		}
 	}
-	return ( _terminal.read_char() );
+	char32_t c( _terminal.read_char() );
+	/* luna patch: a line feed commits like a carriage return — see the
+	 * file header. Terminal::read_char hands LF back as control-J (the
+	 * NEW_LINE binding), so the check is on that: keystrokes that sat in
+	 * the canonical discipline between reads arrive as control-J and
+	 * would leave the run uncommitted, the timer sentinel re-arming on
+	 * the never-empty buffer forever. A deliberately pressed C-j now
+	 * commits too (readline's accept-line). */
+	if ( c == Replxx::KEY::control( 'J' ) ) {
+		c = Replxx::KEY::control( 'M' );
+	}
+	return ( c );
 }
 
 void Replxx::ReplxxImpl::clear( void ) {

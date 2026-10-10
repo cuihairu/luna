@@ -52,9 +52,20 @@ target_include_directories(lpeg PUBLIC "${PROJECT_SOURCE_DIR}/deps/lpeg")
 # interactive console; the C bridge lives in src/luna_line.c.
 file(GLOB REPLXX_SOURCES "${PROJECT_SOURCE_DIR}/deps/replxx/src/*.cxx"
      "${PROJECT_SOURCE_DIR}/deps/replxx/src/*.cpp")
+# replxx_impl comes from the patched copy next door: upstream turns a
+# 0-byte read (a ^D the line discipline ate between reads, owed back to
+# the next one) into an empty-line commit, so the user's end of input
+# vanishes and a console closed from its prompt never closes. The
+# patched copy bails with EOF instead when the buffer is empty — see
+# the note in that file.
+list(REMOVE_ITEM REPLXX_SOURCES
+     "${PROJECT_SOURCE_DIR}/deps/replxx/src/replxx_impl.cxx")
+list(APPEND REPLXX_SOURCES
+     "${PROJECT_SOURCE_DIR}/deps/replxx-patched/replxx_impl.cxx")
 list(LENGTH REPLXX_SOURCES REPLXX_SOURCE_COUNT)
 add_library(replxx STATIC ${REPLXX_SOURCES})
-target_include_directories(replxx PUBLIC "${PROJECT_SOURCE_DIR}/deps/replxx/include")
+target_include_directories(replxx PUBLIC "${PROJECT_SOURCE_DIR}/deps/replxx/include"
+                          PRIVATE "${PROJECT_SOURCE_DIR}/deps/replxx/src")
 # replxx.h decorates its API with __declspec(dllimport) on _WIN32 unless
 # REPLXX_STATIC is set — without it MSVC consumers link against
 # __imp_replxx_* import thunks that a static lib never defines (and the

@@ -122,6 +122,17 @@ static int k_clear_interrupt(lua_State *L)
     return 0;
 }
 
+/* kernel.request_interrupt(): the same flag the SIGINT handler raises,
+ * callable from Lua — symmetric with clear_interrupt and the delivery
+ * point when a test (or a script) wants an interrupt to land inside a
+ * running chunk rather than at its boundary. */
+static int k_request_interrupt(lua_State *L)
+{
+    (void)L;
+    luna_interrupt_flag = 1;
+    return 0;
+}
+
 /* kernel.pid() -> integer: this process's pid (the attach socket path
  * is derived from it, and the attach client signals it with SIGUSR1) */
 static int k_pid(lua_State *L)
@@ -567,6 +578,7 @@ static const luaL_Reg kernel_funcs[] = {
     { "write", k_write },
     { "sink", k_sink },
     { "clear_interrupt", k_clear_interrupt },
+    { "request_interrupt", k_request_interrupt },
     { "fuel", k_fuel },
     { "memcap", k_memcap },
     { "pid", k_pid },

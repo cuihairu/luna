@@ -263,11 +263,62 @@ static int finish_repl(pid_t pid, int master, const char *prompt)
         waited += 50;
     }
     if (waited >= 5000) {
-        close(master);
-        kill(pid, SIGKILL);
-        waitpid(pid, &wstatus, 0);
-        fail_msg("the console never exited on ^D; it said: [%s]",
-                 wire + mark);
+        /* The ^D was lost. Probe before killing, so a red run carries
+         * its own evidence: does the editor still echo (it is alive and
+         * reading), would a second ^D end it (the first was eaten
+         * once), and — on macOS — where the child is actually stuck
+         * (sample(1) is part of the OS). Green runs never get here. */
+        char diag[8192];
+        size_t off = 0;
+        int echoed = 0;
+        if (write(master, "X", 1) == 1) {
+            struct pollfd p = { master, POLLIN, 0 };
+            if (poll(&p, 1, 300) > 0 && (p.revents & POLLIN)) {
+                char probe[256];
+                ssize_t n = read(master, probe, sizeof(probe));
+                if (n > 0 && memchr(probe, 'X', (size_t)n))
+                    echoed = 1;
+            }
+        }
+        int reaped = 0;
+        if (write(master, "\x04", 1) == 1) {
+            for (int i = 0; i < 20 && !reaped; i++) {
+                reaped = waitpid(pid, &wstatus, WNOHANG) == pid;
+                if (!reaped)
+                    usleep(50 * 1000);
+            }
+        }
+        off += (size_t)snprintf(diag + off, sizeof(diag) - off,
+                                " x-echo=%d second-eof=%d", echoed, reaped);
+#if defined(__APPLE__)
+        char sample_path[] = "/tmp/luna-line-sample-XXXXXX";
+        int sfd = mkstemp(sample_path);
+        if (sfd >= 0) {
+            close(sfd);
+            char cmd[512];
+            snprintf(cmd, sizeof(cmd),
+                     "/usr/bin/sample %lld 1 -file %s 2>/dev/null",
+                     (long long)pid, sample_path);
+            if (system(cmd) == 0) {
+                FILE *f = fopen(sample_path, "r");
+                if (f) {
+                    off += (size_t)snprintf(diag + off,
+                                            sizeof(diag) - off, " stack: ");
+                    off += fread(diag + off, 1, sizeof(diag) - off - 1, f);
+                    diag[off] = '\0';
+                    fclose(f);
+                }
+            }
+            unlink(sample_path);
+        }
+#endif
+        if (!reaped) {
+            close(master);
+            kill(pid, SIGKILL);
+            waitpid(pid, &wstatus, 0);
+        }
+        fail_msg("the console never exited on ^D;%s; it said: [%s]",
+                 diag, wire + mark);
     }
     close(master);
     if (WIFSIGNALED(wstatus)) {

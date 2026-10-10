@@ -2271,3 +2271,41 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
 - 环境披露:修复验证期间的 /tmp/hang_dump.txt(07:58)为修复前
   诊断残留;test 侧临时 X/ENTER 诊断探针已全部还原,提交内容仅含
   重试循环。
+
+## line 套件 macOS nightly 根因修复(2026-10-10,replxx 0 读)
+- **现象**:daily-build run 38010378137(head 7ee4ca0,即 retry 版)macos-aarch64
+  13/16,`test_timer_never_breaks_a_typed_draft` 仍挂
+  (`luna_test_line.c:281`,console never exited on ^D)。retry 未根治;
+  用户令:撤 retry,直接修根因。转写复核:草稿其实提交成功
+  (Out[2]: 'abcd',tick 次序正确),"ab/abc/abcd 残留"只是 pty 原始
+  回显;真实现象是 In [3] 后五发 ^D 全部静默。
+- **根因定案**:逐一排除 raw 模式内 ^D 处理(POSIX 侧无平台分叉:
+  0x04→doDispatch→KEY control('D')→send_eof 空缓冲 BAIL→exit),
+  唯一能同时解释"零输出+零退出+Linux 同码绿"的是 replxx
+  `get_input_line`(replxx_impl.cxx:1328)把 0 字节读转成
+  `return _data.length()`——提交空行,^D 消失,会话活着。
+  `read_unicode_character` 对一切 nread<=0 返回 0(仅 EINTR 重试,
+  EAGAIN 也变 0)。macOS BSD 行规程产生 0 读的窗口形态与 Linux 不同
+  (被吃的 VEOF 或带 EAGAIN 的 spurious nread<=0),但转换本身是
+  确凿上游缺陷,Linux 负载下同理可触。
+- **修法(vendored patched 副本,仿 luasocket-patched 先例)**:
+  `deps/replxx-patched/replxx_impl.cxx` = 上游整拷 + 一处改动:
+  空缓冲 0 读 = 终态 EOF(`errno = 0; return -1`,与真 ^D 的
+  send_eof→BAIL 同语义;errno 清零防陈旧 EAGAIN 被桥层 lline_read
+  误判为 ^C 取消);非空缓冲保留 commit(流在行中结束)。
+  CMakeLists GLOB 后 `REMOVE_ITEM` 上游文件 + `APPEND` patched 副本,
+  include 路径补 `deps/replxx/src`;submodule 本体未动,更新模块时
+  需重拷重打(文件头注记有说明)。
+- **测试**:撤 retry,`finish_repl` 恢复单发 ^D + 5s waitpid。
+- **实证**:确定性探针(长求值占住 canonical 窗口,窗口内打 ^D
+  制造欠 0 读,不打负载竞速)补丁后一次终态退出;line 套件 10/10
+  (负载 29);全门禁 15/15;daily-build dispatch run 38017767140
+  四腿全绿,mac 腿 16/16。
+- **勘误**:上一节"修(测试侧,模仿用户行为)"的 retry 方案已撤
+  (4dc6ba3);"replxx 0 读→空行 commit 语义不在本轮改动"一句作废,
+  根因修即落于此(replxx 语义与 bash 同款没错,但桥层语义应终态,
+  会话对 ^D 的存活是测试契约的一部分)。
+- **独立发现(待排查,不阻塞)**:cov 树 ctest 中 luna_test_repl
+  100% CPU 空转,kill 后单跑可复现(timeout 300 触发);该测试链接
+  cmocka/lualib/lpeg/luna_kernel,不含 replxx,与本轮补丁无关,
+  疑 09-28(上次 cov 绿)后引入或环境性。

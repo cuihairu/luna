@@ -329,10 +329,12 @@ static void test_interrupt_aborts_running_chunk(void **state)
 {
     (void)state;
     out_len_reset();
-    /* request SIGINT right before execution; the count hook fires
-     * almost immediately inside the infinite loop */
-    luna_kernel_request_interrupt();
-    assert_string_equal(feed("while true do end"), "error");
+    /* the chunk requests SIGINT itself, mid-run: the line-forwarded
+     * count hook delivers it on the next loop iteration and exec()
+     * clears the flag on the way out. A request raised before feed()
+     * would instead fire inside feed()'s own Lua code — before exec()
+     * ever ran — and the flag would leak */
+    assert_string_equal(feed("kernel.request_interrupt() while true do end"), "error");
     assert_non_null(strstr(outbuf, "interrupted"));
 
     /* the session and the state are still usable afterwards */
@@ -344,9 +346,8 @@ static void test_interrupt_aborts_running_chunk(void **state)
 static void test_interrupt_flag_cleared_after_abort(void **state)
 {
     (void)state;
-    luna_kernel_request_interrupt();
     out_len_reset();
-    assert_string_equal(feed("while true do end"), "error");
+    assert_string_equal(feed("kernel.request_interrupt() while true do end"), "error");
     /* a fresh chunk must not see a stale flag */
     out_len_reset();
     assert_string_equal(feed("t = 0"), "ok");
@@ -354,13 +355,17 @@ static void test_interrupt_flag_cleared_after_abort(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 1"));
 }
 
-static void test_interrupt_hook_installed_only_during_exec(void **state)
+static void test_interrupt_discarded_at_prompt(void **state)
 {
     (void)state;
-    /* interrupt requested while no chunk is running must not leak into
-     * the next chunk: feed() itself runs fine because exec() resets the
-     * flag only after a run — but check() never aborts. */
+    /* an interrupt requested while no chunk is running is discarded at
+     * the prompt (repl.lua clears the flag on every loop pass); the
+     * harness has no prompt loop, so discard it the way the prompt
+     * would — a pending flag under the line-forwarded count hook would
+     * otherwise fire inside feed()'s own Lua code, before exec() ran */
     luna_kernel_request_interrupt();
+    assert_int_equal(luna_kernel_take_interrupt(), 1);
+    assert_int_equal(luna_kernel_take_interrupt(), 0);
     out_len_reset();
     assert_string_equal(feed("('x'):rep(3)"), "ok");
     assert_non_null(strstr(outbuf, "Out[1]: 'xxx'"));
@@ -482,7 +487,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_multiline_error_keeps_session, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_aborts_running_chunk, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_interrupt_flag_cleared_after_abort, setup_session, teardown_session),
-        cmocka_unit_test_setup_teardown(test_interrupt_hook_installed_only_during_exec, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_interrupt_discarded_at_prompt, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_runtime_error_hints_did_you_mean, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_no_hint_when_nothing_is_close, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_no_hint_when_the_global_exists, setup_session, teardown_session),

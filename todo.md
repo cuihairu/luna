@@ -2347,3 +2347,30 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
 - **勘误**:本日上节"独立发现(疑 09-28 后引入或环境性)"——实为
   09-30 line forwarding 修复只落了 luna_main.c 未同步 test/luna_cov.h;
   cov 树其后未跑(或未跑进 interrupt 组)故未暴露。
+
+## line 套件 macOS 间歇挂根因修复(2026-10-10,canonical 窗口 LF 不提交)
+- **现象**:daily-build mac 腿 `test_timer_never_breaks_a_typed_draft`
+  "console never exited on ^D"(5s 静默);0 读补丁后仍间歇红。
+- **根因(本地 strace 全程实证)**:测试在控制台处于 turn 的 canonical
+  窗口时打字(turn 期间 disable_raw_mode,ICANON+ECHO 开)——tty 自
+  回显、行缓冲、ICRNL 把 `\r` 转成 `\n`;控制台重进 raw 后逐字节
+  排空该行并重画,但上游 `Terminal::read_char` 把 LF 映射为
+  control-J(NEW_LINE 绑定),行永不提交 → 缓冲非空 → 哨兵每 100ms
+  重臂(非空分支)→ 控制台永久挂死。mac 红跑 wire 的 `"abIn [2]: `
+  (echo 在 prompt 之前)即同一窗口的轻形态:那次 `\r` 恰好落在 raw
+  窗口所以提交成功。
+- **修复**:`deps/replxx-patched/replxx_impl.cxx` read_char 尾部把
+  control-J 归一为 control-M(提交键,readline 的 C-j accept-line 语
+  义;NEW_LINE 绑定让位——REPL 场景 Enter 才是提交键)。头部补丁账目
+  同步扩写。
+- **回归测试**:`test_typing_across_the_first_read_commits`——spawn
+  后立即打字(首读前字节必落 canonical,无竞态,确定性);needle 用
+  `'s' .. 'eam'` 拼接使 tty 自回显的源码无法匹配,只有执行输出能。
+  修复前 5/5 挂,修复后 45/45 三连绿。
+- **诊断仪器(已提交 adf84e8)**:finish_repl 失败路径加 'X' 回显探针、
+  二次 ^D 探测、macOS `sample` 抓栈(access 门控,Linux 跳过)——
+  绿跑零影响,下一把 mac 红自带现场。
+- **本地复现工具(未提交,用完即删)**:soak 用例(40 轮 timer+草稿跨
+  deadline)+ per-pid strace 包装 + wchan 采集;ptrace_scope=1 挡
+  gdb 附加,wchan 与 select 同形(`poll_schedule_timeout`)故改用
+  strace 全程 trace 定位。

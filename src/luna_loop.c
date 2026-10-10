@@ -2941,10 +2941,12 @@ static const luaL_Reg os_funcs[] = {
  * drives raw fds (socket/connect/accept + fcntl O_NONBLOCK + errno),
  * Windows drives SOCKETs (ioctlsocket FIONBIO + the WSA error space,
  * and WSAStartup must have run before the first socket()). libuv polls
- * either (uv_poll_init takes an int fd on POSIX, uv_os_sock_t on
- * Windows) and uv_translate_sys_error maps both error spaces into
- * uv_strerror, so the layer's error text matches the loop's other
- * reports on both platforms. */
+ * either — uv_poll_init_socket takes a SOCKET on Windows and an int
+ * fd on POSIX (uv_poll_init is the wrong one on Windows: it casts its
+ * argument through uv__get_osfhandle, i.e. treats it as a CRT fd).
+ * uv_translate_sys_error maps both error spaces into uv_strerror, so
+ * the layer's error text matches the loop's other reports on both
+ * platforms. */
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <errno.h>
@@ -3626,7 +3628,7 @@ static int tls_dial_next(struct tsock *t)
             continue;
         }
         t->fd = fd;
-        uv_poll_init(&g_loop, &t->h, fd);
+        uv_poll_init_socket(&g_loop, &t->h, fd);
         t->poll_inited = 1;
         if (rc == 0) { /* connected on the spot */
             t->tcp_connected = 1;
@@ -3943,7 +3945,7 @@ static void on_tserver_event(uv_poll_t *h, int status, int events)
     lua_rawgeti(sv->L, LUA_REGISTRYINDEX, sv->connref);
     t->connectref = luaL_ref(sv->L, LUA_REGISTRYINDEX);
     t->poll_inited = 1;
-    uv_poll_init(&g_loop, &t->h, c);
+    uv_poll_init_socket(&g_loop, &t->h, c);
     uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
     tls_pump(t); /* the ClientHello may already be readable */
 }
@@ -4026,7 +4028,7 @@ static int l_net_listen_tls(lua_State *L)
     sv->connref = pin_cb(L, 4);
 
     sv->poll_inited = 1;
-    uv_poll_init(&g_loop, &sv->h, sv->listen_fd);
+    uv_poll_init_socket(&g_loop, &sv->h, sv->listen_fd);
     int rc = uv_poll_start(&sv->h, UV_READABLE, on_tserver_event);
     if (rc != 0) {
         tserver_close(sv);

@@ -1430,6 +1430,18 @@ TLS 层不再是 Windows 的降级面,而是在 Windows 上真的能跑。
   分支把分隔符统一归一为 `/`(CRT 与 OpenSSL fopen 均接受),插值文本
   不再含反斜杠,POSIX 路径零变化。commit 后 windows 腿待跑完核销
   (13:19 UTC 那轮 13 FAILED→修复后重推即新 run)。
+- CI 核销第二轮(970ad95,cmake.yml 38055970355):Lua 转义修掉后,3 例
+  TLS 仍挂但形态变了——`EXCEPTION_ACCESS_VIOLATION`(同址 0x...F228),
+  典型空指针/未初始化句柄崩溃,POSIX 侧不现。根因不在测试侧,在
+  移植代码本身:`uv_poll_init` 的 Windows 实现在参数上跑
+  `(SOCKET) uv__get_osfhandle(fd)`——把传入值当 **CRT fd** 查句柄
+  表。而我们传的是原生 `SOCKET`(Winsock 句柄空间,与 CRT fd 表
+  不同源),查表得无效句柄再当 SOCKET 用,ioctlsocket/getsockopt 全部
+  落在垃圾句柄上。修:三处轮询注册(client `tls_dial_next`、accept
+  `on_tserver_event`、listener `l_net_listen_tls`)统一改用
+  `uv_poll_init_socket`——它在 Windows 直收 `uv_os_sock_t`(SOCKET
+  原样),POSIX 转调 `uv_poll_init`,两个平台都是「按原生 fd 句柄
+  轮询」。顶部注释同步记明这个坑。
 
 ### 批次 7(stream)实录(2026-10-01)
 

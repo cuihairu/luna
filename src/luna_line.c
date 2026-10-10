@@ -61,6 +61,16 @@ static int g_wake_fd = -1;  /* read end: the wake thread blocks on it */
 static int g_wake_wfd = -1; /* write end: writers poke it */
 static int g_wake_thread_up = 0;
 static atomic_int_fast64_t g_timer_deadline_ms; /* monotonic; 0 = disarmed */
+/* read generations: which read a fired sentinel belongs to. The read
+ * bumps the generation when it returns; an arm records the generation
+ * of the read it is meant to break. A sentinel the wake thread fired
+ * in the race window after that read had already returned (the retry
+ * deadline outliving a line the user committed) is stale — popped by
+ * the NEXT read's first keystroke slot, where it would return a
+ * phantom empty line and shift a prompt the caller may already have
+ * matched against. The handler drops those instead of acting on them. */
+static atomic_int g_read_gen = 1;  /* bumped on every read return */
+static atomic_int g_armed_gen;     /* the read generation the arm targets */
 
 static int64_t luna_mono_ms(void)
 {
@@ -161,6 +171,12 @@ static ReplxxActionResult luna_timer_key_handler(int code, void *userdata)
     (void)userdata;
     if (!g_rx)
         return REPLXX_ACTION_RESULT_CONTINUE;
+    if (atomic_load(&g_armed_gen) != atomic_load(&g_read_gen)) {
+        /* the arm belonged to an earlier read that has since returned:
+         * the loop top re-decides its own arm, so swallow the stale
+         * sentinel instead of returning a phantom empty line */
+        return REPLXX_ACTION_RESULT_CONTINUE;
+    }
     replxx_get_state(g_rx, &st);
     if (st.text && st.text[0] == '\0')
         return REPLXX_ACTION_RESULT_RETURN;
@@ -340,8 +356,12 @@ static int lline_read(lua_State *L)
     int why = errno;
 #ifndef _WIN32
     /* the one-shot is self-clearing on fire; on any other return it is
-     * obsolete and the next read re-decides its own arm */
+     * obsolete and the next read re-decides its own arm. Bumping the
+     * generation retires every sentinel still in flight for this read:
+     * one the wake thread fires after this point (it already won the
+     * deadline exchange) is dropped by the handler in the next read. */
     atomic_store(&g_timer_deadline_ms, 0);
+    atomic_fetch_add(&g_read_gen, 1);
 #endif
     if (!line) {
         if (why == EAGAIN) {
@@ -374,6 +394,8 @@ static int lline_arm_timer(lua_State *L)
         ms = 2147483647.0;
     atomic_store(&g_timer_deadline_ms,
                  ms < 0 ? 0 : luna_mono_ms() + (int64_t)ms);
+    if (ms >= 0)
+        atomic_store(&g_armed_gen, atomic_load(&g_read_gen));
     luna_poke_wake(); /* the thread recomputes its poll timeout */
     lua_pushboolean(L, g_wake_thread_up);
     return 1;

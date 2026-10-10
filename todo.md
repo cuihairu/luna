@@ -1695,7 +1695,11 @@
      errno 语义 POSIX 专属)整层编译出,connectTls 走无 TLS 既有降级;
   5. `test/luna_test_linedit.c(28)` `poll.h`——测试 harness 同修。
      **✅已修(2026-10-03)**。
-  正式依赖口径(源码 vendor 与否)待决。daily.yml matrix windows 项
+  **已裁定(2026-10-10,巡检拍板授权)——正式依赖口径定为分层**:
+  可移植源码库进 `deps/` vendor(沿 replxx-patched/tomlc17/libyaml/
+  expat/luasocket 既有惯例);系统二进制库(zlib 等)走 vcpkg 静态
+  链接、不入 vendor(现状即 `ZLIB::ZLIB` 绑系统库,照旧不动)。
+  daily.yml matrix windows 项
   experimental:true **✅已转正(2026-10-08,12c90bd)**:POSIX 面守卫全落
   (luna_main/luna_line/luna_test_main 等),CMake 工作流 windows 全量
   测试连日绿(37549008691 双腿 success 以降);转正首跑 run 37799557602
@@ -1776,12 +1780,13 @@
     六个白盒目标已正常编出(luna_test_introspect.exe 产物在日志),
     luna_main.c(5) 仍未被调度到(luna.exe 卡在 luna_loop 依赖后,
     与预判一致)。619→7,同根 612 清零收官。
-  - **待裁定——派发机制条款与登记方向相反**:派发文字"改以 C++ 原始
-    字符串拼接,弃用普通字符串拼接"恰为本条登记方向的倒装;按派发
-    自身"按 todo.md 登记方案执行"落地了登记方向(转义常规串)。
-    两方向目标同为 612 清零,登记方向改动面小(头文件+模板单点;
-    反向需 extern 声明+新 C++ TU 链进约 11 个目标);疑为派发文字
-    名词对调笔误。机制条款定案待用户裁定,结果不受影响。
+  - **已裁定(2026-10-10,巡检拍板授权)——派发机制条款与登记方向
+    相反一案:维持登记方向(转义常规字符串拼接)为正式定案**。
+    派发文字"改以 C++ 原始字符串拼接,弃用普通字符串拼接"恰为本条
+    登记方向的倒装;按派发自身"按 todo.md 登记方案执行"落地了登记
+    方向(转义常规串)。两方向目标同为 612 清零,登记方向已落地、
+    改动面小(头文件+模板单点;反向需 extern 声明+新 C++ TU 链进
+    约 11 个目标)、结果一致,维持不翻——派发文字系名词对调笔误。
   - **新层 2(预判证实 + 三处未预判,均测试 harness POSIX 头)**:
     `luna_test_line.c(19)`/`luna_test_serve.c(7)` `poll.h`(孪生
     预判命中)、`luna_test_cli.c(13)`/`luna_test_covsum.c(15)`
@@ -1920,8 +1925,10 @@
   macOS 2026-10-09;daily.yml 21:13 矩阵红回归即拉响,无豁免
   腿);③faq:39 与 getting-started:21 复核已是 Release 匿名口径
   (前批已落地),无需再动;④daily.yml 头注原口径保留、补双管线
-  分工注记(机器发布的唯一交付面在 daily-build.yml,退役仍待
-  裁定);⑤Windows 资产随 luna_loop 修复(2026-10-05)与转正
+  分工注记(机器发布的唯一交付面在 daily-build.yml;退役一案已
+  随 2026-10-10「双每日管线:保留,职能分立」裁定闭合——不开退,
+  再评估条件见该条);⑤Windows 资产随 luna_loop 修复(2026-10-05)
+  与转正
   (2026-10-08)已上线,登记闭合。
 
 ## 明确不做(上一轮)

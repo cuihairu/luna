@@ -45,6 +45,8 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
+#else
+#include <uv.h> /* uv_os_tmpdir, for staging the TLS fixture files */
 #endif /* !_WIN32 */
 #include <cmocka.h>
 
@@ -1199,6 +1201,9 @@ static void test_net_pipe_echo(void **state)
     pthread_join(th, NULL);
     unlink(path);
 }
+#endif /* !_WIN32: the POSIX suite closes here; the TLS block below is
+        * shared — its listenTls cases run on both OSes (in-process, no
+        * pthread server) — and the POSIX suite resumes after it */
 
 #ifdef LUNA_LOOP_HAVE_OPENSSL
 /* -- net: connectTls against a one-shot TLS echo server --------------- */
@@ -1260,6 +1265,50 @@ static const char *TLS_TEST_KEY =
     "aMfnJPJezhfdbsWXbhB5woVp\n"
     "-----END PRIVATE KEY-----\n";
 
+/* opts.ca points at a file: stage the baked-in certificate once */
+static const char *tls_cert_file(void)
+{
+#ifdef _WIN32
+    /* no /tmp: stage beside the per-user temp dir (computed once) */
+    static char path[MAX_PATH + 32];
+    if (path[0] == '\0') {
+        size_t n = sizeof path;
+        assert_return_code(uv_os_tmpdir(path, &n), 0);
+        strcat(path, "\\luna-loop-tls-cert.pem");
+    }
+#else
+    static const char *path = "/tmp/luna-loop-tls-cert.pem";
+#endif
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    fputs(TLS_TEST_CERT, f);
+    fclose(f);
+    return path;
+}
+
+/* listenTls needs the key on disk too */
+static const char *tls_key_file(void)
+{
+#ifdef _WIN32
+    static char path[MAX_PATH + 32];
+    if (path[0] == '\0') {
+        size_t n = sizeof path;
+        assert_return_code(uv_os_tmpdir(path, &n), 0);
+        strcat(path, "\\luna-loop-tls-key.pem");
+    }
+#else
+    static const char *path = "/tmp/luna-loop-tls-key.pem";
+#endif
+    FILE *f = fopen(path, "w");
+    assert_non_null(f);
+    fputs(TLS_TEST_KEY, f);
+    fclose(f);
+    return path;
+}
+
+#ifndef _WIN32
+/* the pthread echo server rides raw POSIX sockets (accept/close on
+ * int fds); the in-process listenTls cases below run on Windows too */
 /* accept one TLS connection, echo one record back, then send
  * close_notify — the client sees its chunk, then EOF */
 static void tls_serve(int listener)
@@ -1298,28 +1347,6 @@ static void *tls_main(void *arg)
 {
     tls_serve((int)(intptr_t)arg);
     return NULL;
-}
-
-/* opts.ca points at a file: stage the baked-in certificate once */
-static const char *tls_cert_file(void)
-{
-    static const char *path = "/tmp/luna-loop-tls-cert.pem";
-    FILE *f = fopen(path, "w");
-    assert_non_null(f);
-    fputs(TLS_TEST_CERT, f);
-    fclose(f);
-    return path;
-}
-
-/* listenTls needs the key on disk too */
-static const char *tls_key_file(void)
-{
-    static const char *path = "/tmp/luna-loop-tls-key.pem";
-    FILE *f = fopen(path, "w");
-    assert_non_null(f);
-    fputs(TLS_TEST_KEY, f);
-    fclose(f);
-    return path;
 }
 
 /* connect + handshake + one write/read round trip, then the server's
@@ -1413,6 +1440,8 @@ static void test_tls_connect_refused_yields_error(void **state)
      * return, and the half-built sock cleaned itself up */
     assert_string_equal(eval_string(code), "true,nil");
 }
+#endif /* !_WIN32: the pthread TLS echo server and its connectTls
+        * cases stay off Windows; listenTls cases below are in-process */
 
 /* -- net.listenTls: the server side, clients over connectTls ----------- */
 
@@ -1553,6 +1582,10 @@ static void test_tls_sock_addr_and_server_address(void **state)
         "true,true,inet,true,true,true,true,inet");
 }
 #endif /* LUNA_LOOP_HAVE_OPENSSL */
+
+#ifndef _WIN32
+/* the POSIX suite resumes: http/proc/fs/watch faces ride pthread echo
+ * servers and raw sockets */
 
 /* -- loop.http: the pure-Lua client, served by net.listen in-process ---
  *
@@ -3155,7 +3188,9 @@ int main(void)
  * it riding libuv alone, so the Windows leg runs them instead of an
  * empty main. They are the same shapes as their POSIX-side namesakes
  * (each is defined once per branch); everything that needs a pthread
- * server, an AF_UNIX path, an rlimit window or /proc stays out. */
+ * server, an AF_UNIX path, an rlimit window or /proc stays out. The
+ * in-process TLS roundtrips (shared region above) do run here once the
+ * build links OpenSSL. */
 
 static void test_run_with_nothing_scheduled_returns(void **state)
 {
@@ -3295,6 +3330,14 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_interrupt_stops_the_run, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_unref_interval_does_not_keep_loop_alive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_ref_restores_keepalive, setup_loop, teardown_loop),
+#ifdef LUNA_LOOP_HAVE_OPENSSL
+        /* the in-process listenTls cases: no pthread server, no raw
+         * sockets — listener and client share the one VM on both OSes */
+        cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_sock_addr_and_server_address, setup_loop, teardown_loop),
+#endif
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

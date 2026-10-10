@@ -23,11 +23,11 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Install zlib (vcpkg, static)
+    - name: Install zlib + openssl (vcpkg, static)
       if: runner.os == 'Windows'
-      # lua-zlib needs zlib headers; the nightly Windows stage uses the
-      # same static triplet
-      run: vcpkg install zlib:x64-windows-static
+      # lua-zlib needs zlib headers and the TLS layer needs OpenSSL; the
+      # nightly Windows stage uses the same static triplet
+      run: vcpkg install zlib:x64-windows-static openssl:x64-windows-static
 
     - name: Configure CMake
       # Single-config generators (Visual Studio) need -C on build/ctest;

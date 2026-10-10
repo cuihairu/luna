@@ -1372,6 +1372,57 @@ node-parity.md:170 的同笔登记;REPL 集成一条已于 2026-10-10 上午随
 - 门禁:两树全量 16/16 绿(build 86.1s 含 loop/rocks 本地实跑;
   build-cov 271.2s 含 covsum),构建零错误。
 
+### 平台兑现:Windows TLS 移植(net.connectTls/listenTls)实录(2026-10-10)
+
+2026-10-05 跨平台批把 TLS 手写层整层编出、Windows 下 connectTls 走
+「无 TLS」静默降级(2153 条末「独立移植另议」)——本批把那条另议兑现:
+TLS 层不再是 Windows 的降级面,而是在 Windows 上真的能跑。
+
+- [x] **fd 面分层**(`src/luna_loop.c`):TLS 段入口加 shim——POSIX
+      `typedef int tls_os_fd`/`TLS_FD_INVALID = -1`/`TLS_EINPROGRESS =
+      EINPROGRESS`,Windows `SOCKET`/`INVALID_SOCKET`/`WSAEWOULDBLOCK`
+      (WSAEWOULDBLOCK 与 EINPROGRESS 同义,connect 未完成即此码)。
+      `tls_errno()` 收 WSAGetLastError/errno;`tls_perr()` 两侧都走
+      `uv_strerror`(Windows 侧先过 `uv_translate_sys_error` 把 WSA
+      码折回 uv 语义),故错误文案与 loop 其余报错在两个平台同形。
+      `tls_set_nonblocking`(ioctlsocket FIONBIO ↔ fcntl)/`tls_fd_close`
+      (closesocket ↔ close)收散点调用。所有 `fd >= 0` 判据改哨兵判据
+      (Windows SOCKET 无 0 号句柄,旧写法在 Windows 会漏关句柄)。
+- [x] **WSAStartup 显式启动**:TLS 面可能是进程里 Winsock 首个用户
+      (libuv 只在自己建句柄时惰性初始化 WSA),裸 `socket()` 前必须
+      先起来——`tls_ws_startup()` 在 `l_net_connect_tls` 与
+      `l_net_listen_tls` 入口各调一次(WSAStartup 自带计数,once-guard
+      足够)。libuv 侧的 `uv_poll_init` 在 Windows 收 `uv_os_sock_t`、
+      POSIX 收 `int`,`tls_os_fd` 两侧本就对齐。
+- [x] **OpenSSL 桥接**:`SSL_set_fd` 取 int,句柄经 `(int)(intptr_t)`
+      折位(Win64 句柄 64 位);`getsockopt`/`setsockopt` 的 `optval`
+      在 Windows 是 `char *`,补显式 cast。
+- [x] **注册解除**:`loop.tsock`/`loop.tserver` 元表注册的双条件
+      guard(`&& !_WIN32`)去 Windows 腿;stub 注释未动(仍是「无
+      OpenSSL 才编」的降级口径,与平台无关)。
+- [x] **CI**:`cmake.yml`/`daily.yml`/`daily-build.yml` 三处 Windows
+      腿的 vcpkg 装机从 `zlib` 扩到 `zlib + openssl`(同一
+      x64-windows-static 三元组,与依赖分层口径一致:系统二进制库
+      走 vcpkg 静态,不入 deps/ vendor)。
+- [x] **测试可移植化**(`test/luna_test_loop.c`):TLS 段原本整个在
+      大 POSIX `#ifndef _WIN32` 之内(PEM 常量、fixture 落盘、
+      pthread 回显服务器、listenTls 用例全在其中)。按端口重切:
+      PEM 常量 + `tls_cert_file`/`tls_key_file` + `tls_listen_case`
+      + 四个 listenTls 用例(全程同 VM 内 listener 与 client,零裸
+      socket、零 pthread)上提为共享区,两侧断/接 POSIX guard;
+      `tls_serve`/`tls_main`/`tls_roundtrip_case` 与四个 pthread 用
+      例单独圈 `#ifndef _WIN32`。fixture 落盘 Windows 侧改
+      `uv_os_tmpdir` 拼接(新增 `<uv.h>` 引入仅限 `_WIN32`),POSIX
+      仍写 `/tmp`。Windows `#else` 冒烟组注册这四个共享用例
+      (OpenSSL 在场时),组数 10→14;文件头注记同步。
+- 门禁:两树全量绿——build 树 16/16(90.8s);build-cov 树 15/15
+  (88.7s)+ rocks 单跑 1/1(203s,该组在负载 25–54 下的已知假挂,
+  与改动无关:本批未触 rocks 面)。loop 组二进制连跑三遍各 109/109。
+  Windows 路径本地以 mingw `-D_WIN32 -fsyntax-only` 静态核过四组
+  (`luna_loop.c` 有/无 OpenSSL、`luna_test_loop.c` 有/无 OpenSSL),
+  零错误——运行时行为由 CI 的 windows-latest 腿在下一步核销(vcpkg
+  openssl 首次进装机面,属首次真实链接,不在本地可证范围内)。
+
 ### 批次 7(stream)实录(2026-10-01)
 
 - [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件
@@ -2157,7 +2208,8 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   arpa/inet/signal/sys/wait 收进 #ifndef;fcntl/netdb 条件化;TLS
   手写层(1179 行,raw fd/fcntl/errno 全 POSIX 语义)双条件
   `LUNA_LOOP_HAVE_OPENSSL && !_WIN32` 整层编出,Windows 下
-  connectTls 走既有「无 TLS」降级(独立移植另议);execSync 换
+  connectTls 走既有「无 TLS」降级(独立移植已兑现,见「平台兑现:
+  Windows TLS 移植」节 2026-10-10);execSync 换
   _popen/_pclose,退出码即 wait status(WIFEXITED 折叠是 POSIX 专属,
   Windows 分支直接取值);l_signal 预留位 Windows 仅 SIGINT,信号名表
   6 项(MSVC signal.h 无 SIGUSR1/SIGPIPE/HUP/CHLD…);os.type 改

@@ -90,11 +90,11 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja pkg-config openssl@3
 
-      # 试运行探针：runner 预装 vcpkg，静态三元组装 zlib 让 Configure
-      # 过关，编译器才能把下一层未移植面全数报出来
-      - name: Provision zlib (Windows probe)
+      # 试运行探针：runner 预装 vcpkg，静态三元组装 zlib 与 openssl 让
+      # Configure 过关，编译器才能把下一层未移植面全数报出来
+      - name: Provision zlib + openssl (Windows probe)
         if: runner.os == 'Windows'
-        run: vcpkg install zlib:x64-windows-static
+        run: vcpkg install zlib:x64-windows-static openssl:x64-windows-static
 
       - name: Configure
         if: runner.os != 'Windows'

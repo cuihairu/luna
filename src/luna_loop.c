@@ -2935,21 +2935,85 @@ static const luaL_Reg os_funcs[] = {
  * against the system store with SNI + hostname checking on; opts
  * {insecure = true} turns both off, opts {ca = path} pins a store. */
 
-#if defined(LUNA_LOOP_HAVE_OPENSSL) && !defined(_WIN32)
+#if defined(LUNA_LOOP_HAVE_OPENSSL)
 
-/* POSIX sockets end to end: this layer drives raw fds (socket/connect/
- * accept + fcntl O_NONBLOCK + uv_poll on an int fd) and reads errno
- * directly, so it compiles out on Windows — SOCKET handles, ioctlsocket
- * and the WSA error space are a separate port, not an include fix.
- * With the layer absent, connectTls on Windows reports the same
- * "how to enable TLS" notice the no-OpenSSL build already does. */
+/* OpenSSL end to end. The socket face differs per platform: POSIX
+ * drives raw fds (socket/connect/accept + fcntl O_NONBLOCK + errno),
+ * Windows drives SOCKETs (ioctlsocket FIONBIO + the WSA error space,
+ * and WSAStartup must have run before the first socket()). libuv polls
+ * either (uv_poll_init takes an int fd on POSIX, uv_os_sock_t on
+ * Windows) and uv_translate_sys_error maps both error spaces into
+ * uv_strerror, so the layer's error text matches the loop's other
+ * reports on both platforms. */
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <errno.h>
+#include <stddef.h>
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#include <errno.h>
-#include <stddef.h>
+typedef int tls_os_fd;
+#define TLS_FD_INVALID (-1)
+#define TLS_EINPROGRESS EINPROGRESS
+#else
+typedef SOCKET tls_os_fd;
+#define TLS_FD_INVALID INVALID_SOCKET
+#define TLS_EINPROGRESS WSAEWOULDBLOCK
+/* the TLS face can be the first user of Winsock in the process (libuv
+ * initializes it lazily behind its own handles): raw socket() needs it
+ * up front. WSAStartup refcounts, so the once-guard is enough. */
+static void tls_ws_startup(void)
+{
+    static int done;
+    WSADATA data;
+    if (!done) {
+        WSAStartup(MAKEWORD(2, 2), &data);
+        done = 1;
+    }
+}
+#endif
+
+/* the calling convention is "errno right after the failed call" on
+ * POSIX, WSAGetLastError() on Windows; both render through libuv's
+ * translator so the text matches the loop's other error reports */
+static int tls_errno(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+static void tls_perr(int e, char *buf, size_t cap)
+{
+#ifdef _WIN32
+    snprintf(buf, cap, "%s", uv_strerror(uv_translate_sys_error(e)));
+#else
+    snprintf(buf, cap, "%s", uv_strerror(-e));
+#endif
+}
+
+static void tls_set_nonblocking(tls_os_fd fd)
+{
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(fd, FIONBIO, &mode);
+#else
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
+
+static void tls_fd_close(tls_os_fd fd)
+{
+#ifdef _WIN32
+    closesocket(fd);
+#else
+    close(fd);
+#endif
+}
 
 struct tsock {
     uv_poll_t h;         /* first member: tsock == (struct tsock *)handle */
@@ -2969,7 +3033,7 @@ struct tsock {
     int closeref;        /* pending close() callback */
     SSL_CTX *ctx;
     SSL *ssl;
-    int fd;
+    tls_os_fd fd;
     char host[256];      /* SNI + hostname check, copied out of Lua */
     char *pend;          /* pending write payload, owned until flushed */
     size_t pend_len;
@@ -2994,7 +3058,7 @@ static int tls_dial_next(struct tsock *t);
  * client socks keep (and free) a ctx of their own, accepted ones
  * borrow the listener's. Returns NULL (already cleaned up) when the
  * SSL object cannot be built; the caller raises. */
-static struct tsock *tsock_new(lua_State *L, int fd, SSL_CTX *ctx,
+static struct tsock *tsock_new(lua_State *L, tls_os_fd fd, SSL_CTX *ctx,
                                int is_server)
 {
     struct tsock *t = calloc(1, sizeof(*t));
@@ -3031,7 +3095,7 @@ static struct tsock *tsock_new(lua_State *L, int fd, SSL_CTX *ctx,
         tsock_close(t);
         return NULL;
     }
-    SSL_set_fd(t->ssl, fd);
+    SSL_set_fd(t->ssl, (int)(intptr_t)fd);
     if (is_server) {
         SSL_set_accept_state(t->ssl);
     }
@@ -3288,17 +3352,22 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
          * actually happened, and keep the poll status as fallback */
         int soerr = 0;
         socklen_t slen = sizeof(soerr);
-        int have_soerr = t->fd >= 0 &&
+        int have_soerr = t->fd != TLS_FD_INVALID &&
             getsockopt(t->fd, SOL_SOCKET, SO_ERROR,
-                       &soerr, &slen) == 0 && soerr != 0;
+                       (char *)&soerr, &slen) == 0 && soerr != 0;
         if (!t->tcp_connected) {
             /* a dial refusal: walk on to the next resolved address
              * (tls_dial_failed) — only the last one gets reported */
             tls_dial_failed(t, have_soerr ? soerr : -status);
             return;
         }
-        tls_fail(t, have_soerr ? uv_strerror(-soerr)
-                               : uv_strerror(status));
+        char msg[128];
+        if (have_soerr) {
+            tls_perr(soerr, msg, sizeof(msg));
+        } else {
+            snprintf(msg, sizeof(msg), "%s", uv_strerror(status));
+        }
+        tls_fail(t, msg);
         return;
     }
     if (!t->tcp_connected && (events & UV_WRITABLE)) {
@@ -3306,13 +3375,13 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
          * error surfaces through SO_ERROR */
         int soerr = 0;
         socklen_t slen = sizeof(soerr);
-        getsockopt(t->fd, SOL_SOCKET, SO_ERROR, &soerr, &slen);
+        getsockopt(t->fd, SOL_SOCKET, SO_ERROR, (char *)&soerr, &slen);
         if (soerr != 0) {
             tls_dial_failed(t, soerr);
             return;
         }
         t->tcp_connected = 1;
-        SSL_set_fd(t->ssl, t->fd);
+        SSL_set_fd(t->ssl, (int)(intptr_t)t->fd);
     }
     tls_pump(t);
 }
@@ -3324,12 +3393,11 @@ static void on_tls_event(uv_poll_t *h, int status, int events)
 static void tls_dial_failed(struct tsock *t, int soerr)
 {
     if (soerr != 0) {
-        snprintf(t->last_err, sizeof(t->last_err), "%s",
-                 uv_strerror(-soerr));
+        tls_perr(soerr, t->last_err, sizeof(t->last_err));
     }
-    if (t->fd >= 0) {
-        close(t->fd);
-        t->fd = -1;
+    if (t->fd != TLS_FD_INVALID) {
+        tls_fd_close(t->fd);
+        t->fd = TLS_FD_INVALID;
     }
     if (!t->ai_cur) {
         tls_fail(t, t->last_err[0] ? t->last_err : "connect failed");
@@ -3401,9 +3469,9 @@ static void tsock_close(struct tsock *t)
         SSL_CTX_free(t->ctx);
         t->ctx = NULL;
     }
-    if (t->fd >= 0) {
-            close(t->fd);
-        t->fd = -1;
+    if (t->fd != TLS_FD_INVALID) {
+        tls_fd_close(t->fd);
+        t->fd = TLS_FD_INVALID;
     }
     if (t->ai_list) {
         uv_freeaddrinfo(t->ai_list);
@@ -3430,6 +3498,9 @@ static int l_net_connect_tls(lua_State *L)
     const char *host = luaL_checkstring(L, 1);
     lua_Integer port = luaL_checkinteger(L, 2);
     luaL_argcheck(L, port >= 1 && port <= 65535, 2, "port out of range");
+#ifdef _WIN32
+    tls_ws_startup(); /* libuv inits WSA lazily; raw socket() needs it up */
+#endif
     /* Node-style optional table: dropping it puts cb one slot earlier */
     int cb_idx, opt_idx = 0;
     if (lua_isfunction(L, 3)) {
@@ -3469,7 +3540,7 @@ static int l_net_connect_tls(lua_State *L)
     /* the sock (userdata, pin, SSL) — setup failures raise: a bad CA
      * path or a starved allocator is the caller's mistake, while
      * resolution/connect/handshake failures reach cb(err) at runtime */
-    struct tsock *t = tsock_new(L, -1, ctx, 0);
+    struct tsock *t = tsock_new(L, TLS_FD_INVALID, ctx, 0);
     if (!t) {
         SSL_CTX_free(ctx);
         return luaL_error(L, "loop.net: out of memory");
@@ -3538,19 +3609,20 @@ static int tls_dial_next(struct tsock *t)
     while (t->ai_cur) {
         struct addrinfo *cur = t->ai_cur;
         t->ai_cur = cur->ai_next;
-        int fd = socket(cur->ai_family, SOCK_STREAM, 0);
-        if (fd < 0) {
-            snprintf(t->last_err, sizeof(t->last_err), "%s",
-                     uv_strerror(-errno));
+        tls_os_fd fd = socket(cur->ai_family, SOCK_STREAM, 0);
+        if (fd == TLS_FD_INVALID) {
+            char msg[128];
+            tls_perr(tls_errno(), msg, sizeof(msg));
+            snprintf(t->last_err, sizeof(t->last_err), "%s", msg);
             continue;
         }
-        int flags = fcntl(fd, F_GETFL, 0);
-        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        tls_set_nonblocking(fd);
         int rc = connect(fd, cur->ai_addr, cur->ai_addrlen);
-        if (rc != 0 && errno != EINPROGRESS) {
-            snprintf(t->last_err, sizeof(t->last_err), "%s",
-                     uv_strerror(-errno));
-            close(fd);
+        if (rc != 0 && tls_errno() != TLS_EINPROGRESS) {
+            char msg[128];
+            tls_perr(tls_errno(), msg, sizeof(msg));
+            snprintf(t->last_err, sizeof(t->last_err), "%s", msg);
+            tls_fd_close(fd);
             continue;
         }
         t->fd = fd;
@@ -3558,7 +3630,7 @@ static int tls_dial_next(struct tsock *t)
         t->poll_inited = 1;
         if (rc == 0) { /* connected on the spot */
             t->tcp_connected = 1;
-            SSL_set_fd(t->ssl, fd);
+            SSL_set_fd(t->ssl, (int)(intptr_t)fd);
             uv_poll_start(&t->h, UV_READABLE | UV_WRITABLE, on_tls_event);
             tls_pump(t);
         } else {
@@ -3672,15 +3744,17 @@ static int l_tsock_close(lua_State *L)
 
 /* peer/sockname for a hand-rolled fd: the BSD calls read the kernel
  * directly (uv owns no handle on this fd), push_sockaddr formats */
-static int fd_addr(lua_State *L, int fd, int peer)
+static int fd_addr(lua_State *L, tls_os_fd fd, int peer)
 {
     struct sockaddr_storage ss;
     socklen_t len = sizeof ss;
     int rc = peer ? getpeername(fd, (struct sockaddr *)&ss, &len)
                   : getsockname(fd, (struct sockaddr *)&ss, &len);
     if (rc != 0) {
+        char msg[128];
+        tls_perr(tls_errno(), msg, sizeof(msg));
         return luaL_error(L, "loop.net: get%sname: %s",
-                          peer ? "peer" : "sock", strerror(errno));
+                          peer ? "peer" : "sock", msg);
     }
     return push_sockaddr(L, &ss);
 }
@@ -3792,7 +3866,7 @@ struct tserver {
     lua_State *L;
     int selfref, connref, closeref;
     SSL_CTX *ctx;
-    int listen_fd;
+    tls_os_fd listen_fd;
     int bound_port;      /* read back by :port() */
 };
 
@@ -3832,9 +3906,9 @@ static void tserver_close(struct tserver *sv)
      * freeing here is safe while they finish out their conversations */
     SSL_CTX_free(sv->ctx);
     sv->ctx = NULL;
-    if (sv->listen_fd >= 0) {
-        close(sv->listen_fd);
-        sv->listen_fd = -1;
+    if (sv->listen_fd != TLS_FD_INVALID) {
+        tls_fd_close(sv->listen_fd);
+        sv->listen_fd = TLS_FD_INVALID;
     }
     if (sv->poll_inited) {
         uv_close((uv_handle_t *)&sv->h, on_tserver_closed);
@@ -3854,15 +3928,14 @@ static void on_tserver_event(uv_poll_t *h, int status, int events)
         }
         return;
     }
-    int c = accept(sv->listen_fd, NULL, NULL);
-    if (c < 0) {
+    tls_os_fd c = accept(sv->listen_fd, NULL, NULL);
+    if (c == TLS_FD_INVALID) {
         return; /* EAGAIN or a transient accept error: poll re-arms */
     }
-    int flags = fcntl(c, F_GETFL, 0);
-    fcntl(c, F_SETFL, flags | O_NONBLOCK);
+    tls_set_nonblocking(c);
     struct tsock *t = tsock_new(sv->L, c, sv->ctx, 1);
     if (!t) {
-        close(c);
+        tls_fd_close(c);
         return;
     }
     /* pending handshake delivery: tsock_deliver pushes (nil, sock),
@@ -3884,6 +3957,9 @@ static int l_net_listen_tls(lua_State *L)
     luaL_argcheck(L, port >= 0 && port <= 65535, 2, "port out of range");
     luaL_checktype(L, 3, LUA_TTABLE);
     luaL_checktype(L, 4, LUA_TFUNCTION);
+#ifdef _WIN32
+    tls_ws_startup(); /* libuv inits WSA lazily; raw socket() needs it up */
+#endif
 
     lua_getfield(L, 3, "cert");
     const char *cert = lua_tostring(L, -1);
@@ -3918,7 +3994,7 @@ static int l_net_listen_tls(lua_State *L)
     sv->connref = LUA_NOREF;
     sv->closeref = LUA_NOREF;
     sv->ctx = ctx;
-    sv->listen_fd = -1;
+    sv->listen_fd = TLS_FD_INVALID;
     luaL_getmetatable(L, "loop.tserver");
     lua_setmetatable(L, -2);
     lua_pushvalue(L, -1);
@@ -3926,18 +4002,21 @@ static int l_net_listen_tls(lua_State *L)
     keepalive_open();
 
     sv->listen_fd = socket(ss.ss_family, SOCK_STREAM, 0);
-    if (sv->listen_fd < 0) {
-        int e = errno;
+    if (sv->listen_fd == TLS_FD_INVALID) {
+        char msg[128];
+        tls_perr(tls_errno(), msg, sizeof(msg));
         tserver_close(sv);
-        return luaL_error(L, "loop.net: socket failed: %s", strerror(e));
+        return luaL_error(L, "loop.net: socket failed: %s", msg);
     }
     int one = 1;
-    setsockopt(sv->listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    setsockopt(sv->listen_fd, SOL_SOCKET, SO_REUSEADDR, (char *)&one,
+               sizeof one);
     if (bind(sv->listen_fd, (struct sockaddr *)&ss, ss_len_of(&ss)) != 0 ||
         listen(sv->listen_fd, SOMAXCONN) != 0) {
-        int e = errno;
+        char msg[128];
+        tls_perr(tls_errno(), msg, sizeof(msg));
         tserver_close(sv);
-        return luaL_error(L, "loop.net: listen failed: %s", strerror(e));
+        return luaL_error(L, "loop.net: listen failed: %s", msg);
     }
     struct sockaddr_in bound;
     socklen_t blen = sizeof bound;
@@ -4647,7 +4726,7 @@ int luaopen_luna_loop(lua_State *L)
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);
-#if defined(LUNA_LOOP_HAVE_OPENSSL) && !defined(_WIN32)
+#if defined(LUNA_LOOP_HAVE_OPENSSL)
     if (luaL_newmetatable(L, "loop.tsock")) {
         luaL_newlib(L, tsock_funcs);
         lua_setfield(L, -2, "__index");

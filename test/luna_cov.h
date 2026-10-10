@@ -62,12 +62,14 @@ static void luna_cov_setup(lua_State *L)
             "if not ok then error('no luacov: ' .. tostring(runner)) end\n"
             "runner.init(dofile(__LUNA_COV_CONFIG))\n"
             "local covhook = runner.debug_hook\n"
+            "local kernel = package.loaded.kernel\n"
             "debug.sethook(function(ev, line)\n"
             "  if ev == 'line' then covhook(nil, line, 3) end -- level 3: skip hook and wrapper\n"
-            "  if ev == 'count' then\n"
-            "    local k = package.loaded.kernel\n"
-            "    if k then k.count_hook() end\n"
-            "  end\n"
+            "  -- covhook's own instructions eat the count budget, so count\n"
+            "  -- events can starve inside hook frames; line events fire on\n"
+            "  -- every loop iteration, so the count-hook step (interrupt\n"
+            "  -- check + attach poll) is driven from either event kind\n"
+            "  if kernel then kernel.count_hook() end\n"
             "end, 'l', 100000)\n") != LUA_OK) {
         lua_pop(L, 1); /* report below, but never fail the test for it */
         if (luaL_dostring(L, "io.stderr:write('luna_cov: instrumentation unavailable\\n')") != LUA_OK)

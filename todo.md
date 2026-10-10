@@ -2309,3 +2309,41 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   100% CPU 空转,kill 后单跑可复现(timeout 300 触发);该测试链接
   cmocka/lualib/lpeg/luna_kernel,不含 replxx,与本轮补丁无关,
   疑 09-28(上次 cov 绿)后引入或环境性。
+
+## cov 树 luna_test_repl 空转修复(2026-10-10,同日 daily 红修复后续)
+- **现象闭环**:单跑 27/27 过、ctest 挂 → 差异是 ctest 在 Profiling
+  树才导出 `LUNA_COVERAGE=1`;带该变量单跑复现 100% CPU 空转,
+  定位到第 17 个用例 `test_interrupt_aborts_running_chunk` 一进即死。
+- **根因**:`test/luna_cov.h` 的 coverage wrapper 是旧拷贝,没同步
+  09-30 的 line forwarding 修复(`luna_main.c` 的 wrapper 当时已改为
+  line+count 双事件驱动 count-hook step,因为 covhook 的记账指令吃
+  count 预算、count 事件在 hook 帧内被抑制——见 luna_kernel.c 注记);
+  harness 拷贝只在 count 事件转发 → 插桩下 `while true do end` 的
+  中断检查永不触发 → 死循环。
+- **连带暴露**:line forwarding 修好后 hook 立刻把陈年 flag 变成新
+  问题——`request_interrupt` 只在 C API,测试在 feed **之前**设
+  flag;line hook 在 S:feed 自己的 Lua 指令上就抛 interrupted,
+  exec 未跑、清 flag 的路径(exec 的 pcall 后重置)没机会执行,
+  flag 泄漏到下一个测试的 setup,级联 11 个失败(错误 chunkname
+  正是 wrapper dostring 第 12 行)。
+- **修复三件**:
+  1. `test/luna_cov.h` wrapper 同步双事件驱动(与 luna_main.c 同款
+     注记);
+  2. `src/luna_kernel.c` 把 `request_interrupt` 对称暴露给 Lua
+     (与 clear_interrupt 配对,顺带成为测试/脚本在 chunk 内注入
+     中断的正道);
+  3. `test/luna_test_repl.c` 中断注入移进 chunk 内
+     (`kernel.request_interrupt() while true do end`,exec 内触发、
+     exec 清 flag);原 test_interrupt_hook_installed_only_during_exec
+     改名 `test_interrupt_discarded_at_prompt`,用 take_interrupt
+     模拟 prompt 级丢弃(产品语义即 repl.lua 主循环顶部
+     clear_interrupt;产品二进制无 line hook——LUNA_COVERAGE 只在
+     Profiling 树的 ctest 设——产品不受 wrapper 级抛出影响)。
+- **loop 测试为何不中招**:它从未加载 kernel 模块,wrapper 安装时
+  捕获 `package.loaded.kernel` 为 nil,count_hook 转发不通,中断
+  走 loop prepare 钩子(luna_kernel_take_interrupt),与本设计一致。
+- **实证**:插桩单跑 27/27(1.3s,原 60s+ 空转);cov 树 ctest
+  15/15(含 covsum);build 树全门禁 15/15。
+- **勘误**:本日上节"独立发现(疑 09-28 后引入或环境性)"——实为
+  09-30 line forwarding 修复只落了 luna_main.c 未同步 test/luna_cov.h;
+  cov 树其后未跑(或未跑进 interrupt 组)故未暴露。

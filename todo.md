@@ -2228,3 +2228,46 @@ C 层尽量薄;同步标准库不被事件循环污染(require "loop" 才进异�
   modules.md 净表(15 模块 API 声称脚本化核对全命中)、logging.md
   (deps/lualogging 上游九 appender 全在)、errors.md、docs/index.md;
   VitePress 本地 build 过。
+
+## line 套件 CI 连红修复(2026-10-10,定时面后续)
+
+- **现象**:CMake CI 连红两把(run 37990409442=917428f、run
+  37991651688=c6f53ea),line 组 `test_timer_never_breaks_a_typed_
+  draft` 挂死,`ERROR: the console never exited on ^D
+  (luna_test_line.c:269)`;本地空载恒绿,负载 60-94 下复现率
+  1-2/12-14(与 CI 频率吻合)。
+- **根因三层,逐一实证**:
+  1. **uv loop time 陈旧**:`uv_backend_timeout` 基于每次 uv_run
+     pass 才更新的 loop time;timed tick 过期后若无 pass,waitMs
+     报满延时,REPL 侧 arm 晚一整拍,tick-42 落进草稿窗口/次序
+     错乱(CI 转写 `In [3]` 先于 tick-42 与之吻合)。修:
+     `l_wait_ms` 先 `uv_update_time(&g_loop)`,过期 timer 诚实
+     读 0,caller 先 turn 再 arm。
+  2. **幻影哨兵**:哨兵 handler 的 100ms 重试 deadline 在用户
+     回车提交后仍 armed,唤醒线程在两次 read 之间 fire,哨兵被
+     下一次 read 开头消费 → 空缓冲 RETURN → 提示符提前推进
+     一拍,expect 可能命中陈旧提示符。修:读代数门控
+     (`g_read_gen` 读返回时 bump,`g_armed_gen` arm 时记录,
+     handler 比对不等则吞陈旧哨兵)+ read 尾部撤装。
+  3. **^D 落进 canonical 窗口被行规程吃掉(挂死直接因)**:前两层
+     修复后负载下仍 1-2/12-14 同签名失败。X 探针(向 pty master
+     写 'X' 读响应)拿到 37 字节 = `\r\n` + `In [3]: ` ×2 + 插入
+     重绘——两次 In [3] = 一次静默 0-commit 周期铁证:第一发 ^D
+     落在 read 之间的 canonical 窗口被 VEOF 吃掉,欠一次 0 字节
+     读;replxx `get_input_line`(replxx_impl.cxx:1328)对 0 读执行
+     `return _data.length()`——把 EOF 转成"提交空行"(upstream
+     行为,bash 同款),会话活着,而测试只发一发 ^D 就要求退出,
+     5s 超时报挂。实证闭环:第二发 ^D 不退(X 在缓冲 =
+     delete-forward);ENTER 提交空行后控制台继续活着直到
+     SIGKILL——cycle 耗尽后安静停在提示符,非自持循环,产品侧
+     无挂死。**修(测试侧,模仿用户行为)**:`finish_repl` 对 ^D
+     有限重试(5 次 × 1.5s),吃掉的 EOF 由下一发补上;replxx 的
+     0 读→空行 commit 语义属 vendored submodule,不在本轮改动
+     (bash 同款,真实用户再按一次 ^D 即退)。
+- **实测**:负载 44 下 14/14 绿、负载 76 下 14/14(旧码同区间
+  1-2 挂/批);全门禁 `ctest -E rocks` 15/15;CI run 38009352384
+  (7ee4ca0)success 7m59s——连红链闭环。挂死监视器(存活>3s 抓
+  wchan/fd)全程零触发。
+- 环境披露:修复验证期间的 /tmp/hang_dump.txt(07:58)为修复前
+  诊断残留;test 侧临时 X/ENTER 诊断探针已全部还原,提交内容仅含
+  重试循环。

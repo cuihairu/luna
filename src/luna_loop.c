@@ -431,7 +431,12 @@ static int l_turn(lua_State *L)
  * uv_backend_timeout alone cannot say "block forever": an empty loop
  * (uv_run would exit at once) also answers 0, so the answer is only
  * taken from a live loop — and a live loop with no timers (-1) blocks
- * too: fd-only wakeups are outside this face's scope. */
+ * too: fd-only wakeups are outside this face's scope.
+ * uv_update_time first: libuv keeps loop time per uv_run pass, and a
+ * timer registered against a stale base (no pass since) would report
+ * its full delay even after the wall clock passed it — the arm would
+ * fire a sentinel a whole prompt late. Refreshed here, an overdue
+ * timer honestly reads 0 and the caller turns it instead of arming. */
 static int l_wait_ms(lua_State *L)
 {
     int t;
@@ -439,6 +444,7 @@ static int l_wait_ms(lua_State *L)
         lua_pushnil(L);
         return 1;
     }
+    uv_update_time(&g_loop);
     t = uv_backend_timeout(&g_loop);
     if (t < 0)
         lua_pushnil(L);

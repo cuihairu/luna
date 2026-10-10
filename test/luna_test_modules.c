@@ -1565,6 +1565,96 @@ static void test_yaml_encode_errors(void **state)
         "nil | yaml: cannot dump object of type 'function' | true");
 }
 
+static void test_yaml_encode_auto_anchors(void **state)
+{
+    (void)state;
+    /* opts.anchors = true: shared tables get &aN on first occurrence
+     * and *aN on repeats (single anchor + sequence order: pairs cannot
+     * vary the text) */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local shared = {1, 2}\n"
+                    "return y.encode({shared, shared}, {anchors = true})"),
+        "---\n"
+        "- &a1\n"
+        "  - 1\n"
+        "  - 2\n"
+        "- *a1\n"
+        "...\n");
+    /* decode restores reference identity; default mode keeps copies */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local shared = {1, 2}\n"
+                    "local t = y.decode(y.encode({shared, shared},"
+                    "                          {anchors = true}))\n"
+                    "assert(t[1] == t[2])\n"
+                    "local plain = y.decode(y.encode({shared, shared}))\n"
+                    "assert(plain[1] ~= plain[2])\n"
+                    "return 'ok'"),
+        "ok");
+    /* ancestor cycles become representable: the alias closes the loop
+     * and the round-trip yields the shared self-referential table
+     * (default mode still rejects the same data with nil, err) */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local cyc = {}\n"
+                    "cyc.self = cyc\n"
+                    "local s, e = y.encode(cyc)\n"
+                    "assert(s == nil and e == 'yaml: cyclic table reference')\n"
+                    "return y.encode(cyc, {anchors = true})"),
+        "--- &a1\n"
+        "self: *a1\n"
+        "...\n");
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local cyc = {}\n"
+                    "cyc.self = cyc\n"
+                    "local t = y.decode(y.encode(cyc, {anchors = true}))\n"
+                    "assert(t.self == t)\n"
+                    "return 'ok'"),
+        "ok");
+    /* a table used as a KEY anchors too; decoded key and alias are the
+     * same object (document-local identity: decode never aliases back
+     * to the encoder's tables) */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local k = {}\n"
+                    "local t = y.decode(y.encode({[k] = 'v', ref = k},"
+                    "                          {anchors = true}))\n"
+                    "local dk\n"
+                    "for key in pairs(t) do\n"
+                    "   if type(key) == 'table' then dk = key end\n"
+                    "end\n"
+                    "assert(dk ~= nil and t.ref == dk and t[dk] == 'v')\n"
+                    "return 'ok'"),
+        "ok");
+    /* multi-shared structural: each shared pair merges on decode,
+     * whichever way pairs orders the aN numbering */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "local a, b = {x = 1}, {y = 2}\n"
+                    "local t = y.decode(y.encode({a, b, a, b},"
+                    "                          {anchors = true}))\n"
+                    "assert(t[1] == t[3] and t[2] == t[4] and t[1] ~= t[2])\n"
+                    "return 'ok'"),
+        "ok");
+    /* no sharing: byte-identical to default mode; the lyaml
+     * predeclared form ({name = value}) keeps its original meaning */
+    assert_string_equal(
+        eval_string("local y = require('yaml')\n"
+                    "assert(y.encode({a = 1}, {anchors = true})"
+                    "    == y.encode({a = 1}))\n"
+                    "local shared = {1, 2}\n"
+                    "return y.encode({shared, shared},"
+                    "                {anchors = {mine = shared}})"),
+        "---\n"
+        "- &mine\n"
+        "  - 1\n"
+        "  - 2\n"
+        "- *mine\n"
+        "...\n");
+}
+
 static void test_yaml_args_contract(void **state)
 {
     (void)state;
@@ -2961,6 +3051,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_yaml_encode_exact_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_yaml_encode_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_yaml_encode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_yaml_encode_auto_anchors, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_yaml_args_contract, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_xml_decode_dom_shape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_xml_decode_entities_cdata, setup_modules, teardown_modules),

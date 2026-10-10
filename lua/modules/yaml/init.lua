@@ -662,20 +662,89 @@ local function cyclic(node, path, done)
 end
 
 
+-- Auto-anchor pre-walk (opts.anchors == true): collect every table the
+-- dumper will encounter more than once — shared references, plus the
+-- closure point of every ancestor cycle (an anchor is what terminates
+-- emitting a cycle) — in first-encounter order, and name them a1..aN.
+-- The names seed lyaml's predeclared-anchor map (name -> value), which
+-- the Dumper inverts; from there the existing get_anchor/get_alias
+-- machinery emits &aN on first occurrence and *aN for repeats, and
+-- cycles terminate because the alias is registered at MAPPING/SEQUENCE
+-- START, before the children are dumped. NULL sentinels dump as '~' and
+-- are not tables to the dumper; table KEYS count too (a table can be a
+-- key). Encounter order follows pairs, so with more than one shared
+-- table the aN numbering is as stable as the mapping key order already
+-- emitted by encode — same class, not a new one.
+local function autoanchors(root)
+   local counts, order, done = {}, {}, {}
+   local walk
+   local function edge(child, path)
+      if type(child) == 'table' and not isnull(child) then
+         if counts[child] == nil then
+            order[#order + 1] = child
+         end
+         counts[child] = (counts[child] or 0) + 1
+         walk(child, path)
+      end
+   end
+   walk = function(node, path)
+      if type(node) ~= 'table' or isnull(node) then
+         return
+      end
+      if path[node] then
+         -- cycle closure: the dumper re-encounters this node, so it
+         -- needs an anchor even if no other edge points at it
+         counts[node] = math.max(counts[node] or 0, 2)
+         return
+      end
+      if done[node] then
+         return
+      end
+      path[node] = true
+      for key, item in pairs(node) do
+         edge(key, path)
+         edge(item, path)
+      end
+      path[node] = nil
+      done[node] = true
+   end
+   walk(root, {})
+   local names = {}
+   local n = 0
+   for _, node in ipairs(order) do
+      if counts[node] > 1 then
+         n = n + 1
+         names[format('a%d', n)] = node
+      end
+   end
+   return names
+end
+
+
 -- Encode one value as a YAML document.
 -- @tparam any v the value (nil encodes to the empty stream, which
 --   decodes back to nil)
--- @tparam[opt] table opts lyaml's dumper opts (anchors, implicit_scalar)
+-- @tparam[opt] table opts lyaml's dumper opts (anchors, implicit_scalar);
+--   `anchors = true` switches to luna's auto-anchor mode: shared tables
+--   (and cycle closure points) get a1..aN anchors and *aN aliases, so
+--   decode restores reference identity and even ancestor cycles become
+--   representable — the cyclic pre-error is skipped in this mode. The
+--   lyaml predeclared form (`anchors = {name = value}`) keeps its
+--   original meaning; the two shapes are told apart by type.
 -- @treturn[1] string YAML text
 -- @treturn[2] nil, err ("yaml: cyclic table reference", "yaml: cannot
 --   dump object of type '<type>'", or "yaml: <reason> at line N, column M"
 --   for emitter faults)
 local function encode(v, opts)
    opts = checkopts(opts, 'yaml.encode')
-   if cyclic(v, {}, {}) then
+   local dopts = opts
+   if opts.anchors == true then
+      dopts = {anchors = autoanchors(v),
+               implicit_scalar = opts.implicit_scalar}
+   elseif cyclic(v, {}, {}) then
       return nil, 'yaml: cyclic table reference'
    end
-   local ok, stream = pcall(dump, {v}, opts)
+   local ok, stream = pcall(dump, {v}, dopts)
    if not ok then
       return fail(stream)
    end

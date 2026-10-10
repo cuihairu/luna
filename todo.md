@@ -1175,7 +1175,7 @@
       anyof 构造器尾项的 luacov 归属(resolver 本体已亮)、functional
       的 `__call` 臂(默认 resolver 表全为普通函数)、init 的发射侧
       anchors 机件 6 行(**opts.anchors 明确后续批次**,node-parity
-      已记)+ 7 行防御不变量(STREAM_START/DOCUMENT_END 守卫、
+      已记;**✅后续批次已兑现(2026-10-10,自动锚点发射),6 行转亮**)+ 7 行防御不变量(STREAM_START/DOCUMENT_END 守卫、
       `opts == true` 兼容臂、非串 msg 兜底)。C 台账口径 src/(deps/ vendor 不入账,libuv/lua 同法):lines 94.8%(2689/2837)、functions 100%(249/249)、branches 77.6%(948/1222),与批次 3 持平——本轮 C 侧增量即 luna_main.c 的声明 + 注册两行,绑定源全在 deps/。
 - [x] 文档同步:guide/modules.md 内置表 yaml 行 + 错误口径段记
       "last-event mark"分叉;README/architecture/index 三处标准库清单
@@ -1330,13 +1330,47 @@
 
 - XML 的 XPath/DTD 验证/libxml2 全家桶面、命名空间前缀展开
   (fast-xml-parser 同款「前缀原样」口径);
-- YAML v1 的 anchors 发射(opts.anchors 列后续批次再议)、schema/tags
-  高级面;
+- YAML v1 的 anchors 发射(**✅已落地(2026-10-10)——opts.anchors=true
+  自动锚点,见「后续批次兑现」条**)、schema/tags 高级面(仍不做);
 - stream 的 webstreams/异步迭代器/setEncoding/cork 小面;
 - util 的 promisify/callbackify(Lua 无 promise,契约无锚)与 types
   判等族;path 的 win32 面(平台面 Linux/macOS);
 - 全局 setTimeout 与 REPL 集成(维持推迟,启用条件见下轮方向);
 - tomlc99 回退不预设,仅当 tomlc17 vendor 编译受阻时启用(决策记录 1)。
+
+### 后续批次兑现:yaml.encode 自动锚点(opts.anchors = true)实录(2026-10-10)
+
+批次 6 推迟清单里唯一挂「后续批次」(而非明确不做)的条目,也是
+node-parity.md:170 的同笔登记;REPL 集成一条已于 2026-10-10 上午随
+唤醒线程定时面落地,本批把最后一条「后续批次」也清掉。
+
+- [x] **实现(纯 Lua,零新依赖,零 C 改动)**:`lua/modules/yaml/init.lua`
+      新增 `autoanchors(v)` 前置预走——计数每条边(表被 dump_node 遭遇
+      恰一次每边),被引用 >1 次的表与**环闭合点**(dumper 会重入的那张
+      表,即使无第二条边指向它)按首现序命名 `a1..aN`,种进 lyaml 既有
+      预声明锚点机制(`Dumper` 的 name→value 反转表):首现 `get_anchor`
+      发 `&aN` 并登记 aliased,重复 `get_alias` 发 `*aN`——别名在
+      MAPPING/SEQUENCE_START 即登记(先于子节点),环天然终止,故
+      `opts.anchors = true` 下跳过 cyclic 预错,祖先环也可编码往返
+      (decode 侧本就把别名解成共享引用,往返恒等成立)。表作键同样
+      计数(libyaml 别名可在键位);NULL 哨兵与标量不参与(NULL 走
+      dump_null 不过锚点机件)。lyaml 预声明形态 `anchors = {name =
+      value}` 按类型区分、原义保留;无共享表时输出与缺省模式逐字节
+      一致。锚点名编号跨进程与同层键序同稳定性类(pairs 序,既有
+      encode 已如此,登记为已知非新项)。
+- [x] **测试**:modules 组 +1(`test_yaml_encode_auto_anchors`,91→92):
+      单锚点序根/单键环两处精确文本(pairs 定不了的形态不进文本断言)、
+      decode 恒等还原(t[1]==t[2];缺省模式仍副本)、环往返(t.self==t)、
+      表作键(decode 后键与别名同对象、文档内恒等——decode 从不别名回
+      编码侧原表)、多共享结构断言(编号无关)、无共享逐字节同缺省、
+      预声明形态原义钉住。二进制连跑三遍 92/92(pairs 序稳定性按
+      多键示例规校验)。
+- [x] **文档**:docs/stdlib/yaml.md API 行 + 自动锚点节(真实输出);
+      node-parity.md 锚点/别名 bullet 转已落地 + timers 表两处 stale
+      「REPL 集成推迟」注记改口径(L292 落地实录在先);todo 本节
+      两处推迟注记核销。
+- 门禁:两树全量 16/16 绿(build 86.1s 含 loop/rocks 本地实跑;
+  build-cov 271.2s 含 covsum),构建零错误。
 
 ### 批次 7(stream)实录(2026-10-01)
 

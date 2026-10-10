@@ -1442,6 +1442,10 @@ TLS 层不再是 Windows 的降级面,而是在 Windows 上真的能跑。
   `uv_poll_init_socket`——它在 Windows 直收 `uv_os_sock_t`(SOCKET
   原样),POSIX 转调 `uv_poll_init`,两个平台都是「按原生 fd 句柄
   轮询」。顶部注释同步记明这个坑。
+- CI 终核销(07c24eb,cmake.yml 38057396005):**双腿 success**——
+  windows-latest 14 例冒烟全绿(TLS 握手、close_notify EOF、自定义 CA
+  信任、默认校验拒绝、双端 address/sockname/peer/family),ubuntu 同绿。
+  Windows TLS 由降级面转为真实可跑面,「独立移植另议」彻底销账。
 
 ### 批次 7(stream)实录(2026-10-01)
 

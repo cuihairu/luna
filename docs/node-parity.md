@@ -343,6 +343,7 @@ Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边�
 - **`%c` 消费参数但不产出**(无终端样式层);未知转换符 `%` 原样保留且不消费(`format("%y", "x")` → `"%y x"`);
 - **`%%` 只在发生格式化时折叠**:`format("100%%")` 单串无参走快路径原样返回 `"100%%"`,`format("50%% and %s", "x")` → `"50% and x"`;
 - **`%j` 的 dkjson 分叉**:dkjson 比浏览器 JSON.stringify 严——函数值直接报错而非省略,失败回退 util.inspect(不抛);
+- **零参与缺值勘定(2026-10-11,Node v24.21.0 对拍)**:`format()` 零参返回空串(Node 同款;此前误返 `"nil"` 已修);Lua 中 `format()` 与 `format(nil)` 参数层面不可区分,统一空串——Node 对 `format(undefined)` 的 `"undefined"` 无 Lua 对应,语言固有偏差;`%j` 缺值不消费(留原样 `%j`);`%j` 遇 nil 按运行时 null 约定序列化为 `"null"`(Node 对 null 同、对 undefined 是 `"undefined"`,取 null 口径)、NaN/Infinity → `"null"` 与 JSON.stringify 同、`{a=NaN}` → `{"a":null}` 同;`%s`/`%o` 遇 nil 显示 `"nil"`(Node `"undefined"`,同语言固有);`%d` 遇 nil → `"NaN"`(Node 同款);
 - inspect 的 **Lua 语法适配**:表一律 `{}` 形态(JS 的 `[]`/`{}` 在 Lua 无对应)、键值 `k = v` 而非 `k: v`;**键排序保确定性**(序列段在前,其余数字升序、字符串字节序、他类按 tostring;pairs 序不定,无法对齐 Node 插入序——适配而非分叉);深度塌缩标记 `[Object]`/`[Array]`(按 `#t` 判);截断省略号用 ASCII `...`;共享(非环)引用各自完整渲染,只有祖先链上的重访标 `[Circular *N]`。
 
 ### events(批次 6,纯 Lua)

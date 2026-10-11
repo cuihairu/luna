@@ -2253,6 +2253,17 @@ static void test_util_format_no_fmt_and_extras(void **state)
                     "return f(42,'x') .. ',' .. f(42) .. ',' .. f({a=1}) .. ','\n"
                     "  .. f('x',{a=1}) .. ',' .. f('%s',{1,2})"),
         "42 x,42,{ a = 1 },x { a = 1 },{ 1, 2 }");
+    /* Node v24 对拍: 零参返回空串; %j 缺值不消费; nil 按运行时
+     * null 约定序列化, NaN/Infinity 序列化为 null。Lua 中 f() 与
+     * f(nil) 参数层面不可区分, 统一为空串 (Node 的 undefined
+     * 无 Lua 对应, 语言固有偏差) */
+    assert_string_equal(
+        eval_string("local f = require('util').format\n"
+                    "return f() .. ',end,' .. f('%j') .. ',' .. f('%j',nil) .. ','\n"
+                    "  .. f('%j',0/0) .. ',' .. f('%j',math.huge) .. ','\n"
+                    "  .. f('%j',{a=0/0}) .. ',' .. f('%d',nil) .. ','\n"
+                    "  .. '<' .. f(nil) .. '>'"),
+        ",end,%j,null,null,null,{\"a\":null},NaN,<>");
 }
 
 static void test_util_inspect_shapes(void **state)

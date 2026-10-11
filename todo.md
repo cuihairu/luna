@@ -1482,6 +1482,24 @@ connectTls/listenTls 在 Windows 上跑通后,Windows 面的路径文本语义
 门禁:build 与 build-cov 双树 ctest 全绿(rocks 组单独重跑确认过负载
 假挂非真挂),modules 二进制 98/98,差分 smoke 326/326。
 
+### util.format 零参对拍修缺(2026-10-11)
+
+win32 面收口后顺手对 `util.format` 做 Node v24.21.0 差分扫(18 例),
+逐例对账后只有一处真偏差,其余为语言固有:
+
+- [x] **`format()` 零参误返 `"nil"`**:Node 返回 `""`——已修
+      (`lua/modules/util/init.lua` 零参分支加 f==nil 判);Lua 中
+      `format()` 与 `format(nil)` 参数层面不可区分,统一空串;
+- [x] **逐例勘定(全对齐或固有)**:`%j` 缺值不消费;`%j` 遇 nil 走
+      运行时 null 约定出 `"null"`(Node 对 undefined 是
+      `"undefined"`,无 Lua 对应)、NaN/Infinity/`{a=NaN}` →
+      `"null"`/`{"a":null}` 与 JSON.stringify 同;`%d` 遇 nil →
+      `"NaN"`(同款);`%s`/`%o` 遇 nil 出 `"nil"`(语言固有);
+      表渲染 `{ 1, 2 }`/`{ a = 1 }` 为账记的 Lua 语法适配;
+- [x] **用例**:`test_util_format_no_fmt_and_extras` 追加对拍块
+      (零参空串、`%j` 四分支、`%d` 缺值、单 nil 归并),总数不变
+      仍 98;两树 modules 98/98,ctest 16/16 ×2。
+
 ### 批次 7(stream)实录(2026-10-01)
 
 - [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件

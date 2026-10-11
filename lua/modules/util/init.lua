@@ -292,6 +292,9 @@ local CONSUMING = {
 function M.format(f, ...)
     local n = select("#", ...)
     if n == 0 then
+        if f == nil then
+            return "" -- Node: 零参数返回空串
+        end
         if type(f) == "string" then
             return f -- Node: 单串参数原样返回 (含 %% 不折叠)
         end

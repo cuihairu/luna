@@ -351,7 +351,8 @@ M.posix = M
 --   设备根: 盘符 ([A-Za-z]:) / 完整 UNC (\\s\sh) / \?\ 命名空间;
 --   不完整 UNC (//a) 折叠为普通根; 设备相对路径 (C:foo) 无根;
 --   resolve: 设备认领后异设备段整段丢弃, 已绝对且无设备时更左的段
---   丢弃; 设备相对走 cwd 尾随 (env '=X:' 在 posix 宿主恒缺);
+--   丢弃; 设备相对走分盘 cwd (env '=X:' 优先, 宿主 cwd 验核不过 →
+--   设备根; posix 宿主 cwd 验核不过原样尾随);
 --   relative 大小写折叠比较 (仅大小写异 → '', 大小写混异 → 分段比较,
 --   无公共分隔符 → 返回目标原形); basename 的 ext 大小写敏感;
 --   保留设备名 (COM1 等) 走防误折叠分支; CVE-2024-36139 防护保留。
@@ -680,9 +681,15 @@ function W.resolve(...)
                 return (p:gsub("/", "\\"))
             end
         else
-            -- 设备相对: env '=X:' 在 posix 宿主恒缺, cwd 不匹配设备也
-            -- 不以 \ 起头 → Node 核验失败仍落 cwd, 尾段接在设备之后
-            p = cwd()
+            -- 设备相对: Node 走分盘 cwd (lib/path.js resolve) —— env
+            -- '=X:' 优先, 退回 process.cwd(); cwd 不指向本设备 (前两字
+            -- 符忽略大小写) 且第 3 字符是 \ 时整段换成设备根。posix 宿主
+            -- cwd 无盘符、第 3 字符非 \, 验不过 → 原样接在设备之后
+            -- (Node 在 Linux 的同款口径); Windows 异盘 cwd → 设备根
+            p = os.getenv("=" .. dev) or cwd()
+            if p:sub(1, 2):lower() ~= dev:lower() and p:sub(3, 3) == "\\" then
+                p = dev .. "\\"
+            end
         end
         if not skip then
             local pdev, root_end, pabs = w_root_scope(p)

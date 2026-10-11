@@ -2082,25 +2082,51 @@ static void test_path_win32_resolve_relative(void **state)
 
     /* win32 resolve (设备认领 / 异设备整段丢弃 / cwd 尾随 / cwd 快路径) 与 */
     /* relative (大小写折叠比较 / 无公共分隔符回退目标原形) */
+    /* cwd 认领随宿主走 (Node 同款): Windows 宿主 cwd 带盘符, 无设备段
+     * (//a, /) 接上盘符; posix 宿主 cwd 无盘符, 维持裸根 */
+    char cwdbuf[384];
+    assert_non_null(getcwd(cwdbuf, sizeof(cwdbuf)));
+    int win_cwd = ((cwdbuf[0] >= 'A' && cwdbuf[0] <= 'Z')
+        || (cwdbuf[0] >= 'a' && cwdbuf[0] <= 'z')) && cwdbuf[1] == ':';
+    char unca[16];
+    char roots[16];
+    if (win_cwd) {
+        snprintf(unca, sizeof(unca), "%c:\\a", cwdbuf[0]);
+        snprintf(roots, sizeof(roots), "%c:\\", cwdbuf[0]);
+    } else {
+        snprintf(unca, sizeof(unca), "\\a");
+        snprintf(roots, sizeof(roots), "\\");
+    }
+    char exp1[512];
+    snprintf(exp1, sizeof(exp1),
+             "C:\\,C:\\b,C:\\x,C:\\x\\foo,C:\\a\\b,C:\\a,D:\\b,c:\\b,%s,"
+             "\\\\a\\x\\,C:\\,%s,\\\\?\\C:\\x\\y", unca, roots);
 assert_string_equal(
         eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.resolve('C:/a','..') .. ',' .. w.resolve('C:/a','..','b') .. ',' .. w.resolve('C:foo','C:/x') .. ',' .. w.resolve('C:/x','C:foo') .. ',' .. w.resolve('/a','C:b') .. ',' .. w.resolve('C:b','/a') .. ',' .. w.resolve('C:/a','D:/b') .. ',' .. w.resolve('c:/A','../b') .. ',' .. w.resolve('//a') .. ',' .. w.resolve('//a/x','..') .. ',' .. w.resolve('C:/') .. ',' .. w.resolve('/') .. ',' .. w.resolve('\\\\\\\\?\\\\C:\\\\x\\\\y')"),
-        "C:\\,C:\\b,C:\\x,C:\\x\\foo,C:\\a\\b,C:\\a,D:\\b,c:\\b,\\a,\\\\a\\x\\,C:\\,\\,\\\\?\\C:\\x\\y");
+        exp1);
 assert_string_equal(
         eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.relative('C:/a/b','C:/a') .. ',' .. w.relative('C:/a','C:/a/b/c') .. ',' .. w.relative('C:\\\\','C:\\\\a\\\\b') .. ',' .. w.relative('C:/a','C:/a') .. ',' .. w.relative('C:\\\\A\\\\b','c:\\\\a\\\\B') .. ',' .. w.relative('C:/a','D:/a') .. ',' .. w.relative('//s/sh/a','//s/sh/b') .. ',' .. w.relative('C:\\\\a\\\\b','C:\\\\a\\\\x\\\\y') .. ',' .. w.relative('C:\\\\a\\\\b','C:\\\\b') .. ',' .. w.relative('\\\\\\\\s\\\\sh','\\\\\\\\s\\\\sh\\\\x')"),
         "..,b\\c,a\\b,,,D:\\a,..\\b,..\\x\\y,..\\..\\b,x");
-    /* cwd 锚定: 设备相对尾随 / cwd 快路径 / 无盘符 cwd (posix 宿主口径) */
-    char cwdbuf[384];
-    assert_non_null(getcwd(cwdbuf, sizeof(cwdbuf)));
+    /* cwd 锚定: 设备相对尾随 / cwd 快路径 / 无盘符 cwd (posix 宿主口径)
+     * vs 盘符 cwd (Windows 宿主口径): 设备相对的 cwd 验核 (Node 前缀
+     * 核验) 不过 → 整段换设备根 C:\, toNamespacedPath 补 \?\ 前缀 */
     char cwdw[384];
     int i;
     for (i = 0; cwdbuf[i] != '\0'; i++)
         cwdw[i] = cwdbuf[i] == '/' ? '\\' : cwdbuf[i];
     cwdw[i] = '\0';
-    char cwdexp[2000];
-    snprintf(cwdexp, sizeof(cwdexp),
-             "C:%s\\bar,C:%s\\foo\\bar,C:%s\\x,C:%s\\foo,C:%s,%s,%s,%s,%s\\x,"
-             "\\\\?\\C:%s,%s\\foo",
-             cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw);
+    char cwdexp[4600];
+    if (win_cwd) {
+        snprintf(cwdexp, sizeof(cwdexp),
+                 "C:\\bar,C:\\foo\\bar,C:\\x,C:\\foo,C:\\,"
+                 "%s,%s,%s,%s\\x,\\\\?\\C:\\,\\\\?\\%s\\foo",
+                 cwdw, cwdw, cwdw, cwdw, cwdw);
+    } else {
+        snprintf(cwdexp, sizeof(cwdexp),
+                 "C:%s\\bar,C:%s\\foo\\bar,C:%s\\x,C:%s\\foo,C:%s,%s,%s,%s,%s\\x,"
+                 "\\\\?\\C:%s,%s\\foo",
+                 cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw);
+    }
     assert_string_equal(
         eval_string("local p = require('path')\n"
                     "local w = p.win32\n"
@@ -2152,9 +2178,24 @@ assert_string_equal(
 assert_string_equal(
         eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.format({root=\"C:\\\\\", dir=\"C:\\\\a\", base=\"b.js\"}) .. ',' .. w.format({root=\"C:\\\\\", base=\"b.js\"}) .. ',' .. w.format({dir=\"/a\", name=\"b\", ext=\"js\"}) .. ',' .. w.format({root=\"C:\"}) .. ',' .. w.format({}) .. ',' .. w.format({dir=\"\", base=\"x\"}) .. ',' .. w.format({dir=\"C:\\\\a\\\\\\\\\", name=\"b\", ext=\".js\"}) .. ',' .. w.format({dir=\"/\", root=\"/\", base=\"x\"}) .. ',' .. w.format({dir=\"/a\", root=\"/a\", base=\"x\"}) .. ',' .. w.format({name=\"x\", ext=\"\"}) .. ',' .. w.format({root=\"\\\\\", base=\"x\"})"),
         "C:\\a\\b.js,C:\\b.js,/a\\b.js,C:,,x,C:\\a\\\\\\b.js,/x,/ax,x,\\x");
+    /* toNamespacedPath('/'): posix 宿主 resolve('/') 认领不到设备 →
+     * 裸根长度不足 3, 原样返回入参; Windows 宿主 cwd 补盘符 → \?\ 化
+     * (Node 同款) */
+    char tnp_cwd[384];
+    assert_non_null(getcwd(tnp_cwd, sizeof(tnp_cwd)));
+    char tnp_root[16];
+    if (((tnp_cwd[0] >= 'A' && tnp_cwd[0] <= 'Z')
+            || (tnp_cwd[0] >= 'a' && tnp_cwd[0] <= 'z')) && tnp_cwd[1] == ':')
+        snprintf(tnp_root, sizeof(tnp_root), "\\\\?\\%c:\\", tnp_cwd[0]);
+    else
+        snprintf(tnp_root, sizeof(tnp_root), "/");
+    char exp_tnp[256];
+    snprintf(exp_tnp, sizeof(exp_tnp),
+             "\\\\?\\C:\\a,,%s,\\\\?\\UNC\\s\\sh\\f,\\\\?\\C:\\x,"
+             "\\\\?\\UNC\\s\\sh\\,\\\\.\\x", tnp_root);
 assert_string_equal(
         eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.toNamespacedPath('C:/a') .. ',' .. w.toNamespacedPath('') .. ',' .. w.toNamespacedPath('/') .. ',' .. w.toNamespacedPath('\\\\\\\\s\\\\sh\\\\f') .. ',' .. w.toNamespacedPath('\\\\\\\\?\\\\C:\\\\x') .. ',' .. w.toNamespacedPath('//s/sh') .. ',' .. w.toNamespacedPath('\\\\\\\\.\\\\x')"),
-        "\\\\?\\C:\\a,,/,\\\\?\\UNC\\s\\sh\\f,\\\\?\\C:\\x,\\\\?\\UNC\\s\\sh\\,\\\\.\\x");
+        exp_tnp);
 }
 
 static void test_path_win32_contracts(void **state)
@@ -2517,13 +2558,16 @@ static void test_process_surface(void **state)
 {
     (void)state;
     /* 基本字段: pid/ppid/platform/arch/type/release/version; exitCode
-     * 缺省 nil (Node undefined) */
+     * 缺省 nil (Node undefined)。ppid 仅 linux 可探 (win 宿主 nil,
+     * 账记); platform/type 按宿主口径 (win32/Windows_NT vs linux/Linux) */
     assert_string_equal(
         eval_string("local p = require('process')\n"
-                    "return tostring(p.pid > 0) .. ',' .. tostring(p.ppid > 0)\n"
-                    "  .. ',' .. tostring(p.platform == 'linux')\n"
+                    "local win = package.config:sub(1, 1) == '\\\\'\n"
+                    "return tostring(p.pid > 0) .. ','\n"
+                    "  .. tostring(p.ppid == nil or p.ppid > 0)\n"
+                    "  .. ',' .. tostring(p.platform == (win and 'win32' or 'linux'))\n"
                     "  .. ',' .. tostring(p.arch == 'x64')\n"
-                    "  .. ',' .. tostring(p.type == 'Linux')\n"
+                    "  .. ',' .. tostring(p.type == (win and 'Windows_NT' or 'Linux'))\n"
                     "  .. ',' .. tostring(p.release ~= nil)\n"
                     "  .. ',' .. tostring(p.version == require('kernel').version())\n"
                     "  .. ',' .. tostring(p.versions.lua == '5.5')\n"
@@ -2542,7 +2586,8 @@ static void test_process_surface(void **state)
                     "  .. ',' .. tostring(p.execPath == nil\n"
                     "      or type(p.execPath) == 'string')"),
         "true,true,true,true");
-    /* cwd/chdir: 往返 + 坏目录 raise */
+    /* cwd/chdir: 往返 + 坏目录 raise。chdir('/') 的落点随宿主: posix
+     * 是 '/', Windows 是当前盘根 X:\ (= home 前 3 字符) */
     assert_string_equal(
         eval_string("local p = require('process')\n"
                     "local home = p.cwd()\n"
@@ -2551,13 +2596,16 @@ static void test_process_surface(void **state)
                     "p.chdir(home)\n"
                     "local back = p.cwd()\n"
                     "local _, m = pcall(p.chdir, '/nonexistent-dir-xyz')\n"
-                    "return tostring(root == '/') .. ',' .. tostring(back == home)\n"
+                    "return tostring(root == '/' or root == home:sub(1, 3)) .. ','\n"
+                    "  .. tostring(back == home)\n"
                     "  .. ',' .. tostring(m:find('process.chdir: ', 1, true) ~= nil)"),
         "true,true,true");
-    /* env: getenv 代理 + 叠写层 + 枚举拒绝 */
+    /* env: getenv 代理 + 叠写层 + 枚举拒绝。探针键随宿主 (HOME 仅
+     * posix 恒有, Windows 用 SystemRoot) */
     assert_string_equal(
         eval_string("local p = require('process')\n"
-                    "local a = p.env.HOME ~= nil\n"
+                    "local win = package.config:sub(1, 1) == '\\\\'\n"
+                    "local a = p.env[win and 'SystemRoot' or 'HOME'] ~= nil\n"
                     "p.env.LUNA_TEST_MARK = 'yes'\n"
                     "local b = p.env.LUNA_TEST_MARK == 'yes'\n"
                     "p.env.LUNA_TEST_MARK = nil\n"

@@ -1334,7 +1334,7 @@
   自动锚点,见「后续批次兑现」条**)、schema/tags 高级面(仍不做);
 - stream 的 webstreams/异步迭代器/setEncoding/cork 小面;
 - util 的 promisify/callbackify(Lua 无 promise,契约无锚)与 types
-  判等族;path 的 win32 面(平台面 Linux/macOS);
+  判等族(**path 的 win32 面 ✅已解冻落地(2026-10-11),见下条实录**);
 - 全局 setTimeout 与 REPL 集成(维持推迟,启用条件见下轮方向);
 - tomlc99 回退不预设,仅当 tomlc17 vendor 编译受阻时启用(决策记录 1)。
 
@@ -1446,6 +1446,36 @@ TLS 层不再是 Windows 的降级面,而是在 Windows 上真的能跑。
   windows-latest 14 例冒烟全绿(TLS 握手、close_notify EOF、自定义 CA
   信任、默认校验拒绝、双端 address/sockname/peer/family),ubuntu 同绿。
   Windows TLS 由降级面转为真实可跑面,「独立移植另议」彻底销账。
+
+### 解冻兑现:path.win32 面(批次 6 推迟清单,2026-10-11)
+
+本巡检拍板解冻批次 6 推迟清单的「path 的 win32 面」——原推迟理由
+「平台面 Linux/macOS」不成立(Node 在 Linux 上同样提供 win32 面,纯
+文本语义与宿主平台无关),衔接刚收口的 Windows TLS 移植批,使
+connectTls/listenTls 在 Windows 上跑通后,Windows 面的路径文本语义
+也有据可查。
+
+- [x] **win32 全函数面**(`lua/modules/path/init.lua`):normalize/
+      join/isAbsolute/resolve/relative/dirname/basename/extname/parse/
+      format/toNamespacedPath 逐段按 Node v24.21.0 `lib/path.js` 移植;
+      设备根三分(盘符 / 完整 UNC / `\\?\`、`\\.\` 命名空间)、
+      保留名防误折叠(CON/PRN/AUX/NUL/COM1-9/LPT1-9)、CVE-2024-
+      36139 冒号尾段防护、resolve 的设备认领与异设备整段丢弃、cwd
+      快路径与设备相对尾随、relative 的大小写折叠与分段回退,全落位;
+- [x] **posix relative 同批重写**:两套 relative 统一为 Node 的字符级
+      算法(`rel_chars`,0-based 计数器、`lastCommonSep` 语义),修掉旧
+      段差算法在 `relative('/a/b','/b')` 类边界上的错值;
+- [x] **用例**:`test/luna_test_modules.c` 增 6 组(path 测试从 5 增至
+      11,总数 92→98),含 cwd 锚定的 resolve 尾随/快路径与双面注册、
+      参数契约;
+- [x] **对拍收口**:本机 `node v24.21.0` 差分 326 例(生成器把 Node
+      实机输出直出为断言,零手抄)全数同值后落账;
+- [x] **已知偏差(有意,已账记)**:UTF-8 上标保留名变体(`COM\xb9`
+      等)不列——Lua `upper()` 无法复现;`toNamespacedPath` 对非字符串
+      沿 luna 全模块契约 raise(Node 原样返回非字符串)。
+
+门禁:build 与 build-cov 双树 ctest 全绿(rocks 组单独重跑确认过负载
+假挂非真挂),modules 二进制 98/98,差分 smoke 326/326。
 
 ### 批次 7(stream)实录(2026-10-01)
 

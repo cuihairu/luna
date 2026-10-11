@@ -33,7 +33,7 @@
 | `module` | 模块系统:`require` + `luna_modules/` 逐级上溯 + 清单 `main` + `luna install`(LuaRocks 包装,`luna.lock` 离线复现) | ✅ npm 的对应物在包管理面 |
 | `net` | 同步 `net`(luasocket)+ `loop.net`(connect/listen/connectTls/listenTls,多地址回退) | ✅ |
 | `os` | 官方 `os` 不遮蔽 + `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/uptime/loadavg/mem/cpus/networkInterfaces/home/tmpdir) | ✅ 批次 8 |
-| `path` | `path`(normalize/resolve/join/relative/parse/format,Node v24 实证钉版) | ✅ posix 面;`win32` ❌(平台面) |
+| `path` | `path`(posix 面)+ `path.win32`(设备根/UNC/\?\ 命名空间/保留名/CVE 防护),Node v24 实证钉版,纯 Lua 双面 | ✅ posix + win32 双面(批次 6 解冻项,win32 按 Node 在 Linux 上同款文本语义) |
 | `perf_hooks` | `%time` 魔法 + `loop.os` 的 uptime/loadavg | ◐ 无独立高精度计时库面 |
 | `process` | 全局 `arg`/`os.getenv` + `loop.process`(子进程)+ `loop.os`(系统信息) | ◐ 无单一大而全的 process 全局 |
 | `punycode` / `querystring` | — | ❌(URL 面缺口,见 `url` 行) |
@@ -291,9 +291,9 @@ ini.encode({ server = { host = "127.0.0.1" } })
 - 全局化与 REPL 集成维持推迟,启用条件不变。
 - **REPL 集成落地(2026-10-10,唤醒线程定时面)**:上条的启用条件(「唤醒线程可定时」)已建成——`linedit.arm_timer(ms)` 给唤醒线程加一次性 deadline,到期注入的哨兵键在**空提示符**上把阻塞读打断成空行 tick(打字中的草稿只顺延,永不打断;判定跑在输入线程内、`replxx_get_state` 的文档口径场景,零竞态),REPL 侧以 `package.loaded.loop` 探测(不自动加载),tick 上 `loop.turn()` 跑一轮。全局 `setTimeout` 维持推迟:它要的是**不 require 就在**,那就得动 REPL 的加载语义,而定时面已经把"循环在会话里转起来"的收益交付了。
 
-### path(批次 6,纯 Lua)
+### path(批次 6,纯 Lua;win32 面 2026-10-11 解冻补齐)
 
-Node `path.posix` 面(luna 的平台面是 Linux/macOS——replxx 构建已排除 windows.cxx,win32 面不做):
+Node `path.posix` 面 + `path.win32` 面(纯 Lua 文本语义,与宿主平台无关——Node 在 Linux 上同样提供 win32 面):
 
 ```lua
 local path = require "path"
@@ -311,7 +311,16 @@ path.sep                          -- "/"
 path.delimiter                    -- ":"
 ```
 
-Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边界行为对照进用例);~170 行纯 Lua,零依赖,**不用 C 的理由:Node 本尊纯 JS,libuv 无对应物**。
+Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边界行为对照进用例);纯 Lua,零依赖,**不用 C 的理由:Node 本尊纯 JS,libuv 无对应物**。win32 面以 v24.21.0 本机 `node` 差分对拍收口(326 例:normalize/join/isAbsolute/resolve/relative/dirname/basename/extname/parse×5 字段/format/toNamespacedPath/posix relative 全数同值)。
+
+**win32 面勘定(2026-10-11,解冻项)**:
+- **双面注册**:`path` 即 posix 面,`path.posix === path`;`path.win32` 独立表(`sep="\"`、`delimiter=";"`);
+- **设备根三分**:盘符(`[A-Za-z]:`)、完整 UNC(`\\s\\sh`)、`\\?\`/`\\.\` 命名空间(只认前缀 4 字符);不完整 UNC(`//a`)按普通根折叠(与 v24 一致:`normalize("//a/b")` → `"\\a\\b\"`);
+- **relative 大小写折叠**:resolve 后仅大小写异 → `""`;大小写混异按 `\` 分段比较、输出保留原形;无公共分隔符(异盘)→ 返回目标原形;posix 面同批重写为 Node 的**字符级算法**(`lastCommonSep` 语义——公共分隔符之前的段才回退 `..`,根级截断直返目标尾段),修掉旧段差算法在 `relative('/a/b','/b')` 类边界上的错值;
+- **保留名与 CVE 防护**:CON/PRN/AUX/NUL/COM1-9/LPT1-9 走防误折叠分支(`normalize("COM1:x")` → `".\\COM1:x"`);CVE-2024-36139 的冒号尾段防护保留(`normalize("foo:/bar")` → `".\\foo:\\bar"`);UTF-8 上标变体(`COM\xb9`)不列——Lua `upper()` 无法复现,已账记;
+- **resolve 的设备语义**:设备认领后异设备段整段丢弃;已绝对且无设备时更左的段丢弃;设备相对路径尾随 cwd(posix 宿主 `'=X:'` 环境恒缺,Node 核验失败仍落 cwd);无参/单空参且 cwd 以分隔符起头走 cwd 快路径(`/`→`\` 直返);
+- **文本操作原样保留输入斜杠**:dirname/basename/extname/parse 不规范化(`dirname("a//b")` → `"a/"`、`parse("\\\\s\\sh").dir == "\\\\s\\sh"`、`basename("C:/","x")` → `"/"` 的 start===end 怪癖照收);
+- **已知偏差(有意)**:`toNamespacedPath` 对非字符串沿 luna 全模块契约 raise(Node 原样返回非字符串);其余 326 例对拍零偏差。
 
 **实现勘定(2026-10-01,批次 6)**:
 - **normalize/resolve 折叠连续斜杠**——本节初稿写的「normalize 保留双前导斜杠」与 v24 实测不符:`normalize("//a")` → `"/a"`、`resolve("//a","b")` → `"/a/b"`(旧版 Node 的双斜杠保留已不成立);normalize 与 resolve 在尾斜杠上分叉——normalize 保留(`"foo/"` → `"foo/"`),resolve 剥掉(`resolve("/a/b/")` → `"/a/b"`);

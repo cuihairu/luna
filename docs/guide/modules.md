@@ -45,8 +45,10 @@ luna_modules/hello/
 | `toml` | tomlc17 | TOML v1.1 `decode`/`encode`;`decode` 走 C 后端,`encode` 是包装层自有实现(标量键先行、`[[表数组]]`、内联数组/日期时间/空表) |
 | `yaml` | libyaml + lyaml | YAML 1.1 `decode`/`decodeAll`/`encode`;null → nil 默认(`opts.nullval = yaml.null` 保留哨兵),anchors/aliases 解为共享表引用,`---` 分隔的多文档走 `decodeAll` |
 | `xml` | expat + lua-expat | DOM 三件套 `decode`/`encode`(元素 = `{tag, attrs, kids}`,文本节点是 kids 里的字符串,属性恒字符串,命名空间前缀原样)+ `xml.sax` 流式透传(lxp handler 模型) |
-| `path` | 纯 Lua | Node `path.posix` 语义:`join`/`resolve`/`normalize`/`relative`/`dirname`/`basename`/`extname`/`isAbsolute`/`parse`/`format` + `sep`/`delimiter`(按 Node v24 实证钉版,win32 面不做) |
+| `path` | 纯 Lua | Node `path` 双面:`posix` 面全量函数 + `win32` 面(`normalize`/`join`/`resolve`/`isAbsolute`/`relative`/文本操作/`parse`/`format`,设备根/UNC/保留名防护)+ `sep`/`delimiter`(按 Node v24 实证钉版) |
 | `util` | 纯 Lua | `util.inspect`(depth/循环 `[Circular *N]`/截断/键引号,Lua 语法形态)与 `util.format`(`%s %d %i %f %o %j %%` + 扩展 `%x %X`;无符连接、超参尾接,Node v24 口径) |
+| `querystring` | 纯 Lua | Node 面全量:`parse`/`stringify`(别名 `decode`/`encode`)+ `escape`/`unescape`(`'+'` 收空格、重复键聚合数组、`maxKeys` 默认 1000 且 `<=0` = 无限、`'!'()*-._~` 与数字字母不转义) |
+| `url` | 纯 Lua | Node legacy 面全量:`parse`(12 字段表,第二参 querystring 化,第三参 slashes 标记)、`format`(表/串重建,query 表走 stringify)、`resolve`/`resolveObject`(RFC 3986 点段折叠);WHATWG `URL` 未立项(见 node-parity 勘定) |
 | `events` | 纯 Lua | `events.new()` EventEmitter:`on`/`once`/`off`/`prepend*`/`listeners`/`listenerCount`/`setMaxListeners`/`emit`(缺省 10 超限警告、`'error'` 无监听 raise、newListener/removeListener 内建事件) |
 | `stream` | 纯 Lua | 基于 events 的 Node 流 v1 面:`readable`/`writable`/`duplex`/`transform`(`_read`→`push`、`_write`/`_transform`+`_flush`、`write`/`end_`)、`pipe` 背压(write false 停推等 `drain` 续推、`unpipe`)、`highWaterMark` 记账(缺省 16 KiB);适配器 `duplexFromSock`(loop.net sock)、`readableFromChunks`(内存块)、`pushReadable`(onData 推式) |
 | `zlib` | lua-zlib | 流式 `deflate`/`inflate` + 一次性 `compress`/`decompress` 便捷层 |
@@ -54,7 +56,7 @@ luna_modules/hello/
 
 **格式模块的错误口径**(csv/ini/toml/yaml/xml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
 
-**path/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动等)在 [Node 方向选型](/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
+**path/querystring/url/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动、querystring 的确定性键序等)在 [Node 方向选型](/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
 
 ```lua
 local fs = require("fs")

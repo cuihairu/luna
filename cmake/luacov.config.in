@@ -10,8 +10,8 @@ return {
   -- Lua patterns (no .lua suffix, / separators) matched against chunk
   -- source paths: report the strategy layer and luna's own staged
   -- wrappers (loop/http, csv, ini, toml, yaml, xml, path, util, events,
-  -- stream), not fixtures, the vendored third-party modules or luacov
-  -- itself.
+  -- stream, querystring, url), not fixtures, the vendored third-party
+  -- modules or luacov itself.
   include = {
     "lua/luna",
     "lua/modules/",
@@ -25,5 +25,7 @@ return {
     "luna_modules/util/",
     "luna_modules/events/",
     "luna_modules/stream/",
+    "luna_modules/querystring/",
+    "luna_modules/url/",
   },
 }

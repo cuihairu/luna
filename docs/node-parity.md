@@ -36,7 +36,8 @@
 | `path` | `path`(posix 面)+ `path.win32`(设备根/UNC/\?\ 命名空间/保留名/CVE 防护),Node v24 实证钉版,纯 Lua 双面 | ✅ posix + win32 双面(批次 6 解冻项,win32 按 Node 在 Linux 上同款文本语义) |
 | `perf_hooks` | `%time` 魔法 + `loop.os` 的 uptime/loadavg | ◐ 无独立高精度计时库面 |
 | `process` | 全局 `arg`/`os.getenv` + `loop.process`(子进程)+ `loop.os`(系统信息) | ◐ 无单一大而全的 process 全局 |
-| `punycode` / `querystring` | — | ❌(URL 面缺口,见 `url` 行) |
+| `punycode` | — | ❌(`url` 的 IDNA toASCII 不做,见 `url` 行勘定) |
+| `querystring` | `querystring`(parse/stringify + escape/unescape;别名 decode/encode) | ✅ 纯 Lua,Node v24.21.0 差分对拍 |
 | `readline` | `luna_line`(replxx 桥:编辑/历史/高亮/补全)——REPL 内建,非公共库 | ◐ 形态不同 |
 | `repl` | luna REPL 本体(多行续行/补全/高亮/魔法命令/`In[n]`·`Out[n]`) | ✅ |
 | `stream` | `stream`(Readable/Writable/Duplex/Transform/pipe 背压;sock/chunks/http 适配器) | ✅ 批次 7,v1 面收窄(无 webstreams/异步迭代器/setEncoding/cork) |
@@ -45,7 +46,7 @@
 | `tls` | `loop.net.connectTls/listenTls`(OpenSSL 状态机,证书校验默认开启) | ✅ |
 | `trace_events` | — | ❌ |
 | `tty` | 内核 `kernel.tty()` + REPL 的 tty 形态 | ◐ |
-| `url` | — | ❌(`loop.http` 内部解析请求行/重定向,无公共 url 模块) |
+| `url` | `url`(parse/format/resolve/resolveObject,legacy 面;`loop.http` 仍自持请求行解析) | ◐ legacy 面已移植,WHATWG `URL`/`URLSearchParams`/`domainToASCII`/`pathToFileURL` 未立项(见下方勘定) |
 | `util` | `util.inspect`(确定性键序/深度/循环)+ `util.format`(%s %d %f %i %j %%) | ◐ promisify/callbackify/types 无(Lua 无 promise 契约) |
 | `v8` | `luna.introspect` + REPL 的 `?expr` 帮助 | ◐ 形态不同(无堆快照面) |
 | `vm` | 官方 `load`(chunkname/env 参数) | ◐ 语言原语覆盖 |
@@ -345,6 +346,36 @@ Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边�
 - **`%j` 的 dkjson 分叉**:dkjson 比浏览器 JSON.stringify 严——函数值直接报错而非省略,失败回退 util.inspect(不抛);
 - **零参与缺值勘定(2026-10-11,Node v24.21.0 对拍)**:`format()` 零参返回空串(Node 同款;此前误返 `"nil"` 已修);Lua 中 `format()` 与 `format(nil)` 参数层面不可区分,统一空串——Node 对 `format(undefined)` 的 `"undefined"` 无 Lua 对应,语言固有偏差;`%j` 缺值不消费(留原样 `%j`);`%j` 遇 nil 按运行时 null 约定序列化为 `"null"`(Node 对 null 同、对 undefined 是 `"undefined"`,取 null 口径)、NaN/Infinity → `"null"` 与 JSON.stringify 同、`{a=NaN}` → `{"a":null}` 同;`%s`/`%o` 遇 nil 显示 `"nil"`(Node `"undefined"`,同语言固有);`%d` 遇 nil → `"NaN"`(Node 同款);
 - inspect 的 **Lua 语法适配**:表一律 `{}` 形态(JS 的 `[]`/`{}` 在 Lua 无对应)、键值 `k = v` 而非 `k: v`;**键排序保确定性**(序列段在前,其余数字升序、字符串字节序、他类按 tostring;pairs 序不定,无法对齐 Node 插入序——适配而非分叉);深度塌缩标记 `[Object]`/`[Array]`(按 `#t` 判);截断省略号用 ASCII `...`;共享(非环)引用各自完整渲染,只有祖先链上的重访标 `[Circular *N]`。
+
+### querystring / url(2026-10-11,纯 Lua,Node v24.21.0 差分对拍)
+
+Node 的 `url` 新面(WHATWG `URL`)钉在 C++ binding 上,legacy 面(`parse`/`format`/`resolve`/`resolveObject`)是 `lib/url.js` + `lib/internal/url.js` 的纯 JS 状态机——luna 按 path/events 同款纪律**移植 legacy 面整架**,querystring(`lib/querystring.js`)一并移植(它是 `url.parse(_, true)` 与 `url.format` query 表的硬依赖):
+
+```lua
+local qs = require "querystring"
+qs.parse("a=1&b=2")                     -- {a="1", b="2"};'+ '收空格,重复键聚合数组
+qs.parse("a=1&b=2&c=3", nil, nil, {maxKeys=2})  -- 默认 1000;<=0 = 无限(Node 同款怪癖)
+qs.stringify({a="b c", b={1,2}})        -- "a=b%20c&b=1&b=2";数字/布尔裸串不编码
+qs.escape("a b")                        -- "a%20b";!'()*-._~ 与数字字母不转义
+qs.unescape("a+b%20c%2z")               -- "a+b c%2z" 宽松解码,残缺 % 原样
+
+local url = require "url"
+url.parse("http://u:p@h.com:8080/p?q#h") -- 字段表:protocol/slashes/auth/host/hostname/
+                                         --   port/hash/search/query/pathname/path/href
+url.parse("http://a.com/?a=1&a=2", true) -- query 走 querystring.parse
+url.parse("//user@host/x?q", false, true) -- slashesDenoteHost
+url.format({protocol="http:", hostname="a.com", port=8080, query={a="1"}})
+url.resolve("http://example.com/a/b/c", "../f")   -- "http://example.com/a/f"
+url.resolveObject("http://a.com/a/b", "c/d")      -- 返回字段表非串
+```
+
+**实现勘定(168 例差分探针,Node v24.21.0 逐例对账)**:
+- **parse 全字段对齐**:空白修剪、`\` → `/` 归一(仅斜杠协议)、auth 取首个 `@` 之前并 `unescape`、`simplePathPattern` 快路径、主机 255 上限截空、IPv6 括号剥壳、`javascript:` hostless/unsafe、`file:` 空主机、autoEscape(`" ' < > ` `` ` `` 空格等 → %XX)、`:` 后非数字段不进 port(并入 pathname,Node 同款);
+- **href 由 format 重建**:auth 编码走 `noEscapeAuth`(qs.escape 集外多放行 `:`,`u:p` 在 href 里是裸冒号、`@` 是 `%40`);pathname 的 `#`/`?` 转 `%23`/`%3F`;
+- **错误口径**:`parse(非串)` → `url.parse: url must be a string, got N`;主机含禁字符/IPv6 未闭括号 → `Invalid URL: <原文,位置 0>`(Node `ERR_INVALID_URL` 的消息文本);
+- **账记偏差**(探针逐例确认):`stringify` 键序为确定性字节序(Node 是插入序);空 Lua 表按空数组处理——字段整体省略,Node 的 `{}` 是对象出 `a=`(语言固有,无法区分空数组与空对象);`escape(nil)` 出 `nil`(Node `String(null)`);`parse` 的 auth 解码宽松(Node 走 `decodeURIComponent`,残缺 %XX 抛 `URIError`,luna 原样保留);DEP0169/DEP0170 废弃告警不发;NBSP/ZWNBSP 不计空白;
+- **明确不立项**:WHATWG `URL`/`URLSearchParams`(C++ binding 面,无 promise/Rust 结构可对)、`domainToASCII`/`domainToUnicode`(IDNA,非 ASCII 主机名原样保留)、`pathToFileURL`/`fileURLToPath`、`urlToHttpOptions`、`Url` 构造器(`parse` 结果即等价对象);
+- C 测试 6 例(querystring 3 + url 3)钉形状;modules 组 98 → 104。
 
 ### events(批次 6,纯 Lua)
 

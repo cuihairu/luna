@@ -2372,6 +2372,263 @@ static void test_util_args_contract(void **state)
         "true,true");
 }
 
+/* -- querystring (Node lib/querystring.js, v24.21.0 对拍) ------------------ */
+
+static void test_qs_parse_shapes(void **state)
+{
+    (void)state;
+    /* 基本形状: 键值聚合, '+' 收空格, 重复键成数组再追加 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local t = qs.parse('a=1&b=2')\n"
+                    "local u = qs.parse('a+b=c+d')\n"
+                    "local v = qs.parse('a=1&a=2&a=3')\n"
+                    "local w = qs.parse('a=b=c')\n"
+                    "return t.a .. ',' .. t.b .. ',' .. u['a b'] .. ','\n"
+                    "  .. #v.a .. ',' .. v.a[1] .. ',' .. v.a[3]\n"
+                    "  .. ',' .. w.a"),
+        "1,2,c d,3,1,3,b=c");
+    /* 空段与残键: && 全空段; 空对计数; 尾段归值 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local a = qs.parse('&&')\n"
+                    "local b = qs.parse('a=1&&b=2')\n"
+                    "local c = qs.parse('a=1&')\n"
+                    "local d = qs.parse('a=1&a')\n"
+                    "return tostring(next(a) == nil) .. ',' .. b.a .. ',' .. b.b\n"
+                    "  .. ',' .. c.a .. ',' .. tostring(d.a[2])"),
+        "true,1,2,1,");
+    /* 解码: 含有效 %XX 才解码, 残缺 % 原样; 键含 %3D 解出 '=' */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local a = qs.parse('a%ZZ=1')\n"
+                    "local b = qs.parse('%61%3D%63')\n"
+                    "local c = qs.parse('a=%2Fx')\n"
+                    "local d = qs.parse('a=%ZZ&b=%2B')\n"
+                    "local e = qs.parse('0=x')\n"
+                    "local f = qs.parse('a=1;b=2')\n"
+                    "local g = qs.parse('')\n"
+                    "return next(a) .. ',' .. tostring(b['a=c']) .. ',' .. c.a\n"
+                    "  .. ',' .. d.a .. ',' .. d.b .. ',' .. e['0'] .. ','\n"
+                    "  .. f.a .. ',' .. tostring(next(g) == nil)"),
+        "a%ZZ,,/x,%ZZ,+,x,1;b=2,true");
+    /* 空等号段: 键或值为空串照收 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local a = qs.parse('=')\n"
+                    "local b = qs.parse('=x')\n"
+                    "local c = qs.parse('x=')\n"
+                    "return tostring(a[''] == '') .. ',' .. b[''] .. ',' .. tostring(c.x == '')"),
+        "true,x,true");
+}
+
+static void test_qs_parse_opts_and_escape(void **state)
+{
+    (void)state;
+    /* 自定义 sep/eq; 无 eq 的段全落空值键; 空串回落默认 (Node `sep || '&'`) */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local a = qs.parse('a=1;2', ';')\n"
+                    "local b = qs.parse('a:1:b', ':')\n"
+                    "local c = qs.parse('a=1&b=2', '', '')\n"
+                    "return a.a .. ',' .. tostring(a['2'] == '') .. ','\n"
+                    "  .. b.a .. ',' .. tostring(b['1'] == '') .. ','\n"
+                    "  .. c.a .. ',' .. c.b"),
+        "1,true,,true,1,2");
+    /* maxKeys: 默认 1000; >0 生效; 0/-1 = 无限 (Node 同款怪癖) */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "local a = qs.parse('a=1&b=2&c=3', nil, nil, {maxKeys=2})\n"
+                    "local b = qs.parse('a=1&b=2&c=3', nil, nil, {maxKeys=0})\n"
+                    "local c = qs.parse('a=1&b=2&c=3', nil, nil, {maxKeys=-1})\n"
+                    "return tostring(a.a) .. ',' .. tostring(a.b) .. ','\n"
+                    "  .. tostring(a.c) .. ',' .. tostring(b.c) .. ','\n"
+                    "  .. tostring(c.c)"),
+        "1,2,nil,3,3");
+    /* escape: 不转义 !'()*-._~ 与数字字母, 其余 %XX; 非串 String(v) */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return qs.escape('a b~*()!c+d/e') .. ',' .. qs.escape(123)\n"
+                    "  .. ',' .. qs.escape('ñ') .. ',' .. qs.escape('')"),
+        "a%20b~*()!c%2Bd%2Fe,123,%C3%B1,");
+    /* unescape: 宽松解码, 残缺 % 原样保留 (Node decodeURIComponent
+     * 失败退 unescapeBuffer 的净效果) */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return qs.unescape('a+b%20c%2z') .. ',' .. qs.unescape('%')\n"
+                    "  .. ',' .. qs.unescape('%2') .. ',' .. qs.unescape('%C3%B1')"),
+        "a+b c%2z,%,%2,ñ");
+    /* decode/encode 别名 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return tostring(qs.decode == qs.parse) .. ','\n"
+                    "  .. tostring(qs.encode == qs.stringify)"),
+        "true,true");
+}
+
+static void test_qs_stringify(void **state)
+{
+    (void)state;
+    /* 标量: 串编码, 数字/布尔裸串; 整值浮点出整数串 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return qs.stringify({a=true, b=false, c=1.5, d=3}) .. '|'\n"
+                    "  .. qs.stringify({a='b c', b='a&b', c='%20'}) .. '|'\n"
+                    "  .. qs.stringify({a=''}) .. '|'\n"
+                    "  .. qs.stringify({a=0/0}) .. '|'\n"
+                    "  .. qs.stringify({a=1e21}) .. '|'\n"
+                    "  .. qs.stringify({a=1e20}) .. '|'\n"
+                    "  .. qs.stringify({a=2^53})"),
+        "a=true&b=false&c=1.5&d=3|a=b%20c&b=a%26b&c=%2520|a=|a=|a=1e%2B21|"
+        "a=100000000000000000000|a=9007199254740992");
+    /* 数组值逐项展开; 空数组整字段省略; -0 出 0 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return qs.stringify({a={1,2,3}}) .. '|'\n"
+                    "  .. qs.stringify({a={}}) .. '|'\n"
+                    "  .. qs.stringify({a={2,1}}) .. '|'\n"
+                    "  .. qs.stringify({a={'','x'}}) .. '|'\n"
+                    "  .. qs.stringify({a={true,false}}) .. '|'\n"
+                    "  .. qs.stringify({a=-0.0})"),
+        "a=1&a=2&a=3||a=2&a=1|a=&a=x|a=true&a=false|a=0");
+    /* 自定义 sep/eq; 空串回落默认 */
+    assert_string_equal(
+        eval_string("local qs = require('querystring')\n"
+                    "return qs.stringify({a='1', b='2'}, ';', ':') .. '|'\n"
+                    "  .. qs.stringify({a='b'}, '', '')"),
+        "a:1;b:2|a=b");
+}
+
+/* -- url (Node lib/url.js legacy 面, v24.21.0 对拍) ------------------------ */
+
+static void test_url_parse_fields(void **state)
+{
+    (void)state;
+    /* 全字段: 协议/认证/主机/端口/路径/查询/哈希; href 由 format 重建,
+     * auth 的 ':' 不转义 (noEscapeAuth) */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local t = u.parse('http://user:pass@host.com:8080/p/a/t?query=string#hash')\n"
+                    "return t.protocol .. '|' .. tostring(t.slashes) .. '|'\n"
+                    "  .. t.auth .. '|' .. t.host .. '|' .. t.hostname .. '|'\n"
+                    "  .. t.port .. '|' .. t.pathname .. '|'\n"
+                    "  .. t.search .. '|' .. t.query .. '|'\n"
+                    "  .. t.hash .. '|' .. t.path .. '|' .. t.href"),
+        "http:|true|user:pass|host.com:8080|host.com|8080|/p/a/t|"
+        "?query=string|query=string|#hash|/p/a/t?query=string|"
+        "http://user:pass@host.com:8080/p/a/t?query=string#hash");
+    /* 无层协议: mailto 认证归入 @ 切分, 无 slashes/path; hostless
+     * javascript 路径不转义; 相对引用只有 href/path/pathname */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.parse('mailto:x@y.com')\n"
+                    "local b = u.parse('javascript:alert(1)')\n"
+                    "local c = u.parse('//foo/bar')\n"
+                    "return tostring(a.protocol) .. ',' .. tostring(a.auth) .. ','\n"
+                    "  .. tostring(a.host) .. ',' .. tostring(a.slashes) .. ','\n"
+                    "  .. tostring(b.pathname) .. ',' .. tostring(b.host) .. ','\n"
+                    "  .. tostring(c.href) .. ',' .. tostring(c.pathname) .. ','\n"
+                    "  .. tostring(c.protocol)"),
+        "mailto:,x,y.com,nil,alert(1),nil,//foo/bar,//foo/bar,nil");
+    /* 空白修剪/空格转义/反斜杠归一/IPv6/端口怪癖 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.parse('  http://a.com  ')\n"
+                    "local b = u.parse('http://a.com/pa th')\n"
+                    "local c = u.parse('http://a.com\\\\path')\n"
+                    "local d = u.parse('http://[2001:db8::1]:8080/x')\n"
+                    "local e = u.parse('http://a.com:port/x')\n"
+                    "return a.href .. ',' .. b.pathname .. ',' .. c.pathname .. ','\n"
+                    "  .. d.hostname .. ',' .. d.host .. ',' .. tostring(e.port)\n"
+                    "  .. ',' .. e.pathname"),
+        "http://a.com/,/pa%20th,/path,2001:db8::1,[2001:db8::1]:8080,nil,/:port/x");
+    /* 认证解码与 @ 歧义: %20 解码, 首个 @ 之后并入主机 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.parse('http://user%20name@a.com/')\n"
+                    "local b = u.parse('http://a@b@c/')\n"
+                    "local c = u.parse('http://a@b?@c')\n"
+                    "return a.auth .. ',' .. b.auth .. ',' .. b.host .. ','\n"
+                    "  .. c.auth .. ',' .. c.host .. ',' .. c.query"),
+        "user name,a@b,c,a,b,@c");
+}
+
+static void test_url_parse_qs_and_contract(void **state)
+{
+    (void)state;
+    /* parse_qs=true: query 走 querystring.parse; 无 search 时空表 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.parse('http://a.com/?a=1&a=2', true)\n"
+                    "local b = u.parse('http://a.com/?a+b=c+d', true)\n"
+                    "local c = u.parse('http://a.com', true)\n"
+                    "return #a.query.a .. ',' .. a.query.a[2] .. ','\n"
+                    "  .. b.query['a b'] .. ',' .. tostring(next(c.query) == nil)"),
+        "2,2,c d,true");
+    /* 大小写归一/哈希带 ?/file 空主机/孤立相对/空串 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.parse('HTTP://Example.COM/path')\n"
+                    "local b = u.parse('http://a.com/x#h?j')\n"
+                    "local c = u.parse('file:///tmp/x')\n"
+                    "local d = u.parse('/')\n"
+                    "local e = u.parse('')\n"
+                    "return a.protocol .. ',' .. a.hostname .. ',' .. a.href .. ','\n"
+                    "  .. b.hash .. ',' .. tostring(c.host) .. ',' .. tostring(c.protocol)\n"
+                    "  .. ',' .. d.pathname .. ',' .. tostring(e.href)"),
+        "http:,example.com,http://example.com/path,#h?j,,file:,/,");
+    /* 契约: 非串输入报错; IPv6 未闭括号报 Invalid URL (与 Node
+     * ERR_INVALID_URL 同文案) */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local _, m1 = pcall(u.parse, 42)\n"
+                    "local _, m2 = pcall(u.parse, 'http://[2001:db8::1')\n"
+                    "return tostring(m1:find('url.parse: url must be a string', 1, true) ~= nil)\n"
+                    "  .. ',' .. tostring(m2:find('Invalid URL: ', 1, true) ~= nil)"),
+        "true,true");
+}
+
+static void test_url_format_and_resolve(void **state)
+{
+    (void)state;
+    /* format: 串直接走 parse 重建; 表按字段拼接; 认证 ':' 不转义;
+     * query 表走 querystring.stringify */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "return u.format('http://a.com/a b') .. '|'\n"
+                    "  .. u.format({protocol='http:', hostname='a.com', port=8080,\n"
+                    "    pathname='/x', search='?y=1', hash='#z'}) .. '|'\n"
+                    "  .. u.format({protocol='file', pathname='/tmp/x'}) .. '|'\n"
+                    "  .. u.format({auth='u:p', protocol='http:', host='a.com'}) .. '|'\n"
+                    "  .. u.format({protocol='http:', hostname='a.com', query={a='1'}}) .. '|'\n"
+                    "  .. u.format({protocol='http:', hostname='[2001:db8::1]', port=8080})"),
+        "http://a.com/a%20b|http://a.com:8080/x?y=1#z|file:///tmp/x|"
+        "http://u:p@a.com|http://a.com?a=1|http://[2001:db8::1]:8080");
+    /* resolve: 绝对覆盖/点段折叠/协议切换/引用为空只重建 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "return u.resolve('http://example.com/a/b/c', 'd/e') .. '|'\n"
+                    "  .. u.resolve('http://example.com/a/b/c?q#h', '../f') .. '|'\n"
+                    "  .. u.resolve('http://a.com', '//b.com/x') .. '|'\n"
+                    "  .. u.resolve('http://a.com/x', 'ftp://b.com/y') .. '|'\n"
+                    "  .. u.resolve('http://a.com/a/b/', '../../') .. '|'\n"
+                    "  .. u.resolve('http://a.com/dir/page?q=1#h', '') .. '|'\n"
+                    "  .. u.resolve('mailto:x@y.com', 'z@w.com?subject=s') .. '|'\n"
+                    "  .. u.resolve('http://a.com/a/b/c', '../../../d')"),
+        "http://example.com/a/b/d/e|http://example.com/a/f|http://b.com/x|"
+        "ftp://b.com/y|http://a.com/|http://a.com/dir/page?q=1|"
+        "mailto:z@w.com?subject=s|http://a.com/d");
+    /* resolveObject: 返回字段表; 仅 search/hash 的相对只改对应字段 */
+    assert_string_equal(
+        eval_string("local u = require('url')\n"
+                    "local a = u.resolveObject('http://a.com/a/b', 'c/d')\n"
+                    "local b = u.resolveObject('http://a.com/a', '?q=2')\n"
+                    "local c = u.resolveObject('http://a.com/a', '#h2')\n"
+                    "return a.href .. ',' .. b.search .. ',' .. tostring(b.pathname)\n"
+                    "  .. ',' .. c.hash .. ',' .. tostring(c.pathname)"),
+        "http://a.com/a/c/d,?q=2,/a,#h2,/a");
+}
+
 /* -- events (Node EventEmitter, batch 6) ---------------------------------- */
 
 static void test_events_dispatch(void **state)
@@ -3232,6 +3489,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_util_inspect_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_inspect_truncation_circular, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_url_parse_fields, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_url_parse_qs_and_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_url_format_and_resolve, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_dispatch, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_builtin_events, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_error_and_maxlisteners, setup_modules, teardown_modules),

@@ -1500,6 +1500,40 @@ win32 面收口后顺手对 `util.format` 做 Node v24.21.0 差分扫(18 例),
       (零参空串、`%j` 四分支、`%d` 缺值、单 nil 归并),总数不变
       仍 98;两树 modules 98/98,ctest 16/16 ×2。
 
+### querystring + url 模块移植(2026-10-11)
+
+Node URL 面两大缺口一次收口:querystring(`lib/querystring.js` 全量)与
+url legacy 面(`lib/url.js` + `lib/internal/url.js` 的
+parse/format/resolve/resolveObject),纯 Lua,均按 Node v24.21.0
+源码逐行移植 + 168 例差分探针逐例对账(自定义确定性渲染器双侧对齐,
+dkjson 键序不对拍):
+
+- [x] **`querystring`**:`parse`/`stringify`(`decode`/`encode` 别名)+
+      `escape`/`unescape`;`'+'` 收空格、重复键聚合数组、`maxKeys`
+      默认 1000 且 `<=0` = 无限、空串 sep/eq 回落默认
+      (Node `sep || '&'`)、含有效 %XX 才解码(encodeCheck 三连击的
+      净效果)、残缺 % 原样;
+- [x] **`url` legacy 面**:parse 12 字段全对齐(空白修剪、`\`→`/`
+      归一、auth 首个 `@` 前切并 unescape、快路径、主机 255 上限、
+      IPv6 括号、`javascript:` hostless/unsafe、autoEscape、非法端口
+      不进 port);href 由 format 重建(auth 走 `noEscapeAuth`——
+      qs.escape 集外多放行 `:`,`u:p` 裸冒号、`@` 出 `%40`);resolve/
+      resolveObject 全状态机(RFC 3986 点段折叠、协议切换、
+      removeAllDots、mustEndAbs);错误口径 `Invalid URL: <原文>`;
+- [x] **账记偏差**(探针确认):stringify 键序确定性字节序(Node
+      插入序);空 Lua 表 = 空数组(字段省略,Node `{}` 是对象出
+      `a=`);`escape(nil)` 出 `nil`;auth 解码宽松(Node
+      `decodeURIComponent` 抛 `URIError`);DEP0169/DEP0170 告警不发;
+      NBSP/ZWNBSP 不计空白;
+- [x] **明确不立项**:WHATWG `URL`/`URLSearchParams`、IDNA
+      domainToASCII、pathToFileURL/fileURLToPath、urlToHttpOptions、
+      `Url` 构造器(parse 结果即等价对象);
+- [x] **用例**:`test/luna_test_modules.c` 增 6 例(qs 3 + url 3),
+      98 → 104;luacov 收编 `luna_modules/querystring/`、
+      `luna_modules/url/`;docs(node-parity 表两行 + 勘定节、
+      guide/modules 表两行)同批;两树 modules 104/104,ctest
+      16/16 ×2(rocks cov 树负载假挂一次,单跑过)。
+
 ### 批次 7(stream)实录(2026-10-01)
 
 - [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件

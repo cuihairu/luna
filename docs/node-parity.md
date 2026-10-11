@@ -18,7 +18,7 @@
 | `buffer` | Lua 字符串即 8-bit 串;二进制打包走官方 `string.pack`/`unpack` | ◐ 语言原语覆盖,无独立 Buffer 类型 |
 | `child_process` | `loop.process`:`run`(聚合)/`spawn`(流式,stdio 直交 `loop.net` sock)/`exec`/`execSync` | ✅ |
 | `cluster` | — | ❌ 多进程可用 `loop.process` 自组 |
-| `console` | `print`/`io.write` + REPL 的 `Out[n]` 会话记录 | ◐ |
+| `console` | 纯 Lua `console` 模块(log/info/debug/warn/error/assert/trace/dir/table/time/timeLog/timeEnd/count/countReset/group 族 + Console 构造器) | ✅ 形状对拍(偏差见 console 勘定) |
 | `crypto` | `crypto`(luaossl:digest/hmac/cipher/rand/kdf/pkey/x509 全家族) | ✅ 证书面比 Node 内建更深 |
 | `dgram` | `loop.udp`(bind 常驻收包、send 按包回调) | ✅ |
 | `diagnostics_channel` | — | ❌ |
@@ -54,7 +54,7 @@
 | `worker_threads` | — | ❌(并发模型与 Node 同形:单线程事件循环 + 线程池 IO;Lua 协程只做协作式) |
 | `zlib` | `zlib`(deflate/gzip 一次性便捷层 + 流式 closure) | ✅ |
 
-**Node 全局对象对照**:`process`→✅(纯 Lua `process` 模块,常用同步面;子进程仍 `loop.process`);`Buffer`→❌(`string` + `string.pack`);`console`→`print`;`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
+**Node 全局对象对照**:`process`→✅(纯 Lua `process` 模块,常用同步面;子进程仍 `loop.process`);`Buffer`→❌(`string` + `string.pack`);`console`→✅(纯 Lua `console` 模块,形状对拍);`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
 
 **反向账**:luna 有而 Node 标准库没有的——IPython 式 REPL(`In[n]`/`Out[n]`/魔法命令/实时高亮补全)、目录插件机制(四扩展点)、`luna.lock` 离线复现装包、`--attach` 跨进程观测、单文件二进制随带全部标准库与包管理器。本表只对齐 Node 标准库,不比 npm 生态。
 
@@ -402,6 +402,32 @@ p.memoryUsage().heapUsed                -- Lua 堆字节
 - **账记偏差**(探针逐项确认):hrtime/uptime 分辨率到毫秒(kernel.millis,Node 纳秒),`hrtime.bigint` 出整型数非 bigint;memoryUsage 只报 `heapUsed`(collectgarbage 计数,Node 五键 rss/external/arrayBuffers/heapTotal/heapUsed);env 不可枚举(Lua 走不了 environ),叠写对 `os.execute` 子进程不可见;`process.type` 是扩展(Node undefined);`versions` 是 `{lua=..., luna=...}` 非 Node 键集;ppid 走 /proc/self/stat;
 - **明确不立项**:abort/kill/信号处理(loop.process 辖)、title/config/dlopen/binding、cpuUsage/resourceUsage(loop.os 辖)、emitWarning、chdir 之外的目录句柄面;
 - C 测试 10 例钉形状(process surface 一组);modules 组 104 → 105;harness 补注册 kernel C 模块(与 luna_main 同款;rocks 守卫测试分块隐藏 kernel,维持其「kernel 缺席」前提)。
+
+### console(2026-10-11,纯 Lua,Node v24.21.0 形状对拍)
+
+Node console 是 C++ binding 面的日志层,但整面都是格式化 + 写入 + 计数——纯 Lua 可聚合:log 族格式化走既有 `util.format`,单元渲染走 `util.inspect`,写出走 process 模块的 stdout/stderr(`kernel.write` 漏斗 / 直写即刷),计时走 `kernel.millis`,`table` 是自建 ASCII 网格渲染器。构造器 `Console(stdout, [stderr])` 收任意带 `write(s)` 的流表,单例挂 `process.stdout/stderr`(Node `console.Console(stream)` 同形):
+
+```lua
+local c = require "console"
+c.log("a %s %d", "x", 42)        -- util.format 口径
+c.warn("w %d", 1)                -- stderr 侧同形
+c.assert(false, "m")             -- "Assertion failed: m"(假值告警不抛)
+c.assert(0, 42, "x")             -- 首参非串:"Assertion failed 42 x"
+c.time("t"); c.timeEnd("t")      -- "t: 0ms";缺参默认标签 "default"
+c.count("n"); c.countReset("n")  -- "n: 1";无标签告警
+c.group("g"); c.log("in")        -- 一级两空格缩进
+c.trace("here")                  -- "Trace: here" + 栈
+c.dir({a=1, b={c=2}}, {depth=0}) -- inspect 透传
+c.table({{x=1,y=2},{y=3,z=4}}, {"y","z"})  -- ASCII 网格,缺格出空
+```
+
+**实现勘定(70+ 例形状对拍,Node v24.21.0 逐例对账)**:
+- **网格口径钉死**:单空格边距、全左对齐、`┌┬┐├┼┤└┴┘` 框线、表头 `(index)`、列宽取码点最大值;行形二分——`#t > 0` 按数组行(下标 0 起)、否则按对象行(键名成列),function 行是空键对象行(Values 列只在有标量行时出现);
+- **properties 语义**:列即属性名单(给定序、可重复,不依赖行内容),选取只对表行生效,数值属性走数组编号(探针口径 `[...],[b]` 列在但格空);
+- **assert 三口径**:无参 `Assertion failed`、首参串加冒号 `Assertion failed: <format>`、首参非串空格接 `Assertion failed <format>`;假值按 Node falsy 集收口(`nil`/`false`/`0`/`''`/`NaN`,Lua 本只 `nil`/`false` 为假);
+- **账记偏差**:`time`/`timeLog`/`timeEnd` 毫秒分辨率(整毫秒出 `5ms`,Node 同形;亚毫秒出 `0`);单元与 `dir` 走 `util.inspect`(Lua 源形态、键序确定性——Node 是 JS inspect 单引号与 `[ 1, 2 ]` 形态),列宽按 UTF-8 码点计(CJK/emoji 单元会窄);Lua 无 Set/Map,`(iteration index)` 列不出现;对象行键序为字节序(Node 插入序);trace 栈是 `debug.traceback` 形态;告警无 `(node:NNNN)` 进程前缀与 trace-warnings 提示;`clear` 探不到 stdout TTY 恒 no-op(Node 非 TTY 同款行为);
+- **明确不立项**:Inspector/color 面(`profile`/`profileEnd`/`timeStamp` 恒 no-op,Node 无 Inspector 时同形)、`console.Console` 的 color/inspectOptions 面;
+- C 测试 8 例钉形状(单例漏斗捕获 + 自备流隔离,毫秒量用模式匹配免时序抖动);modules 组 105 → 106。
 
 ### events(批次 6,纯 Lua)
 

@@ -1570,6 +1570,42 @@ Node v24.21.0 做了 29 项形状对拍:
       guide/modules 表行 + Node 语义族清单)同批;真机验证
       exit/exitCode 三态(3/0/7)与脚本尾排水(`end`→`tick`)。
 
+### console 模块移植(2026-10-11)
+
+Node console 面纯 Lua 聚合:格式化走既有 util.format,单元渲染走
+util.inspect,写出走 process 的 stdout/stderr,计时走 kernel.millis,
+table 是自建 ASCII 网格渲染器;`Console(stdout, [stderr])` 构造器
+收任意带 `write(s)` 的流表,单例挂 process.stdout/stderr。按
+Node v24.21.0 做了 70+ 例形状对拍:
+
+- [x] **日志族**:log/info/debug → stdout,warn/error → stderr
+      (util.format 口径);log() 空参出空行;
+- [x] **assert**:假值告警不抛;三口径——无参 `Assertion failed`、
+      首参串加冒号、首参非串空格接;假值集按 Node 收口
+      (nil/false/0/''/NaN,Lua 本只 nil/false);
+- [x] **计时计数**:time/timeLog/timeEnd(缺参默认标签 `default`,
+      整毫秒出 `Nms`,毫秒分辨率账记)、count/countReset;告警四态
+      (无此标签 ×2、标签已存在、计数不存在)文案对拍;
+- [x] **group 族**:group/groupCollapsed(无 TTY 不折叠)/groupEnd,
+      一级两空格缩进;emit 在首行前置缩进;
+- [x] **table 网格**:单空格边距全左对齐、`┌┬┐├┼┤└┴┘` 框线、表头
+      `(index)`、列宽取 UTF-8 码点最大值;行形二分(`#t > 0` 数组行
+      下标 0 起,否则对象行键名成列)、function 行空键对象行、
+      Values 列只在有标量行时出现、缺格出空;**properties 列即
+      属性名单**(给定序、可重复,不依赖行内容,数值属性走数组
+      编号);
+- [x] **其余**:dir(inspect 透传 + opts 契约校验)、trace(`Trace[:
+      <format>"]` + Lua 栈)、clear/timeStamp/profile/profileEnd
+      恒 no-op、Console 构造器流校验 raise;
+- [x] **不立项**:Inspector/color 面(profile 系 no-op,Node 无
+      Inspector 时同形)、Console 的 color/inspectOptions 面;
+- [x] **用例**:`test/luna_test_modules.c` 增 `test_console_surface`
+      8 断言组(单例走 kernel.sink 漏斗捕获,stderr 侧用自备流
+      隔离;毫秒量用 `t: %d+ms` 模式匹配免时序抖动),105 → 106;
+      luacov 收编 `luna_modules/console/`;docs(node-parity 表行
+      ◐→✅ + 全局对照行 + 勘定节、guide/modules 表行 + Node
+      语义族清单)同批。
+
 ### 批次 7(stream)实录(2026-10-01)
 
 - [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件

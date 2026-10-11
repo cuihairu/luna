@@ -2635,6 +2635,122 @@ static void test_process_surface(void **state)
         "true,true");
 }
 
+/* -- console (Node console 面, v24.21.0 形状对拍) --------------------------- */
+
+static void test_console_surface(void **state)
+{
+    (void)state;
+    /* 单例 log/info 走 process.stdout (kernel.write 漏斗), sink 捕获 */
+    assert_string_equal(
+        eval_string("local kernel = require('kernel')\n"
+                    "local c = require('console')\n"
+                    "local buf = {}\n"
+                    "kernel.sink(function(s) buf[#buf+1] = s end)\n"
+                    "c.log('a %s %d', 'x', 42)\n"
+                    "c.info('i')\n"
+                    "c.log()\n"
+                    "kernel.sink(nil)\n"
+                    "return table.concat(buf) == 'a x 42\\ni\\n\\n' and 'ok' or 'bad'"),
+        "ok");
+    /* 单例 table 网格 (探针口径: 单空格边距全左对齐; inspect 单元) */
+    assert_string_equal(
+        eval_string("local kernel = require('kernel')\n"
+                    "local c = require('console')\n"
+                    "local buf = {}\n"
+                    "kernel.sink(function(s) buf[#buf+1] = s end)\n"
+                    "c.table({1, 'a'})\n"
+                    "kernel.sink(nil)\n"
+                    "return table.concat(buf)"),
+        "┌─────────┬────────┐\n"
+        "│ (index) │ Values │\n"
+        "├─────────┼────────┤\n"
+        "│ 0       │ 1      │\n"
+        "│ 1       │ \"a\"    │\n"
+        "└─────────┴────────┘\n");
+    /* Console 自备流: stdout 侧 count/time/group (time 毫秒分辨率) */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local out, err = {}, {}\n"
+                    "local C = c.Console({write=function(s) out[#out+1]=s end},\n"
+                    "                    {write=function(s) err[#err+1]=s end})\n"
+                    "C:count('k'); C:count('k'); C:countReset('k'); C:count('k')\n"
+                    "C:time('t'); C:timeEnd('t')\n"
+                    "C:group('g'); C:log('in'); C:groupEnd(); C:log('out')\n"
+                    "local s = table.concat(out)\n"
+                    "local head = 'k: 1\\nk: 2\\nk: 1\\n'\n"
+                    "local tail = 'g\\n  in\\nout\\n'\n"
+                    "return tostring(s:sub(1, #head) == head\n"
+                    "    and s:match('\\nt: %d+ms\\n') ~= nil\n"
+                    "    and s:sub(-#tail) == tail)"),
+        "true");
+    /* Console 自备流: stderr 侧 warn/error/assert 三形态 + trace 头 */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local out, err = {}, {}\n"
+                    "local C = c.Console({write=function(s) out[#out+1]=s end},\n"
+                    "                    {write=function(s) err[#err+1]=s end})\n"
+                    "C:warn('w %d', 1)\n"
+                    "C:error('e')\n"
+                    "C:assert(false, 'm')\n"
+                    "C:assert(0, 42, 'x')\n"
+                    "C:assert('')\n"
+                    "C:assert(1)\n"
+                    "C:trace('tr %s', 'x')\n"
+                    "local s = table.concat(err)\n"
+                    "local head = 'w 1\\ne\\n'\n"
+                    "  .. 'Assertion failed: m\\n'\n"
+                    "  .. 'Assertion failed 42 x\\n'\n"
+                    "  .. 'Assertion failed\\n'\n"
+                    "return tostring(s:sub(1, #head) == head\n"
+                    "    and s:match('Trace: tr x\\n') ~= nil)"),
+        "true");
+    /* Console 自备流: 计数/计时告警四态 (stderr) */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local out, err = {}, {}\n"
+                    "local C = c.Console({write=function(s) out[#out+1]=s end},\n"
+                    "                    {write=function(s) err[#err+1]=s end})\n"
+                    "C:countReset('ghost')\n"
+                    "C:timeEnd('nope')\n"
+                    "C:timeLog('nada')\n"
+                    "C:time('t2'); C:time('t2')\n"
+                    "local s = table.concat(err)\n"
+                    "return s"),
+        "Warning: Count for 'ghost' does not exist\n"
+        "Warning: No such label 'nope' for console.timeEnd()\n"
+        "Warning: No such label 'nada' for console.timeLog()\n"
+        "Warning: Label 't2' already exists for console.time()\n");
+    /* dir 走 inspect 透传 (opts.depth); no-op 面 (clear/profile/
+     * profileEnd/timeStamp) 不产出 */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local out = {}\n"
+                    "local C = c.Console({write=function(s) out[#out+1]=s end})\n"
+                    "C:dir({a=1, b={c=2}}, {depth=0})\n"
+                    "C:clear(); C:profile(); C:profileEnd(); C:timeStamp()\n"
+                    "return table.concat(out)"),
+        "{ a = 1, b = [Object] }\n");
+    /* table: properties 列即属性名单 (给定序, 空缺格出空) */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local out = {}\n"
+                    "local C = c.Console({write=function(s) out[#out+1]=s end})\n"
+                    "C:table({{x=1,y=2},{y=3,z=4}}, {'y','z'})\n"
+                    "return table.concat(out)"),
+        "┌─────────┬───┬───┐\n"
+        "│ (index) │ y │ z │\n"
+        "├─────────┼───┼───┤\n"
+        "│ 0       │ 2 │   │\n"
+        "│ 1       │ 3 │ 4 │\n"
+        "└─────────┴───┴───┘\n");
+    /* Console 构造器: 无 write 的流 raise */
+    assert_string_equal(
+        eval_string("local c = require('console')\n"
+                    "local _, m = pcall(c.Console, {nowrite=1})\n"
+                    "return m"),
+        "console.Console: stdout must have a write function");
+}
+
 /* -- url (Node lib/url.js legacy 面, v24.21.0 对拍) ------------------------ */
 
 static void test_url_parse_fields(void **state)
@@ -3626,6 +3742,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_util_inspect_truncation_circular, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_args_contract, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_process_surface, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_console_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),

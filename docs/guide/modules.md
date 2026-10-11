@@ -50,6 +50,7 @@ luna_modules/hello/
 | `querystring` | 纯 Lua | Node 面全量:`parse`/`stringify`(别名 `decode`/`encode`)+ `escape`/`unescape`(`'+'` 收空格、重复键聚合数组、`maxKeys` 默认 1000 且 `<=0` = 无限、`'!'()*-._~` 与数字字母不转义) |
 | `url` | 纯 Lua | Node legacy 面全量:`parse`(12 字段表,第二参 querystring 化,第三参 slashes 标记)、`format`(表/串重建,query 表走 stringify)、`resolve`/`resolveObject`(RFC 3986 点段折叠);WHATWG `URL` 未立项(见 node-parity 勘定) |
 | `process` | 纯 Lua | Node `process` 全局常用同步面:`pid`/`ppid`/`argv`(解释器优先排布)/`execPath`/`env`(代理 + 叠写)/`cwd`/`chdir`/`exit`/`exitCode`/`uptime`/`hrtime`(+`bigint`)/`umask`(无参纯查询)/`memoryUsage`/`nextTick`(loop 感知)/`stdout`/`stderr`/`stdin`;偏差与不立项见 node-parity 勘定 |
+| `console` | 纯 Lua | Node console 面:`log`/`info`/`debug`/`warn`/`error`(util.format 口径,stdout/stderr 分流)/`assert`(假值告警不抛)/`trace`/`dir`(inspect 透传)/`table`(ASCII 网格,properties 列即属性名单)/`time`/`timeLog`/`timeEnd`/`count`/`countReset`(毫秒分辨率)/`group`/`groupCollapsed`/`groupEnd`(两空格缩进)/`clear`/`timeStamp`/`profile`/`profileEnd`(no-op)+ `Console(stdout, [stderr])` 构造器;偏差与不立项见 node-parity 勘定 |
 | `events` | 纯 Lua | `events.new()` EventEmitter:`on`/`once`/`off`/`prepend*`/`listeners`/`listenerCount`/`setMaxListeners`/`emit`(缺省 10 超限警告、`'error'` 无监听 raise、newListener/removeListener 内建事件) |
 | `stream` | 纯 Lua | 基于 events 的 Node 流 v1 面:`readable`/`writable`/`duplex`/`transform`(`_read`→`push`、`_write`/`_transform`+`_flush`、`write`/`end_`)、`pipe` 背压(write false 停推等 `drain` 续推、`unpipe`)、`highWaterMark` 记账(缺省 16 KiB);适配器 `duplexFromSock`(loop.net sock)、`readableFromChunks`(内存块)、`pushReadable`(onData 推式) |
 | `zlib` | lua-zlib | 流式 `deflate`/`inflate` + 一次性 `compress`/`decompress` 便捷层 |
@@ -57,7 +58,7 @@ luna_modules/hello/
 
 **格式模块的错误口径**(csv/ini/toml/yaml/xml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
 
-**path/querystring/url/process/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动、querystring 的确定性键序、process 的毫秒分辨率 hrtime 等)在 [Node 方向选型](/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
+**path/querystring/url/process/console/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动、querystring 的确定性键序、process 的毫秒分辨率 hrtime、console 的毫秒计时与 Lua 形态单元等)在 [Node 方向选型](/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
 
 ```lua
 local fs = require("fs")

@@ -1474,6 +1474,11 @@ connectTls/listenTls 在 Windows 上跑通后,Windows 面的路径文本语义
       等)不列——Lua `upper()` 无法复现;`toNamespacedPath` 对非字符串
       沿 luna 全模块契约 raise(Node 原样返回非字符串)。
 
+- [x] **posix `format` 顺带对齐**:与 win32 面同源的共享 `_format` 里
+      `d === root` 不加分隔符的规则,posix 面此前只接 `dir .. "/" ..
+      file`(`format{dir="/", root="/", base="x"}` 出 `"//x"`,Node 出
+      `"/x"`)——已改为共享同一分支;
+
 门禁:build 与 build-cov 双树 ctest 全绿(rocks 组单独重跑确认过负载
 假挂非真挂),modules 二进制 98/98,差分 smoke 326/326。
 

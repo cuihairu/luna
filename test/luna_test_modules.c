@@ -2004,8 +2004,12 @@ static void test_path_parse_format(void **state)
                     "  .. p.format{dir='/a/b/',base='y'} .. ','\n"
                     "  .. tostring(p.format{} == '') .. ',' .. p.format{ext='lua'} .. ','\n"
                     "  .. p.format{name='x',ext=''} .. ',' .. p.format{dir='a',name='x'} .. ','\n"
-                    "  .. p.format{root='/',name='x'}"),
-        "/a/b/luna.lua,/a/b/luna.lua,/x,x,x.lua,x,/a/b//x,x.y,//x,/a/b//y,true,.lua,x,a/x,/x");
+                    "  .. p.format{root='/',name='x'} .. ','\n"
+                    "  .. p.format{dir='/',root='/',base='x'} .. ','\n"
+                    "  .. p.format{dir='/a',root='/a',base='x'} .. ','\n"
+                    "  .. p.format{dir='/a',root='/',base='x'}"),
+        "/a/b/luna.lua,/a/b/luna.lua,/x,x,x.lua,x,/a/b//x,x.y,//x,/a/b//y,true,.lua,x,a/x,/x,"
+        "/x,/ax,/a/x");
     assert_string_equal(
         eval_string("local p = require('path')\n"
                     "return p.sep .. p.delimiter .. ',' .. tostring(p.posix == p)"),

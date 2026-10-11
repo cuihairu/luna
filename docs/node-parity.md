@@ -326,7 +326,7 @@ Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边�
 - **normalize/resolve 折叠连续斜杠**——本节初稿写的「normalize 保留双前导斜杠」与 v24 实测不符:`normalize("//a")` → `"/a"`、`resolve("//a","b")` → `"/a/b"`(旧版 Node 的双斜杠保留已不成立);normalize 与 resolve 在尾斜杠上分叉——normalize 保留(`"foo/"` → `"foo/"`),resolve 剥掉(`resolve("/a/b/")` → `"/a/b"`);
 - **dirname 是文本操作**:斜杠原样保留(`"a//b"` → `"a/"`、`"//a//b"` → `"//a/"`);parse 的 dir 同样原样(`parse("//x/y").dir == "//x"`);
 - **extname 的「全点前缀」规则**:`".."` 与 `".bashrc"` 无扩展名,`"a.."` → `"."`——最后一个点之前必须存在非点字符;
-- **format 的拼接规则**:`dir` 非空则原样接 `dir .. "/" .. file`(`dir="/a/b/"` → `"/a/b//x"`,不吸收尾斜杠),仅 root 无 dir 时不加分隔符;`ext` 无前导点会补点(`{name="x", ext="lua"}` → `"x.lua"`,`{ext="lua"}` → `".lua"`);字段空串视为缺席(JS 真值口径);
+- **format 的拼接规则**(Node 共享 `_format`,`dir` 与 `win32` 两面同构):`d = dir || root`;`d === root` 时**不加分隔符**(`format{dir="/", root="/", base="x"}` → `"/x"` 而非 `"//x"`;`{dir="/a", root="/a"}` → `"/ax"`),`dir` 存在但不等 `root` 时原样接 `d .. "/" .. file`(`dir="/a/b/"` → `"/a/b//x"`,不吸收尾斜杠),两者皆缺才直返 file;`ext` 无前导点会补点(`{name="x", ext="lua"}` → `"x.lua"`,`{ext="lua"}` → `".lua"`);字段空串视为缺席(JS 真值口径);
 - **relative 先 resolve 再段差**——同路径(含尾斜杠差异)返回 `""`;
 - 参数类型错 raise(消息 `path.<fn>: ...`),cwd 锚定经 lfs(`luna` 随附恒在;脱离宿主时回退 `$PWD`/`"/"`,该两腿 lfs 在场不可达,覆盖账记结构性)。
 

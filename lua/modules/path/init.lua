@@ -326,13 +326,13 @@ function M.format(o)
         ext = "." .. ext
     end
     local file = base or (name or "") .. (ext or "")
-    if dir then
-        return dir .. "/" .. file
+    -- Node 共享 _format: d = dir||root; d === root 时不加分隔符
+    -- (format{dir="/", root="/", base="x"} → "/x" 而非 "//x")
+    local d = dir or root
+    if not d then
+        return file
     end
-    if root then
-        return root .. file
-    end
-    return file
+    return d .. (d == root and "" or "/") .. file
 end
 
 -- Node posix.toNamespacedPath: 校验后原样返回 (posix 无设备名空间)

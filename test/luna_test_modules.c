@@ -2040,6 +2040,145 @@ static void test_path_args_contract(void **state)
         "true,true,true,true,true,true,true");
 }
 
+/* -- path.win32 (Node path.win32, 批次 6 解冻项) --------------------- */
+
+
+static void test_path_win32_normalize_join_isabs(void **state)
+{
+    (void)state;
+
+    /* win32 normalize/join/isAbsolute: 设备根 (盘符 / 完整 UNC / \?\ 命名空间)、 */
+    /* 保留名与 CVE-2024-36139 防护、join 的前导斜杠折叠 */
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.normalize('') .. ',' .. w.normalize('a/b/c') .. ',' .. w.normalize('a\\\\b\\\\c') .. ',' .. w.normalize('a//b\\\\\\\\c') .. ',' .. w.normalize('./a') .. ',' .. w.normalize('../a') .. ',' .. w.normalize('..') .. ',' .. w.normalize('.') .. ',' .. w.normalize('a\\\\..') .. ',' .. w.normalize('C:\\\\..') .. ',' .. w.normalize('C:\\\\..\\\\..') .. ',' .. w.normalize('C:..\\\\..') .. ',' .. w.normalize('C:\\\\') .. ',' .. w.normalize('C:\\\\a\\\\\\\\') .. ',' .. w.normalize('C:\\\\a\\\\..\\\\..') .. ',' .. w.normalize('c:/a/b') .. ',' .. w.normalize('/') .. ',' .. w.normalize('\\\\') .. ',' .. w.normalize('//a/b') .. ',' .. w.normalize('\\\\\\\\s\\\\sh\\\\a\\\\') .. ',' .. w.normalize('\\\\\\\\s\\\\sh') .. ',' .. w.normalize('\\\\\\\\s\\\\sh\\\\\\\\c') .. ',' .. w.normalize('//?/x') .. ',' .. w.normalize('\\\\\\\\?\\\\C:\\\\x\\\\y') .. ',' .. w.normalize('\\\\\\\\?\\\\p\\\\..') .. ',' .. w.normalize('\\\\\\\\?\\\\..') .. ',' .. w.normalize('\\\\\\\\?\\\\COM1:') .. ',' .. w.normalize('\\\\\\\\?\\\\COM1:\\\\x') .. ',' .. w.normalize('COM1:x') .. ',' .. w.normalize('CON:x') .. ',' .. w.normalize('a:b') .. ',' .. w.normalize('foo:bar') .. ',' .. w.normalize('foo:/bar') .. ',' .. w.normalize('a:b\\\\..\\\\..') .. ',' .. w.normalize('NUL') .. ',' .. w.normalize('A') .. ',' .. w.normalize('\\\\\\\\?\\\\') .. ',' .. w.normalize('C:\\\\a\\\\.')"),
+        ".,a\\b\\c,a\\b\\c,a\\b\\c,a,..\\a,..,.,.,C:\\,C:\\,C:..\\..,C:\\,C:\\a\\,C:\\,c:\\a\\b,\\,\\,\\\\a\\b\\,\\\\s\\sh\\a\\,\\\\s\\sh\\,\\\\s\\sh\\c,\\\\?\\x,\\\\?\\C:\\x\\y,\\\\?\\,\\\\?\\,\\\\?\\COM1:\\,\\\\?\\COM1:\\x,.\\COM1:x,.\\CON:x,a:b,foo:bar,.\\foo:\\bar,a:..,NUL,A,\\?\\,C:\\a");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.join('/') .. ',' .. w.join('..') .. ',' .. w.join('a','b','c') .. ',' .. w.join('a','') .. ',' .. w.join('','b') .. ',' .. w.join('C:\\\\','a') .. ',' .. w.join('a','C:\\\\b') .. ',' .. w.join('//a','b') .. ',' .. w.join('//','a') .. ',' .. w.join('\\\\\\\\s\\\\sh','x') .. ',' .. w.join('a','..') .. ',' .. w.join('C:\\\\','COM1:','b') .. ',' .. w.join('a','b:COM1') .. ',' .. w.join() .. ',' .. w.join('C:','x') .. ',' .. w.join('\\\\\\\\?\\\\x','y')"),
+        "\\,..,a\\b\\c,a,b,C:\\a,.\\a\\C:\\b,\\\\a\\b\\,\\a,\\\\s\\sh\\x,.,C:\\\\COM1:\\b,a\\b:COM1,.,C:\\x,\\\\?\\x\\y");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn tostring(w.isAbsolute('')) .. ',' .. tostring(w.isAbsolute('/')) .. ',' .. tostring(w.isAbsolute('\\\\')) .. ',' .. tostring(w.isAbsolute('C:\\\\')) .. ',' .. tostring(w.isAbsolute('C:/')) .. ',' .. tostring(w.isAbsolute('C:')) .. ',' .. tostring(w.isAbsolute('a')) .. ',' .. tostring(w.isAbsolute('//a')) .. ',' .. tostring(w.isAbsolute('C:a')) .. ',' .. tostring(w.isAbsolute('C:a\\\\b')) .. ',' .. tostring(w.isAbsolute('\\\\\\\\?\\\\x'))"),
+        "false,true,true,true,true,false,false,true,false,false,true");
+}
+
+static void test_path_win32_resolve_relative(void **state)
+{
+    (void)state;
+
+    /* win32 resolve (设备认领 / 异设备整段丢弃 / cwd 尾随 / cwd 快路径) 与 */
+    /* relative (大小写折叠比较 / 无公共分隔符回退目标原形) */
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.resolve('C:/a','..') .. ',' .. w.resolve('C:/a','..','b') .. ',' .. w.resolve('C:foo','C:/x') .. ',' .. w.resolve('C:/x','C:foo') .. ',' .. w.resolve('/a','C:b') .. ',' .. w.resolve('C:b','/a') .. ',' .. w.resolve('C:/a','D:/b') .. ',' .. w.resolve('c:/A','../b') .. ',' .. w.resolve('//a') .. ',' .. w.resolve('//a/x','..') .. ',' .. w.resolve('C:/') .. ',' .. w.resolve('/') .. ',' .. w.resolve('\\\\\\\\?\\\\C:\\\\x\\\\y')"),
+        "C:\\,C:\\b,C:\\x,C:\\x\\foo,C:\\a\\b,C:\\a,D:\\b,c:\\b,\\a,\\\\a\\x\\,C:\\,\\,\\\\?\\C:\\x\\y");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.relative('C:/a/b','C:/a') .. ',' .. w.relative('C:/a','C:/a/b/c') .. ',' .. w.relative('C:\\\\','C:\\\\a\\\\b') .. ',' .. w.relative('C:/a','C:/a') .. ',' .. w.relative('C:\\\\A\\\\b','c:\\\\a\\\\B') .. ',' .. w.relative('C:/a','D:/a') .. ',' .. w.relative('//s/sh/a','//s/sh/b') .. ',' .. w.relative('C:\\\\a\\\\b','C:\\\\a\\\\x\\\\y') .. ',' .. w.relative('C:\\\\a\\\\b','C:\\\\b') .. ',' .. w.relative('\\\\\\\\s\\\\sh','\\\\\\\\s\\\\sh\\\\x')"),
+        "..,b\\c,a\\b,,,D:\\a,..\\b,..\\x\\y,..\\..\\b,x");
+    /* cwd 锚定: 设备相对尾随 / cwd 快路径 / 无盘符 cwd (posix 宿主口径) */
+    char cwdbuf[384];
+    assert_non_null(getcwd(cwdbuf, sizeof(cwdbuf)));
+    char cwdw[384];
+    int i;
+    for (i = 0; cwdbuf[i] != '\0'; i++)
+        cwdw[i] = cwdbuf[i] == '/' ? '\\' : cwdbuf[i];
+    cwdw[i] = '\0';
+    char cwdexp[2000];
+    snprintf(cwdexp, sizeof(cwdexp),
+             "C:%s\\bar,C:%s\\foo\\bar,C:%s\\x,C:%s\\foo,C:%s,%s,%s,%s,%s\\x,"
+             "\\\\?\\C:%s,%s\\foo",
+             cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw, cwdw);
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local w = p.win32\n"
+                    "return w.resolve('C:foo/..','bar') .. ','\n"
+                    "  .. w.resolve('foo','C:bar') .. ','\n"
+                    "  .. w.resolve('C:.\\\\x') .. ','\n"
+                    "  .. w.resolve('C:foo') .. ','\n"
+                    "  .. w.resolve('C:') .. ','\n"
+                    "  .. w.resolve('') .. ',' .. w.resolve('.') .. ','\n"
+                    "  .. w.resolve() .. ',' .. w.resolve('x') .. ','\n"
+                    "  .. w.toNamespacedPath('C:') .. ',' .. w.toNamespacedPath('foo')"),
+        cwdexp);
+}
+
+static void test_path_win32_text_ops(void **state)
+{
+    (void)state;
+
+    /* win32 dirname/basename/extname 是文本操作 (原样保留输入斜杠风格) */
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.dirname('C:/a/b/c') .. ',' .. w.dirname('C:foo') .. ',' .. w.dirname('//a') .. ',' .. w.dirname('\\\\\\\\s\\\\sh\\\\d\\\\f') .. ',' .. w.dirname('a/b/c') .. ',' .. w.dirname('.') .. ',' .. w.dirname('a/') .. ',' .. w.dirname('C:') .. ',' .. w.dirname('/') .. ',' .. w.dirname('C:/a') .. ',' .. w.dirname('a//b') .. ',' .. w.dirname('///a') .. ',' .. w.dirname('') .. ',' .. w.dirname('\\\\\\\\s\\\\sh') .. ',' .. w.dirname('\\\\\\\\s\\\\sh\\\\') .. ',' .. w.dirname('C:\\\\a\\\\b\\\\c') .. ',' .. w.dirname('x')"),
+        "C:/a/b,C:,/,\\\\s\\sh\\d,a/b,.,.,C:,/,C:/,a/,//,.,\\\\s\\sh,\\\\s\\sh\\,C:\\a\\b,.");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.basename('C:/a/b') .. ',' .. w.basename('C:\\\\') .. ',' .. w.basename('C:') .. ',' .. w.basename('/') .. ',' .. w.basename('//a') .. ',' .. w.basename('\\\\\\\\s\\\\sh') .. ',' .. w.basename('C:a') .. ',' .. w.basename('C:.js') .. ',' .. w.basename('a.b.c','b.c') .. ',' .. w.basename('a.TXT','.txt') .. ',' .. w.basename('a\\\\b\\\\c.txt') .. ',' .. w.basename('a\\\\') .. ',' .. w.basename('','x') .. ',' .. w.basename('a/b','b') .. ',' .. w.basename('C:/','x') .. ',' .. w.basename('/a/b/luna.lua','.lua')"),
+        "b,,,,a,sh,a,.js,a.,a.TXT,c.txt,a,,b,/,luna");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.extname('a/b/c.txt') .. ',' .. w.extname('C:foo.js') .. ',' .. w.extname('C:.js') .. ',' .. w.extname('.bashrc') .. ',' .. w.extname('a..') .. ',' .. w.extname('x/') .. ',' .. w.extname('a.b.c') .. ',' .. w.extname('x.TXT')"),
+        ".txt,.js,,,.,,.c,.TXT");
+}
+
+static void test_path_posix_relative_chars(void **state)
+{
+    (void)state;
+
+    /* posix relative 的字符级算法: 公共分隔符前的段才回退 .., 根级截断 */
+assert_string_equal(
+        eval_string("local p = require('path')\nreturn p.relative('/a/b','/a/c/d') .. ',' .. p.relative('/a/bc/b','/a/b/g') .. ',' .. p.relative('/a/b/c','/a/b') .. ',' .. p.relative('/a/b','/a/b/c/d') .. ',' .. p.relative('/a/x','/b/y') .. ',' .. p.relative('/a','/') .. ',' .. p.relative('/a/b','/a/b/c/d') .. ',' .. p.relative('a/b','a/b/c/d') .. ',' .. p.relative('/a/b','/b')"),
+        "../c/d,../../b/g,..,c/d,../../b/y,..,c/d,c/d,../../b");
+}
+
+static void test_path_win32_parse_format(void **state)
+{
+    (void)state;
+
+    /* win32 parse (UNC 根独占全串 / 文本 dir) 与 format (d == root 不加分隔符) */
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nlocal function s(o) return o.root..'|'..o.dir..'|'..o.base..'|'..o.name..'|'..o.ext end\nreturn s(w.parse('C:/a/b/c.js')) .. ',' .. s(w.parse('C:foo/bar')) .. ',' .. s(w.parse('/a/b/c.js')) .. ',' .. s(w.parse('\\\\\\\\s\\\\sh\\\\d\\\\f.txt')) .. ',' .. s(w.parse('//a/b')) .. ',' .. s(w.parse('\\\\\\\\?\\\\C:\\\\x\\\\y')) .. ',' .. s(w.parse('//?/x')) .. ',' .. s(w.parse('//a')) .. ',' .. s(w.parse('a')) .. ',' .. s(w.parse('.')) .. ',' .. s(w.parse('/')) .. ',' .. s(w.parse('C:')) .. ',' .. s(w.parse('C:.')) .. ',' .. s(w.parse('C:/')) .. ',' .. s(w.parse('a/b/')) .. ',' .. s(w.parse('a\\\\')) .. ',' .. s(w.parse('')) .. ',' .. s(w.parse('///a')) .. ',' .. s(w.parse('C://a')) .. ',' .. s(w.parse('a//b')) .. ',' .. s(w.parse('\\\\\\\\')) .. ',' .. s(w.parse('\\\\\\\\s\\\\sh')) .. ',' .. s(w.parse('//a/b/c')) .. ',' .. s(w.parse('C:a\\\\b.js'))"),
+        "C:/|C:/a/b|c.js|c|.js,C:|C:foo|bar|bar|,/|/a/b|c.js|c|.js,\\\\s\\sh\\|\\\\s\\sh\\d|f.txt|f|.txt,//a/b|//a/b|||,\\\\?\\C:\\|\\\\?\\C:\\x|y|y|,//?/x|//?/x|||,/|/|a|a|,||a|a|,||.|.|,/|/|||,C:|C:|||,C:|C:|.|.|,C:/|C:/|||,|a|b|b|,||a|a|,||||,/|//|a|a|,C:/|C:/|a|a|,|a/|b|b|,\\|\\|||,\\\\s\\sh|\\\\s\\sh|||,//a/b/|//a/b/|c|c|,C:|C:a|b.js|b|.js");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.format({root=\"C:\\\\\", dir=\"C:\\\\a\", base=\"b.js\"}) .. ',' .. w.format({root=\"C:\\\\\", base=\"b.js\"}) .. ',' .. w.format({dir=\"/a\", name=\"b\", ext=\"js\"}) .. ',' .. w.format({root=\"C:\"}) .. ',' .. w.format({}) .. ',' .. w.format({dir=\"\", base=\"x\"}) .. ',' .. w.format({dir=\"C:\\\\a\\\\\\\\\", name=\"b\", ext=\".js\"}) .. ',' .. w.format({dir=\"/\", root=\"/\", base=\"x\"}) .. ',' .. w.format({dir=\"/a\", root=\"/a\", base=\"x\"}) .. ',' .. w.format({name=\"x\", ext=\"\"}) .. ',' .. w.format({root=\"\\\\\", base=\"x\"})"),
+        "C:\\a\\b.js,C:\\b.js,/a\\b.js,C:,,x,C:\\a\\\\\\b.js,/x,/ax,x,\\x");
+assert_string_equal(
+        eval_string("local p = require('path')\nlocal w = p.win32\nreturn w.toNamespacedPath('C:/a') .. ',' .. w.toNamespacedPath('') .. ',' .. w.toNamespacedPath('/') .. ',' .. w.toNamespacedPath('\\\\\\\\s\\\\sh\\\\f') .. ',' .. w.toNamespacedPath('\\\\\\\\?\\\\C:\\\\x') .. ',' .. w.toNamespacedPath('//s/sh') .. ',' .. w.toNamespacedPath('\\\\\\\\.\\\\x')"),
+        "\\\\?\\C:\\a,,/,\\\\?\\UNC\\s\\sh\\f,\\\\?\\C:\\x,\\\\?\\UNC\\s\\sh\\,\\\\.\\x");
+}
+
+static void test_path_win32_contracts(void **state)
+{
+    (void)state;
+    /* 双面注册与参数契约 */
+    /* 双面注册 + win32 参数契约 (toNamespacedPath 沿 Node 收紧为 raise) */
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local w = p.win32\n"
+                    "return p.toNamespacedPath('/a//b') .. ','\n"
+                    "  .. tostring(p.posix == p) .. ',' .. tostring(w ~= p) .. ','\n"
+                    "  .. w.sep .. w.delimiter"),
+        "/a//b,true,true,\\;");
+    assert_string_equal(
+        eval_string("local p = require('path')\n"
+                    "local w = p.win32\n"
+                    "local _, m1 = pcall(w.normalize, 42)\n"
+                    "local _, m2 = pcall(w.join, 'a', nil)\n"
+                    "local _, m3 = pcall(w.toNamespacedPath, 42)\n"
+                    "local _, m4 = pcall(w.parse, {})\n"
+                    "local _, m5 = pcall(w.resolve, 'a', nil)\n"
+                    "local _, m6 = pcall(w.basename, 'a', 42)\n"
+                    "local _, m7 = pcall(w.isAbsolute, 42)\n"
+                    "local _, m8 = pcall(w.format, 'notatable')\n"
+                    "local _, m9 = pcall(w.format, {base = 42})\n"
+                    "local _, m10 = pcall(p.toNamespacedPath, 42)\n"
+                    "return tostring(m1:find('path.win32.normalize', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m2:find('path.win32.join', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m3:find('path.win32.toNamespacedPath', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m4:find('path.win32.parse', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m5:find('path.win32.resolve', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m6:find('path.win32.basename', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m7:find('path.win32.isAbsolute', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m8:find('path.win32.format: expects a table', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m9:find('path.win32.format: base must be a string', 1, true) ~= nil)"
+                    " .. ',' .. tostring(m10:find('path.toNamespacedPath', 1, true) ~= nil)"),
+        "true,true,true,true,true,true,true,true,true,true");
+}
+
 /* -- util (Node util.format/inspect, batch 6) ----------------------------- */
 
 static void test_util_format_conversions(void **state)
@@ -3067,6 +3206,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_path_dirname_basename_extname, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_path_parse_format, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_path_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_win32_normalize_join_isabs, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_win32_resolve_relative, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_win32_text_ops, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_win32_parse_format, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_posix_relative_chars, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_path_win32_contracts, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_format_conversions, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_format_no_fmt_and_extras, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_inspect_shapes, setup_modules, teardown_modules),

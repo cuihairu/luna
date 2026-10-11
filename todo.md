@@ -1534,6 +1534,42 @@ dkjson 键序不对拍):
       guide/modules 表两行)同批;两树 modules 104/104,ctest
       16/16 ×2(rocks cov 树负载假挂一次,单跑过)。
 
+### process 模块移植(2026-10-11)
+
+Node `process` 全局的常用同步子集:纯 Lua 聚合(全局 `arg`/`os` +
+`lfs` + `kernel` 的 pid/millis/umask/tty/write),零新 C,按
+Node v24.21.0 做了 29 项形状对拍:
+
+- [x] **字段面**:pid/ppid(/proc/self/stat)/platform/arch(宿主
+      best-effort,探不到 nil)/execPath/argv0/execArgv/argv
+      (解释器优先排布 `{[0]=解释器,[1]=脚本/"[eval]",[2..]=参数}`,
+      脚本/二进制区分走扩展名 + ELF/Lua 字节码魔数;嵌入宿主无
+      `arg` 全表归 eval 语境)/env(getenv 代理 + 叠写层,枚举
+      raise)/cwd/chdir(lfs)/exit/exitCode(缺省 nil = Node
+      undefined)/uptime/hrtime(+bigint,毫秒分辨率)/umask(无参
+      纯查询——kernel.umask 缺参会**置** 0077,先置 0 取旧再恢复)/
+      memoryUsage(heapUsed)/nextTick(loop 感知:有 setImmediate
+      排队,无则立即)/stdout(kernel.write 漏斗)/stderr(直写即刷)/
+      stdin(薄包 io.stdin,isTTY 只探 fd0);
+- [x] **对拍勘定**:argv0 = 原始 argv[0] = 解释器(非脚本,Node
+      同款);release 是发行对象 `{name="luna"}`(Node
+      process.release 是对象,内核版本是 os.release() 辖区);
+      `type` 是扩展(Node undefined);hrtime.bigint 出整型非
+      bigint;versions 键集 lua/luna;
+- [x] **不立项**:abort/kill/信号(loop.process 辖)、title/config/
+      dlopen/binding、cpuUsage/resourceUsage(loop.os 辖)、
+      emitWarning;
+- [x] **harness**:`setup_modules` 补注册 kernel C 模块(与
+      luna_main 同款),`luna_test_modules` 目标补链 `luna_kernel`;
+      rocks 守卫两测分块隐藏 kernel(局部
+      `package.loaded.kernel = nil` 存取),维持其「kernel 缺席」
+      原前提;
+- [x] **用例**:`test/luna_test_modules.c` 增 `test_process_surface`
+      10 断言组,104 → 105;luacov 收编 `luna_modules/process/`;
+      docs(node-parity 表行 ◐→✅ + 全局对照行 + 勘定节、
+      guide/modules 表行 + Node 语义族清单)同批;真机验证
+      exit/exitCode 三态(3/0/7)与脚本尾排水(`end`→`tick`)。
+
 ### 批次 7(stream)实录(2026-10-01)
 
 - [x] **vendor:无**(纯 Lua 基于 events,零依赖,与派发一致)。单文件

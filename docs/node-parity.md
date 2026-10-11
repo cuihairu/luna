@@ -35,7 +35,7 @@
 | `os` | 官方 `os` 不遮蔽 + `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/uptime/loadavg/mem/cpus/networkInterfaces/home/tmpdir) | ✅ 批次 8 |
 | `path` | `path`(posix 面)+ `path.win32`(设备根/UNC/\?\ 命名空间/保留名/CVE 防护),Node v24 实证钉版,纯 Lua 双面 | ✅ posix + win32 双面(批次 6 解冻项,win32 按 Node 在 Linux 上同款文本语义) |
 | `perf_hooks` | `%time` 魔法 + `loop.os` 的 uptime/loadavg | ◐ 无独立高精度计时库面 |
-| `process` | 全局 `arg`/`os.getenv` + `loop.process`(子进程)+ `loop.os`(系统信息) | ◐ 无单一大而全的 process 全局 |
+| `process` | 纯 Lua `process` 模块(pid/argv/env/cwd/chdir/exit/exitCode/uptime/hrtime/umask/memoryUsage/nextTick/stdio)+ `loop.process`(子进程)+ `loop.os`(系统信息) | ✅ 常用同步面(偏差见 process 勘定) |
 | `punycode` | — | ❌(`url` 的 IDNA toASCII 不做,见 `url` 行勘定) |
 | `querystring` | `querystring`(parse/stringify + escape/unescape;别名 decode/encode) | ✅ 纯 Lua,Node v24.21.0 差分对拍 |
 | `readline` | `luna_line`(replxx 桥:编辑/历史/高亮/补全)——REPL 内建,非公共库 | ◐ 形态不同 |
@@ -54,7 +54,7 @@
 | `worker_threads` | — | ❌(并发模型与 Node 同形:单线程事件循环 + 线程池 IO;Lua 协程只做协作式) |
 | `zlib` | `zlib`(deflate/gzip 一次性便捷层 + 流式 closure) | ✅ |
 
-**Node 全局对象对照**:`process`→◐(`arg`/`os.getenv`/`loop.os`);`Buffer`→❌(`string` + `string.pack`);`console`→`print`;`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
+**Node 全局对象对照**:`process`→✅(纯 Lua `process` 模块,常用同步面;子进程仍 `loop.process`);`Buffer`→❌(`string` + `string.pack`);`console`→`print`;`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
 
 **反向账**:luna 有而 Node 标准库没有的——IPython 式 REPL(`In[n]`/`Out[n]`/魔法命令/实时高亮补全)、目录插件机制(四扩展点)、`luna.lock` 离线复现装包、`--attach` 跨进程观测、单文件二进制随带全部标准库与包管理器。本表只对齐 Node 标准库,不比 npm 生态。
 
@@ -376,6 +376,32 @@ url.resolveObject("http://a.com/a/b", "c/d")      -- 返回字段表非串
 - **账记偏差**(探针逐例确认):`stringify` 键序为确定性字节序(Node 是插入序);空 Lua 表按空数组处理——字段整体省略,Node 的 `{}` 是对象出 `a=`(语言固有,无法区分空数组与空对象);`escape(nil)` 出 `nil`(Node `String(null)`);`parse` 的 auth 解码宽松(Node 走 `decodeURIComponent`,残缺 %XX 抛 `URIError`,luna 原样保留);DEP0169/DEP0170 废弃告警不发;NBSP/ZWNBSP 不计空白;
 - **明确不立项**:WHATWG `URL`/`URLSearchParams`(C++ binding 面,无 promise/Rust 结构可对)、`domainToASCII`/`domainToUnicode`(IDNA,非 ASCII 主机名原样保留)、`pathToFileURL`/`fileURLToPath`、`urlToHttpOptions`、`Url` 构造器(`parse` 结果即等价对象);
 - C 测试 6 例(querystring 3 + url 3)钉形状;modules 组 98 → 104。
+
+### process(2026-10-11,纯 Lua,Node v24.21.0 形状对拍)
+
+Node 的 `process` 是 C++ binding 面,但常用同步子集(pid/argv/env/cwd/chdir/exit/exitCode/uptime/hrtime/umask/memoryUsage/nextTick/stdio)没有必须 C 的硬依赖——luna 按 querystring 同款纪律**纯 Lua 聚合既有面**(全局 `arg`/`os` + `lfs` + `kernel` 的 pid/millis/umask/tty/write),零新 C:
+
+```lua
+local p = require "process"
+p.pid; p.ppid; p.platform; p.arch       -- linux/x64(宿主探测 best-effort,探不到 nil)
+p.argv                                  -- {[0]=解释器, [1]=脚本/"[eval]", [2..]=参数}
+p.execPath; p.argv0; p.execArgv         -- argv0 = 原始 argv[0] = 解释器(非脚本);execArgv 恒空
+p.env.HOME                              -- getenv 代理 + 本进程叠写层(枚举不支持)
+p.cwd(); p.chdir("/tmp")                -- lfs 面,失败 raise process.chdir: 前缀
+p.exitCode = 3; p.exit()                -- 缺省 nil(Node undefined),无参出 exitCode
+p.hrtime(); p.hrtime.bigint()           -- [秒,纳秒] 表 + 差值面;bigint 出整型
+p.umask()                               -- 无参纯查询(kernel.umask 缺参会置 0077,已包装)
+p.nextTick(fn)                          -- 有 loop 走 setImmediate,无 loop 立即
+p.stdout.write("x")                     -- kernel.write 漏斗,返 true;非串 raise
+p.memoryUsage().heapUsed                -- Lua 堆字节
+```
+
+**实现勘定(29 项形状对拍,Node v24.21.0 逐项对账)**:
+- **argv 排布换算**:Lua 的 `arg[0]` 是脚本、Node 的 `argv[0]` 是解释器——`process.argv = {[0]=解释器, [1]=脚本/`[eval]`, [2..]=参数}`;脚本/二进制区分走扩展名 + ELF/Lua 字节码魔数,嵌入宿主(无 `arg` 全表)归 eval 语境出 `[eval]`;
+- **exitCode 三态**:`exit()` 无参出 `exitCode`,`exitCode` 缺省 nil(实退出码 0,Node undefined 同款),`exit(7)` 显式优先;
+- **账记偏差**(探针逐项确认):hrtime/uptime 分辨率到毫秒(kernel.millis,Node 纳秒),`hrtime.bigint` 出整型数非 bigint;memoryUsage 只报 `heapUsed`(collectgarbage 计数,Node 五键 rss/external/arrayBuffers/heapTotal/heapUsed);env 不可枚举(Lua 走不了 environ),叠写对 `os.execute` 子进程不可见;`process.type` 是扩展(Node undefined);`versions` 是 `{lua=..., luna=...}` 非 Node 键集;ppid 走 /proc/self/stat;
+- **明确不立项**:abort/kill/信号处理(loop.process 辖)、title/config/dlopen/binding、cpuUsage/resourceUsage(loop.os 辖)、emitWarning、chdir 之外的目录句柄面;
+- C 测试 10 例钉形状(process surface 一组);modules 组 104 → 105;harness 补注册 kernel C 模块(与 luna_main 同款;rocks 守卫测试分块隐藏 kernel,维持其「kernel 缺席」前提)。
 
 ### events(批次 6,纯 Lua)
 

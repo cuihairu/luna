@@ -31,6 +31,7 @@
 #include "lualib.h"
 
 #include "luna_lua.h" /* embedded luna.modules source */
+#include "luna_kernel.h"
 #include "luna_cov.h"
 
 int luaopen_lpeg(lua_State *L);
@@ -86,6 +87,8 @@ static int setup_modules(void **state)
     luna_cov_setup(L);
 
     /* stage the C backends the way luna_main does */
+    luaL_requiref(L, "kernel", luaopen_luna_kernel, 0);
+    lua_pop(L, 1);
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "lfs", luaopen_lfs, 0);
@@ -508,19 +511,25 @@ static void test_rocks_vendor_legs_die_before_luarocks(void **state)
      * loads. os.exit is stubbed so the VM survives the exit(1). */
     setenv("LUNA_VENDOR_DIR", "", 1);
     assert_string_equal(eval_string(
+        "local saved_kernel = package.loaded.kernel\n"
+        "package.loaded.kernel = nil\n"
         "local rocks = require('luna.rocks')\n"
         "local code, real = nil, os.exit\n"
         "os.exit = function(c) code = c or 0 error('OS_EXIT') end\n"
         "local ok = pcall(rocks.dispatch, {'list'})\n"
         "os.exit = real\n"
+        "package.loaded.kernel = saved_kernel\n"
         "return tostring(ok) .. ',' .. tostring(code)"),
         "false,1");
     setenv("LUNA_VENDOR_DIR", "/nonexistent-luna-vendor", 1);
     assert_string_equal(eval_string(
+        "local saved_kernel = package.loaded.kernel\n"
+        "package.loaded.kernel = nil\n"
         "local code, real = nil, os.exit\n"
         "os.exit = function(c) code = c or 0 error('OS_EXIT') end\n"
         "local ok = pcall(require('luna.rocks').dispatch, {'list'})\n"
         "os.exit = real\n"
+        "package.loaded.kernel = saved_kernel\n"
         "return tostring(ok) .. ',' .. tostring(code)"),
         "false,1");
     unsetenv("LUNA_VENDOR_DIR");
@@ -528,7 +537,10 @@ static void test_rocks_vendor_legs_die_before_luarocks(void **state)
      * touching luarocks — the luna entry's ROCKS_CMDS gate means this
      * leg is only reachable through a direct dispatch call */
     assert_string_equal(eval_string(
+        "local saved_kernel = package.loaded.kernel\n"
+        "package.loaded.kernel = nil\n"
         "local ok, rc = pcall(require('luna.rocks').dispatch, {'frobnicate'})\n"
+        "package.loaded.kernel = saved_kernel\n"
         "return tostring(ok) .. ',' .. tostring(rc)"),
         "true,1");
 }
@@ -2499,6 +2511,130 @@ static void test_qs_stringify(void **state)
         "a:1;b:2|a=b");
 }
 
+/* -- process (Node process 全局面, 纯 Lua 聚合既有同步面) ------------------ */
+
+static void test_process_surface(void **state)
+{
+    (void)state;
+    /* 基本字段: pid/ppid/platform/arch/type/release/version; exitCode
+     * 缺省 nil (Node undefined) */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "return tostring(p.pid > 0) .. ',' .. tostring(p.ppid > 0)\n"
+                    "  .. ',' .. tostring(p.platform == 'linux')\n"
+                    "  .. ',' .. tostring(p.arch == 'x64')\n"
+                    "  .. ',' .. tostring(p.type == 'Linux')\n"
+                    "  .. ',' .. tostring(p.release ~= nil)\n"
+                    "  .. ',' .. tostring(p.version == require('kernel').version())\n"
+                    "  .. ',' .. tostring(p.versions.lua == '5.5')\n"
+                    "  .. ',' .. tostring(p.versions.luna == '0.1.0')\n"
+                    "  .. ',' .. tostring(next(p.execArgv) == nil)\n"
+                    "  .. ',' .. tostring(p.exitCode == nil)"),
+        "true,true,true,true,true,true,true,true,true,true,true");
+    /* argv 形状: 测试 VM 无 arg 全表 (嵌入宿主语境) → argv[1]='[eval]';
+     * argv[0]=argv0=execPath (Node argv0 是原始 argv[0]=解释器,
+     * 非脚本路径) */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "return tostring(p.argv[1] == '[eval]')\n"
+                    "  .. ',' .. tostring(p.argv[0] == p.execPath)\n"
+                    "  .. ',' .. tostring(p.execPath == p.argv0)\n"
+                    "  .. ',' .. tostring(p.execPath == nil\n"
+                    "      or type(p.execPath) == 'string')"),
+        "true,true,true,true");
+    /* cwd/chdir: 往返 + 坏目录 raise */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local home = p.cwd()\n"
+                    "p.chdir('/')\n"
+                    "local root = p.cwd()\n"
+                    "p.chdir(home)\n"
+                    "local back = p.cwd()\n"
+                    "local _, m = pcall(p.chdir, '/nonexistent-dir-xyz')\n"
+                    "return tostring(root == '/') .. ',' .. tostring(back == home)\n"
+                    "  .. ',' .. tostring(m:find('process.chdir: ', 1, true) ~= nil)"),
+        "true,true,true");
+    /* env: getenv 代理 + 叠写层 + 枚举拒绝 */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local a = p.env.HOME ~= nil\n"
+                    "p.env.LUNA_TEST_MARK = 'yes'\n"
+                    "local b = p.env.LUNA_TEST_MARK == 'yes'\n"
+                    "p.env.LUNA_TEST_MARK = nil\n"
+                    "local c = p.env.LUNA_TEST_MARK == nil\n"
+                    "local _, m = pcall(function() for _ in pairs(p.env) do end end)\n"
+                    "return tostring(a) .. ',' .. tostring(b) .. ','\n"
+                    "  .. tostring(c) .. ','\n"
+                    "  .. tostring(m:find('enumeration is not supported', 1, true) ~= nil)"),
+        "true,true,true,true");
+    /* hrtime: 表形状 + 出差 + bigint 整型; memoryUsage/uptime */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local t = p.hrtime()\n"
+                    "local d = p.hrtime(t)\n"
+                    "local b = p.hrtime.bigint()\n"
+                    "return tostring(type(t[1]) == 'number')\n"
+                    "  .. ',' .. tostring(t[2] >= 0 and t[2] < 1000000000)\n"
+                    "  .. ',' .. tostring(d[1] == 0)\n"
+                    "  .. ',' .. tostring(math.type(b) == 'integer' and b > 0)\n"
+                    "  .. ',' .. tostring(p.memoryUsage().heapUsed > 0)\n"
+                    "  .. ',' .. tostring(p.uptime() >= 0)"),
+        "true,true,true,true,true,true");
+    /* umask: 无参纯查询 (kernel.umask 缺参会置 0077, 包装先置 0
+     * 取旧值再恢复); 带参设并还原 (0 是合法掩码) */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local before = p.umask()\n"
+                    "local old = p.umask(0)\n"
+                    "local now = p.umask()\n"
+                    "p.umask(old)\n"
+                    "return tostring(type(before) == 'number')\n"
+                    "  .. ',' .. tostring(now == 0)\n"
+                    "  .. ',' .. tostring(p.umask() == before)"),
+        "true,true,true");
+    /* nextTick: 无 loop 同步立即; 有 loop 走 setImmediate 延后 (harness
+     * 无 loop C 模块, 桩一个 setImmediate 钉同一代码路径的延后契约) */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local order = {}\n"
+                    "p.nextTick(function() order[#order+1] = 'tick' end)\n"
+                    "order[#order+1] = 'sync'\n"
+                    "return table.concat(order, ',')"),
+        "tick,sync");
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local queued = {}\n"
+                    "package.loaded.loop = { setImmediate = function(fn)\n"
+                    "    queued[#queued+1] = fn end }\n"
+                    "local order = {}\n"
+                    "p.nextTick(function() order[#order+1] = 'tick' end)\n"
+                    "order[#order+1] = 'sync'\n"
+                    "package.loaded.loop = nil\n"
+                    "return table.concat(order, ',') .. ','\n"
+                    "  .. tostring(#queued == 1)"),
+        "sync,true");
+    /* stdio: stdout 走 kernel.write 漏斗, stderr 直写即刷, 均返 true;
+     * stdin.isTTY 布尔; write 非串 raise */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "local a = p.stdout.write('x')\n"
+                    "local b = p.stderr.write('y')\n"
+                    "local _, m1 = pcall(p.stdout.write, 42)\n"
+                    "local _, m2 = pcall(p.stderr.write, 42)\n"
+                    "return tostring(a) .. ',' .. tostring(b)\n"
+                    "  .. ',' .. tostring(type(p.stdin.isTTY) == 'boolean')\n"
+                    "  .. ',' .. tostring(m1:find('chunk must be a string', 1, true) ~= nil)\n"
+                    "  .. ',' .. tostring(m2:find('chunk must be a string', 1, true) ~= nil)"),
+        "true,true,true,true,true");
+    /* exit 是函数 (真退出会杀测试进程, 不在此调); exitCode 可写 */
+    assert_string_equal(
+        eval_string("local p = require('process')\n"
+                    "p.exitCode = 3\n"
+                    "return tostring(type(p.exit) == 'function')\n"
+                    "  .. ',' .. tostring(p.exitCode == 3)"),
+        "true,true");
+}
+
 /* -- url (Node lib/url.js legacy 面, v24.21.0 对拍) ------------------------ */
 
 static void test_url_parse_fields(void **state)
@@ -3489,6 +3625,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_util_inspect_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_inspect_truncation_circular, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_util_args_contract, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_process_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),

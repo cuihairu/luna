@@ -2566,7 +2566,7 @@ static void test_process_surface(void **state)
                     "return tostring(p.pid > 0) .. ','\n"
                     "  .. tostring(p.ppid == nil or p.ppid > 0)\n"
                     "  .. ',' .. tostring(p.platform == (win and 'win32' or 'linux'))\n"
-                    "  .. ',' .. tostring(p.arch == 'x64')\n"
+                    "  .. ',' .. tostring(p.arch == 'x64' or p.arch == 'arm64')\n"
                     "  .. ',' .. tostring(p.type == (win and 'Windows_NT' or 'Linux'))\n"
                     "  .. ',' .. tostring(p.release ~= nil)\n"
                     "  .. ',' .. tostring(p.version == require('kernel').version())\n"

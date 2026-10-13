@@ -7,7 +7,7 @@ Node `util` 的 `format`/`inspect` 面(promisify/types 无 Lua 契约锚,明确�
 | 调用 | 说明 |
 | --- | --- |
 | `util.format(fmt, ...)` | printf 风格:`%s %d %i %f %j %o %O %c` 与 `%%`;扩展 `%x`/`%X` 十六进制 |
-| `util.inspect(value)` | 值渲染为 **Lua 源形状**,键排序保确定性 |
+| `util.inspect(value, opts?)` | 值渲染为 **Lua 源形状**,键排序保确定性;`opts.depth`(默认 2)、`opts.maxArrayLength`(默认 100)、`opts.maxStringLength`(默认 10000) |
 
 `format` 细节(与 Node v24 实测对齐):`%d`/`%f` 不截断,`%i` 向零截断;无格式符时参数以空格尾接;未知转换符原样保留;`%j` 走 [json](/stdlib/json) 编码。
 

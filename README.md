@@ -70,7 +70,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 Artifacts ship as a **rolling nightly Release** (fixed tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly): every green run clears the old assets, uploads fresh ones, and re-publishes, with `.sha256` sidecars for verification). Assets on a public repository are public and pull anonymously, no credentials of any kind; the installer self-verifies with `luna --version`. Actions artifacts are per-run local copies, not a delivery channel. Current artifact matrix: `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `windows-x86_64`.
 
 - **Daily build**: the [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) workflow runs on a schedule (UTC 01:23): Release-type build plus smoke checks, publishing the rolling nightly Release. It is a pure artifact pipeline; full test coverage is the job of the CI on every push, and the nightly window does not carry the network-dependent rocks suite. The platform zips `luna-nightly-<os>-<arch>` (the binary plus the `luna_modules/` module sidecar; the binary resolves the Lua strategy layer from its own directory first) and their `.sha256` sidecars are cleared and re-uploaded each run; run-page artifacts (`pkg-<os>-<arch>` for 3 days, aggregate `daily-build` for 14 days) are reference copies only. All four legs are promoted out of the canary phase (Windows 2026-10-08, macOS 2026-10-09): the nightly test matrix (`daily.yml`, UTC 21:13 + manual) reruns the full suite per platform, and a red build or red test fails the run outright — no exemption legs. The nightly Release is the lifeline; the artifact page and the Release page corroborate each other.
-- **From source**: the only dependencies are CMake ≥ 3.16 and a C compiler; everything else lives in `deps/`:
+- **From source**: the only dependencies are CMake ≥ 3.14 and a C compiler; everything else lives in `deps/`:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -78,7 +78,7 @@ cmake --build build -j
 ctest --test-dir build       # every test suite should be green
 ```
 
-On macOS, `brew install pkg-config autoconf cmake` and `export MACOSX_DEPLOYMENT_TARGET="10.6"`; the optional `libssl-dev` enables the crypto module. See [Getting started](https://cuihairu.github.io/luna/guide/getting-started).
+On macOS, `brew install pkg-config autoconf cmake`; the optional `libssl-dev` enables the crypto module. See [Getting started](https://cuihairu.github.io/luna/guide/getting-started).
 
 ## Toolset
 
@@ -90,11 +90,11 @@ On macOS, `brew install pkg-config autoconf cmake` and `export MACOSX_DEPLOYMENT
 | Event loop | `loop`: timers, TCP/Unix/TLS, async fs, signals, subprocesses; automatic drain at script end | [Event loop](https://cuihairu.github.io/luna/guide/loop) |
 | Async tasks | `task`: `task.run/await/sleep/promise/promisify`, handles support cooperative `:cancel`; `%tasks` to observe | [Async tasks](https://cuihairu.github.io/luna/guide/tasks) |
 | Scaffolding | `luna new plugin/package/script <name>` generates starter code from built-in templates; `--list` enumerates templates, refuses existing targets | [Examples & scaffolding](https://cuihairu.github.io/luna/guide/examples) |
-| Official examples | Eight ready-to-run examples in `examples/`: CLI, HTTP/TCP services, scraping, build, game scripting, automation; documented output is captured from real runs | [Examples & scaffolding](https://cuihairu.github.io/luna/guide/examples) |
+| Official examples | Eight ready-to-run examples in `examples/`: CLI, file tooling, HTTP/TCP services, scraping, build, game scripting, automation; documented output is captured from real runs | [Examples & scaffolding](https://cuihairu.github.io/luna/guide/examples) |
 | Sandbox runtime | `luna --sandbox`: module whitelist, native loading disabled, no subprocesses / file writes / environment; `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` cap compute and memory | [Sandbox runtime](https://cuihairu.github.io/luna/guide/sandbox) |
 | One-line servers | `luna serve` for a static directory; `http.serve()` static or programmable; `net.serve()` TCP echo | [Standard library · http](https://cuihairu.github.io/luna/stdlib/http) |
 | Modules | Relative require, `luna_modules/` walk-up, `package.json`-style manifest `main`, `package.loaded` cache semantics | [Module system](https://cuihairu.github.io/luna/guide/modules) |
-| Standard library | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto bind mature C libraries or LPeg; path/util/events/stream are pure Lua following Node semantics; shipped inside the binary | [Standard library overview](https://cuihairu.github.io/luna/stdlib/) |
+| Standard library | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto bind mature C libraries or LPeg; path/util/querystring/url/process/console/events/stream are pure Lua following Node semantics; shipped inside the binary | [Standard library overview](https://cuihairu.github.io/luna/stdlib/) |
 | Logging | `logging`: six threshold levels, log4j-style appenders (console / file / rolling file / socket; lualogging 1.8, bundled) | [Standard library · logging](https://cuihairu.github.io/luna/stdlib/logging) |
 | Plugins | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`, manifest + entry point, isolated failures | [Plugin development](https://cuihairu.github.io/luna/guide/plugins) |
 | Architecture | Thin C kernel + embedded Lua strategy layer + extension points; design comparisons and event-loop rationale | [Architecture](https://cuihairu.github.io/luna/architecture) |

@@ -14,6 +14,8 @@
 | `path.isAbsolute(s)` | 判绝对 |
 | `path.parse(s)` / `path.format(o)` | 拆解/重组 `{root, dir, base, ext, name}` |
 | `path.sep` / `path.delimiter` / `path.posix` | 常量与 POSIX 面 |
+| `path.toNamespacedPath(s)` | Windows 命名空间路径(`\\?\` 前缀;posix 面原样返回) |
+| `path.win32` | Windows 语义面:同名全套函数,平台无关的文本语义(盘符/UNC/保留名;`sep` 为 `\\`) |
 
 ## 用法
 
@@ -59,5 +61,5 @@ print(path.format({ dir = p.dir, base = "report.pdf" }))
 
 ## 契约与边界
 
-- 与 Node 一致:`normalize` 不消解中间 `..`(保守,不碰软链接语义),`resolve` 才消;`resolve` 不保留尾斜杠(Node 与 `normalize` 在这点分叉)。
-- Windows 路径(`C:\`)不在当前面内——需要时 `path.posix` 之外另有 Node `win32` 的对应物未提供。
+- 与 Node 一致:`normalize` 折叠中间 `..`/`.` 与重复分隔符(纯文本操作,不判软链接),`resolve` 同样消解并补绝对前缀;`resolve` 不保留尾斜杠(Node 与 `normalize` 在这点分叉)。
+- Windows 路径(`C:\`、UNC、`\\?\` 命名空间)走 `path.win32` 面——与 posix 同名全套 API,但按 Windows 文本语义解析(平台无关:在 Linux 上同样可用);默认面仍是 posix。

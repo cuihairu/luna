@@ -10,10 +10,11 @@ Node 流的 v1 收窄面,纯 Lua,地基是 [events](/stdlib/events)。语义按 
 | `stream.writable(opts)` | 写侧;`opts._write(self, chunk, cb)` 是汇,`cb(err)` 报完成 |
 | `stream.duplex(opts)` | 两半共存 |
 | `stream.transform(opts)` | 中间变换;`opts._transform(self, chunk, cb)`,可多次 `push`,可选 `_flush` |
-| `stream.pushReadable(fn)` | 推式源的糖 |
-| `stream.readableFromChunks(iter)` | 把分片集合转可读流 |
+| `stream.pushReadable(opts?)` | 推式源:生产者直接 `:push(chunk)`,返回 false 即收手(`_read` 缺省即无拉面) |
+| `stream.readableFromChunks(chunks)` | 把分片集合(字符串或分片表)转可读流 |
 | `stream.duplexFromSock(sock)` | `loop.net` socket → Duplex 适配 |
-| `r:pipe(w)` | 管道;写侧缓冲到 highWaterMark 即暂停,`drain` 事件续推(背压) |
+| `r:pipe(w)` | 管道;写侧缓冲到 highWaterMark 即暂停,`drain` 事件续推(背压);`opts.end = false` 不自动关写侧 |
+| `r:unpipe(w)` | 摘除管道 |
 
 事件:`data`/`end`(读侧)、`finish`(写侧排空)、`drain`(缓冲回退)、`error` → `destroy` → `close`。`end` 是 Lua 关键字,拼作 `s["end"]` 或 `s:end_()`。
 

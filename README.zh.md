@@ -70,7 +70,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`、`windows-x86_64`。
 
 - **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项构建与产物已通并随夜间上线,该腿仍带试运行豁免(红不拖垮其余平台);macOS 项构建与产物已通,运行期测试按平台移植清单收敛中(见 todo)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
-- **源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器,其余全部在 `deps/` 内:
+- **源码构建**:依赖只有 CMake ≥ 3.14 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -78,7 +78,7 @@ cmake --build build -j
 ctest --test-dir build       # 全部测试组应全绿
 ```
 
-macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYMENT_TARGET="10.6"`;可选 `libssl-dev` 启用 crypto 模块。详见[快速上手](https://cuihairu.github.io/luna/guide/getting-started)。
+macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用 crypto 模块。详见[快速上手](https://cuihairu.github.io/luna/guide/getting-started)。
 
 ## 工具集
 
@@ -90,11 +90,11 @@ macOS 需要 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYM
 | 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/guide/loop) |
 | 异步任务 | `task`:`task.run/await/sleep/promise/promisify`,句柄 `:cancel` 协作取消;`%tasks` 观测 | [异步任务](https://cuihairu.github.io/luna/guide/tasks) |
 | 脚手架 | `luna new plugin/package/script <name>` 内置模板一键生成起步代码;`--list` 列模板,已存在即拒 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
-| 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
+| 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、文件工具、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
 | 沙箱运行时 | `luna --sandbox`:模块白名单、禁原生加载、无子进程/文件写/环境,`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 限算力与内存 | [沙箱运行时](https://cuihairu.github.io/luna/guide/sandbox) |
 | 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
 | 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
-| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
+| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/querystring/url/process/console/events/stream 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
 | 日志 | `logging`:六级阈值,console/文件/滚动文件/socket 等 log4j 式 appender(lualogging 1.8,随二进制) | [标准库 · logging](https://cuihairu.github.io/luna/stdlib/logging) |
 | 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |
 | 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/architecture) |

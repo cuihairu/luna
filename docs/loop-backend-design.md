@@ -6,7 +6,7 @@
 
 ## 一、现状:libuv 单后端,三大平台一次拿全
 
-luna 已有 opt-in 的事件循环:`loop` 模块(b12e50f)提供 Node 命名的 timer/immediate 与 `run`/`stop`,随后 `loop.fs`(1a3691d)把 `readFile`/`writeFile`/`stat` 放上 libuv 线程池,回调落回循环线程。锁定的 libuv 是 1.53.0(`deps/libuv`,静态链接,单二进制不变;2026-09 从 1.44.2 升级演练——产品代码零改动,唯一一处测试断言因 1.53 把 timers 相移到 check 之后而放宽为区间,全量回归绿)。
+luna 已有 opt-in 的事件循环:`loop` 模块提供 Node 命名的 timer/immediate 与 `run`/`stop`,随后 `loop.fs` 把 `readFile`/`writeFile`/`stat` 放上 libuv 线程池,回调落回循环线程。锁定的 libuv 是 1.53.0(`deps/libuv`,静态链接,单二进制不变;2026-09 从 1.44.2 升级演练——产品代码零改动,唯一一处测试断言因 1.53 把 timers 相移到 check 之后而放宽为区间,全量回归绿)。
 
 关键事实是 libuv 的后端映射:**Windows 上是 IOCP,Linux 上是 epoll,macOS/BSD 上是 kqueue**,同一套 API 自动分发。这意味着:
 
@@ -46,7 +46,7 @@ io_uring 的收益集中在**海量并发连接 + 高频小 IO**的场景——�
 
 ## 三、分层抽象:第二后端不立项,抽象层随之撤下
 
-`loop` 面向 Lua 的四个面——**timer**(setTimeout/setInterval)、**fs**(loop.fs 三件套)、**net**(TCP/unix 套接字)、**signal**(^C 已由 prepare 钩子承接)——继续作为 luna 自己的 API 演进,这与后端选择无关:它们全部架在 libuv 上。
+`loop` 面向 Lua 的九个面——**timer**(setTimeout/setInterval)、**fs**(全量异步文件面 + watch)、**net**(TCP/unix + TLS 两端)、**process**(run/spawn/exec)、**udp**、**dns**、**os**(同步主机信息)、**signal**(^C 已由 prepare 钩子承接),外加纯 Lua 的 **http** 面——继续作为 luna 自己的 API 演进,这与后端选择无关:除 http 架在 net 面上外,全部架在 libuv 上。
 
 曾经设想的"后端接口层"(把 `luna_loop.c` 内部拆成可替换后端)唯一现实的动机是自接 io_uring;既然 io_uring 归属 libuv,**这层抽象失去论据,不排期**。为不存在的第二后端预付抽象成本,和自接 io_uring 是同一种错误,只是金额小一些。
 

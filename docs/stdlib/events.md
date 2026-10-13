@@ -6,7 +6,7 @@ Node `EventEmitter` 语义。`events.new()` 构造,方法挂在实例上。语�
 
 | 调用 | 说明 |
 | --- | --- |
-| `events.new()` | 新 emitter |
+| `events.new()` | 新 emitter(`events.EventEmitter` 是同一个类的别名) |
 | `em:on(name, fn)` | 挂监听,返回 emitter(可链) |
 | `em:once(name, fn)` | 触发一次后自动摘除 |
 | `em:off(name, fn)` | 摘监听(同 `removeListener`) |
@@ -15,6 +15,7 @@ Node `EventEmitter` 语义。`events.new()` 构造,方法挂在实例上。语�
 | `em:listeners(name)` / `em:listenerCount(name)` | 查询 |
 | `em:setMaxListeners(n)` / `events.defaultMaxListeners` | 超限警告阈值(默认 10) |
 | `em:removeAllListeners(name?)` | 清监听 |
+| 别名 | `addListener`=`on`、`removeListener`=`off`、`prependOnceListener`(头插一次性) |
 
 ## 用法
 

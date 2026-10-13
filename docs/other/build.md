@@ -2,7 +2,7 @@
 
 ## 依赖
 
-仅需 **CMake ≥ 3.16** 与 **C 编译器**(gcc/clang)。除 cmocka(FetchContent 拉取,仅测试树用)外,全部在 `deps/` 内:
+仅需 **CMake ≥ 3.14** 与 **C 编译器**(gcc/clang)。除 cmocka(FetchContent 拉取,仅测试树用)外,全部在 `deps/` 内:
 
 - Lua 5.5
 - LPeg
@@ -49,13 +49,12 @@ dnf install openssl-devel
 brew install openssl
 ```
 
-重新配置后 `require("crypto")` 可用(`sha256`、`hmac`、`rand.bytes` 等)。未安装时构建照常成功,运行时给出指引性错误。
+重新配置后 `require("crypto")` 可用(`sha256` 系列、`hmac`、`randombytes`)。未安装时构建照常成功,运行时给出指引性错误。
 
 ### macOS 特殊说明
 
 ```bash
 brew install pkg-config autoconf cmake
-export MACOSX_DEPLOYMENT_TARGET="10.6"
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ```
@@ -79,7 +78,7 @@ cmake --build build -j
 | `luna` | 入口冒烟:无参启动、stdin EOF 干净退出 |
 | `serve` | `http.serve` 静态/handler 双模式、`luna serve`、`^C` 契约、close 排水 |
 | `loop` | 定时器、TCP/Unix/TLS、异步 fs、信号、子进程、HTTP 客户端/服务端 |
-| `rocks` | 包管理(安装/卸载/搜索/依赖解析) |
+| `rocks` | 包管理(安装/更新/搜索/列表 + 锁文件复现) |
 | `line` | 行编辑器基础、光标、杀词 |
 | `linedit` | replxx 绑定、增量检索、历史持久化 |
 | `main` | 入口分发、信号安装、模块嵌入、启动流程 |

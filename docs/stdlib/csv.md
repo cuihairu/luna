@@ -6,9 +6,9 @@ RFC 4180 风格 CSV 编解码。LPeg 语法驱动(luna 自带 lpeg,零新依赖)
 
 | 调用 | 说明 |
 | --- | --- |
-| `csv.decode(str, opts?)` | 解析为**行数组,每行是字段数组**;字段恒为字符串(CSV 无类型,转换是调用者的事,同 Node csv-parse 默认) |
-| `csv.encode(rows, opts?)` | 行数组编码;`opts.eol` 缺省 CRLF(RFC 4180 wire 格式),**不追加尾 eol** |
-| `csv.lines(str)` | 逐行迭代器,产出每行字段数组;坏数据 **raise**(迭代器的 nil 即结束,没地方放错误) |
+| `csv.decode(str, opts?)` | 解析为**行数组,每行是字段数组**;字段恒为字符串(CSV 无类型,转换是调用者的事,同 Node csv-parse 默认);`opts.delimiter`(默认 `,`)、`opts.headers = true` 把返回改成**记录表数组**(首行为键,多余列落序号键) |
+| `csv.encode(rows, opts?)` | 行数组编码;`opts.eol` 缺省 CRLF(RFC 4180 wire 格式),**不追加尾 eol**;`opts.delimiter` 换分隔符;`opts.headers = true` 先写表头行(encode 记录表数组) |
+| `csv.lines(str)` | 逐行迭代器,产出每行字段数组;坏数据 **raise**(迭代器的 nil 即结束,没地方放错误);`opts` 同 `decode` |
 
 ## 用法
 

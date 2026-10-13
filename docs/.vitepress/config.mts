@@ -72,7 +72,8 @@ export default defineConfig({
           { text: '配置与环境变量', link: '/other/config' },
           { text: '错误模型与退出码', link: '/other/errors' },
           { text: '构建与自测', link: '/other/build' },
-          { text: 'FAQ', link: '/other/faq' }
+          { text: 'FAQ', link: '/other/faq' },
+          { text: '文档一致性审计', link: '/审计-文档一致性' }
         ]
       },
       {

@@ -1,6 +1,6 @@
 # stdlib · logging
 
-[lualogging](https://github.com/lunarmodules/lualogging)(lunarmodules,1.8.x,MIT)的 `logging` 全家随二进制分发,`require` 即用:六级阈值 + log4j 式 appender。核心纯 Lua,上游原样透出、无包装;`logging.socket`/`logging.email` 踩在自带的 luasocket 上,`sql` 的数据库驱动与 `rsyslog`/`nginx` 的宿主属可选项,只在用到时才 require。luna 的 Lua 5.5 上游 CI 尚未覆盖(矩阵止于 5.4),已用上游回归逐文件在本机验证:env/console/file/rolling/socket/SQL 全过,generic 10/11——唯一红的 `format_error_stacktrace` 硬编码宿主栈深(要 3,luna 运行器下得 4,stock 直跑得 2),纯测试形状敏感非语义差异;零补丁零改动,mail 需外部 SMTP 未在本地跑。
+[lualogging](https://github.com/lunarmodules/lualogging)(lunarmodules,1.8.2,MIT)的 `logging` 全家随二进制分发,`require` 即用:六级阈值 + log4j 式 appender。核心纯 Lua,上游原样透出、无包装;`logging.socket`/`logging.email` 踩在自带的 luasocket 上,`sql` 的数据库驱动与 `rsyslog`/`nginx` 的宿主属可选项,只在用到时才 require。luna 的 Lua 5.5 上游 CI 尚未覆盖(矩阵止于 5.4),已用上游回归逐文件在本机验证:env/console/file/rolling/socket/SQL 全过,generic 10/11——唯一红的 `format_error_stacktrace` 硬编码宿主栈深(要 3,luna 运行器下得 4,stock 直跑得 2),纯测试形状敏感非语义差异;零补丁零改动,mail 需外部 SMTP 未在本地跑。
 
 ## API
 
@@ -8,7 +8,7 @@
 | --- | --- |
 | `require "logging"` | 核心:`DEBUG/INFO/WARN/ERROR/FATAL/OFF` 六级常量,`logging.new(append, level)` 自定义 appender,`defaultLevel()`/`defaultLogger()` 管全局缺省 |
 | `require "logging.console"` | 控制台 appender;`{ logLevel=, destination="stdout"\|"stderr", logPattern=, timestampPattern= }` |
-| `require "logging.file"` | 追加写文件;`{ filename=, logLevel=, datePattern=, logPattern= }` |
+| `require "logging.file"` | 追加写文件;`{ filename=, logLevel=, datePattern=, logPattern=, timestampPattern= }` |
 | `require "logging.rolling_file"` | 按 `maxFileSize` 滚动、留 `maxBackupIndex` 份档;其余参数同 file |
 | `require "logging.socket"` | 每条消息经 luasocket 连 `{ hostname=, port= }` 发往 TCP 对端 |
 | logger 方法 | `:debug/:info/:warn/:error/:fatal(msg, ...)`,参数按 `string.format` 展开;`:setLevel()`、`:getPrint()` |

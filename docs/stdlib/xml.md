@@ -7,7 +7,7 @@ XML 的 DOM 三件套(`decode`/`encode`)加 SAX 透传。后端 expat(经 lua-ex
 | 调用 | 说明 |
 | --- | --- |
 | `xml.decode(str)` | 解析为 DOM;元素 = `{ tag, attrs, kids }`,文本节点是 `kids` 里的普通字符串 |
-| `xml.encode(node)` | DOM 编码回 XML 文本 |
+| `xml.encode(node, opts?)` | DOM 编码回 XML 文本;`opts.indent = N` 换行缩进美化输出 |
 | `xml.sax(handlers)` | 返回 lxp parser(`:parse(str)` 逐段喂,空参 `:parse()` 收尾);回调名即 lxp 的,首参恒是 parser:`StartElement(p, name, attrs)` / `EndElement(p, name)` / `CharacterData(p, str)` |
 
 属性值恒为字符串;命名空间前缀原样保留(`<x:a>` 的 tag 是 `"x:a"`)。

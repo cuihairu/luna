@@ -7,7 +7,7 @@ JSON 编解码。后端 [dkjson](https://dkolf.dk/dkjson)(纯 Lua,UTF-8 感知,�
 | 调用 | 说明 |
 | --- | --- |
 | `json.encode(value, opts?)` | 编码为 JSON 字符串;`opts` 透传 dkjson(`indent`/`keyorder`,见下节) |
-| `json.decode(str, pos?)` | 从 `pos`(默认 1)解码;坏数据返回 `nil, err`——`err` 是出错处的字符位置(1 基数字,dkjson 口径) |
+| `json.decode(str, pos?, nullval?)` | 从 `pos`(默认 1)解码;坏数据返回 `nil, err`——`err` 是出错处的字符位置(1 基数字,dkjson 口径) |
 | `json.parse(str)` | `decode` 的 Node 式别名 |
 | `json.stringify(value)` | `encode` 的 Node 式别名 |
 

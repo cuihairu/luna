@@ -25,11 +25,12 @@ luna 的形态用三层模型讲清楚——**User Space(用户空间)/ Luna Run
 ├─ Native Runtime ────────────────────────────────────────────────────────┤
 │  C 内核(薄):信号 · 毫秒时钟 · isatty · 输出汇聚 · replxx 桥             │
 │    luna_main 入口/CLI · luna_kernel 状态/绑定注册 · luna_line           │
-│    luna_hook 计数钩子 · luna_loop libuv 接线 · luna_toml tomlc17 桥     │
+│    luna_kernel 计数钩子 · luna_loop libuv 接线 · luna_toml tomlc17 桥     │
 │  vendor 一排:                                                            │
 │    Lua 5.5 · libuv · OpenSSL · replxx · luasocket                       │
 │    LPeg · lfs · lua-zlib · luaossl · tomlc17                            │
 │    libyaml + lyaml · expat + lua-expat · dkjson(纯 Lua)                 │
+│    argparse · scintillua · luarocks · lualogging(Lua 层随二进制)        │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +54,7 @@ luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模�
 | 包清单 | `package.json` 的 `main` | 同名清单的 `main`,缺省 `init.lua` |
 | 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
-| 全局注入 | `process`/`Buffer` | `kernel`/`Out`/`In` |
+| 全局注入 | `process`/`Buffer` | `kernel`(REPL 另有 `In`/`Out` 全局) |
 | 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` 随二进制(`loop` 为异步面);与 Node 逐模块的一一对照见 [node-parity](/node-parity) |
 
 差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。

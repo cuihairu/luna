@@ -9,7 +9,7 @@ TOML 编解码。`decode` 走 C 面([tomlc17](https://github.com/cktan/tomlc17),
 | `toml.decode(str)` | 解析;值平直映射 Lua,**datetime 解码为组件表** |
 | `toml.encode(tbl)` | 编码;标量键先出、子表后出(TOML 语法规则使然),纯表数组渲染为 `[[header]]`,其余内联 |
 
-datetime 组件表:日期 `{year, month, day}`,时间 `{hour, minute, second, secfrac?}`,datetime 两者兼具,offset datetime 额外带 `offset`(距 UTC 的分钟数,`Z` 为 0)。`secfrac` 只在源数据确有小数位时出现。
+datetime 组件表:日期 `{year, month, day}`,时间 `{hour, minute, second, secfrac?}`,datetime 两者兼具,offset datetime 额外带 `offset`(距 UTC 的分钟数,`Z` 为 0)。`secfrac` 只在亚秒分量为非零小数时出现(`.0` 不产生)。
 
 ## 用法
 

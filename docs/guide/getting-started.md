@@ -28,7 +28,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 macOS 包未做签名,首次运行先 `xattr -cr luna` 清隔离属性。
 
-**源码构建**:依赖只有 CMake ≥ 3.16 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、luafilesystem、lua-zlib、luaossl、dkjson、argparse、libuv、tomlc17、libyaml+lyaml、expat+lua-expat、lualogging 等)全部在 `deps/` 内,configure 时自动拉取。
+**源码构建**:依赖只有 CMake ≥ 3.14 与 C 编译器;其余(Lua 5.5、LPeg、replxx、scintillua、luasocket、luafilesystem、lua-zlib、luaossl、dkjson、argparse、libuv、tomlc17、libyaml+lyaml、expat+lua-expat、lualogging 等)全部在 `deps/` 内,configure 时自动拉取。
 
 ```bash
 # Linux / macOS
@@ -37,7 +37,7 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-macOS 另需 `brew install pkg-config autoconf cmake` 并 `export MACOSX_DEPLOYMENT_TARGET="10.6"`。测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
+macOS 另需 `brew install pkg-config autoconf cmake`。测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
 
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 

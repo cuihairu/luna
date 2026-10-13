@@ -7,7 +7,7 @@ YAML 1.1 编解码、多文档流。后端 [lyaml](https://github.com/gvvaughan/
 | 调用 | 说明 |
 | --- | --- |
 | `yaml.decode(str, opts?)` | 解析首个文档;`opts.nullval = yaml.null` 可把 null 落成哨兵(缺省落 `nil`) |
-| `yaml.decodeAll(str)` | 解析 `---` 分隔的全部文档,返回数组 |
+| `yaml.decodeAll(str, opts?)` | 解析 `---` 分隔的全部文档,返回数组;opts 同 `decode` |
 | `yaml.encode(value, opts?)` | 编码为 YAML 文本;`opts.anchors = true` 开启自动锚点(共享引用发 `&aN`/`*aN`,环也可编码) |
 | `yaml.null` | 编码侧的 null 哨兵:`encode` 时落成 `~`;`decode` 侧 `~`/空/`null` 一律落 `nil`,哨兵不回流 |
 | `yaml._VERSION` | lyaml 版本串 |

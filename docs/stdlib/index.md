@@ -15,6 +15,10 @@
 | net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/stdlib/net) |
 | http | 一行起服 `serve()` + luasocket 客户端面 | luasocket + 纯 Lua | [http](/stdlib/http) |
 | crypto | sha1/256/384/512、HMAC、随机字节(需 OpenSSL) | luaossl | [crypto](/stdlib/crypto) |
+| console | Node console 面:log/table/time/count/group 族 | 纯 Lua | (见 [Node 对照](/node-parity)) |
+| process | Node process 同步子集:argv/env/cwd/exit/stdio | 纯 Lua | (见 [Node 对照](/node-parity)) |
+| querystring | URL 查询串编解码(Node 语义) | 纯 Lua | (见 [Node 对照](/node-parity)) |
+| url | URL 拆解/重组/解析(legacy 面) | 纯 Lua | (见 [Node 对照](/node-parity)) |
 
 ## Data-Format — 数据格式编解码
 
@@ -43,7 +47,7 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 
 两个贯穿契约:
 
-- **数据错误不抛,参数错误才抛**:格式类模块(json/csv/ini/toml/xml/yaml)的 `decode`/`encode` 遇到坏数据返回 `nil, err`(消息带行列);传错参数类型(比如 `decode(42)`)直接 raise。循环/脚本里喂不可信数据建议 `pcall` 或显式接第二个返回值。
+- **数据错误不抛,参数错误才抛**:格式类模块(json/csv/ini/toml/xml/yaml)的 `decode`/`encode` 遇到坏数据返回 `nil, err`(消息带行列;toml 例外,只报行号);传错参数类型(比如 `decode(42)`)直接 raise。循环/脚本里喂不可信数据建议 `pcall` 或显式接第二个返回值。
 - **字符串按字节计**:所有模块对 Lua 字符串不做编码转换;UTF-8 只是"透传并尽量在错误定位里数对"。
 
 ## 随二进制分发的底层模块
@@ -58,9 +62,9 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 | `mime.core` | MIME 编解码(base64、quoted-printable) | 同上 |
 | `zlib.core` | lua-zlib 原始流式面;`zlib` 包装层的一次式 API 在其上 | [lua-zlib](https://github.com/brimworks/lua-zlib) |
 | `toml.core` | tomlc17 解码核心(无编码,encode 是包装层的 Lua 面) | [tomlc17](https://github.com/cktan/tomlc17) |
-| `yaml.core` | lyaml 的 C 面(仅解码) | [lyaml](https://github.com/gvvaughan/lyaml) |
+| `yaml.core` | lyaml 的 C 面(parser + emitter,编解码都在其上) | [lyaml](https://github.com/gvvaughan/lyaml) |
 | `lxp` | expat 的 SAX 面;`xml` 的 DOM 构建在其上 | [lua-expat](https://github.com/tomasguisasola/luaexpat) |
-| `_openssl.*` | luaossl 全家(约 20 个子模块,`crypto` 包装层之下) | [luaossl](https://github.com/wahern/luaossl) |
+| `_openssl.*` | luaossl 全家(25 个子模块,`crypto` 包装层之下) | [luaossl](https://github.com/wahern/luaossl) |
 | `lfs` | luafilesystem 完整面(`fs` 的透传半边) | [luafilesystem](https://github.com/keplerproject/luafilesystem) |
 | `argparse` | CLI 参数解析(入口自己用,脚本同样可 require) | [argparse](https://github.com/luarocks/argparse) |
 | `linedit` | C 行编辑器;一般经 REPL 使用,自建交互面时可直取 | luna 内置 |

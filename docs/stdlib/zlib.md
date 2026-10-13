@@ -10,7 +10,7 @@
 | `zlib.decompress(data)` | 一发式 inflate |
 | `zlib.deflate([level])` | lua-zlib 原样:返回流式压缩闭包 |
 | `zlib.inflate()` | lua-zlib 原样:返回流式解压闭包 |
-| (其余) | lua-zlib 全部函数(`gzip` 等)经 `__index` 透传 |
+| (其余) | lua-zlib C 核心函数经 `__index` 透传:`deflate`/`inflate`/`adler32`/`crc32`/`version` 与窗口位常量 |
 
 ## 用法
 
@@ -53,4 +53,4 @@ print(#zlib.inflate()(part1 .. part2, "finish"))
 ## 契约与边界
 
 - `compress`/`decompress` 是一次性进出——大文件请用流式闭包分片,别整块读内存。
-- 一发式便利产出的是 **deflate 裸流**(无 gzip 头);要 gzip 格式走透传的 `zlib.gzip` 面。
+- 一发式便利产出的是 **deflate 裸流**(无 gzip 头);要 gzip 格式走流式闭包给窗口位——`zlib.deflate(level)(data, "finish", 15+16)`(raw deflate 是 -15,gzip 是 15+16)。

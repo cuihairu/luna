@@ -11,7 +11,7 @@ TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):*
 | `net.bind(address, port)` | 绑 master socket(`:listen()` + `:accept()`) |
 | `net.serve(host, port, handler)` | 一行起阻塞 TCP 服务:bind → accept 循环,`handler(client)` 每连接一调;handler 内部出错打到 stderr、服务不倒,返回 `false` 停服;实际监听地址播报 stderr(`port` 传 0 拿临时端口);accept 带 250ms 期限让循环定期转身——挂起的 `^C` 照 130 停服,期限只挂在 master 上,handler 拿到的 client 超时不受影响 |
 | `net.udp()` | 新 UDP socket |
-| `net.select(socksT, socksR[, timeout])` | 就绪集轮询 |
+| `net.select(recvt, sendt[, timeout])` | 就绪集轮询:第一参等待**可读**、第二参等待**可写**(luasocket 口径),返回两个就绪数组 |
 | `net.dns` | DNS 面(`resolve`/`toip` …) |
 
 socket 对象遵循 luasocket 语义:

@@ -141,7 +141,7 @@ luna 设计为**单二进制 CLI**,不是库。嵌入场景建议:
 
 - **试运行中,尚无产物**:nightly 矩阵挂着 windows 探针腿(experimental,红不拖垮其余平台)——vcpkg 静态 zlib 已通,`LUA_USE_POSIX` 已平台收窄,编译期阻碍清单(kernel `mode_t`、luasocket 平台源选型、unix 域 socket 目标、loop 网络层 POSIX 头、测试 `poll.h`)已登记,逐层消化中
 - `install.ps1` 已就位,Windows 产物落地后即可一键安装
-- `path` 模块只实现 `path.posix`(Node v24 语义),win32 面不做
+- `path` 模块提供 `path.posix` 与 `path.win32` 双面(均 Node v24 语义;win32 是平台无关的文本语义,在 Linux 上同样可用)
 - **当前推荐 WSL2 或原生 Linux/macOS**;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
 
 ## 如何贡献/报告问题

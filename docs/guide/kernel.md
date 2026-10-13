@@ -8,6 +8,7 @@
 | --- | --- |
 | `kernel.exec(src, chunkname?, ...args)` | 求值一段代码;`args` 成为 chunk 的 `...` |
 | `kernel.check(chunk)` | 只解析不求值:`"ok" \| "incomplete" \| "error", msg` |
+| `kernel.request_interrupt()` | 从 Lua 置起挂起的 `^C` 标志(与 `clear_interrupt` 对称) |
 | `kernel.write(...)` | 各参数(须为字符串)依次写进输出漏斗 |
 | `kernel.sink(fn?)` | 输出改道到 Lua 函数;`nil` 还原 stdout |
 | `kernel.clear_interrupt()` | 复位挂起的 `^C` 标志 |
@@ -26,7 +27,7 @@
 
 ## 执行与校验
 
-- **`kernel.exec(src, chunkname?, ...args)`**:编译并执行 `src`。`chunkname` 进 traceback(约定 `"@" .. 路径` 表示真实文件,REPL 用 `"=(repl)"`、`-e` 用 `"eval"`);其余参数成为 chunk 的 `...`——`run_script` 就靠它把命令行参数递给脚本。返回 `ok, err` 风格:编译或运行错误都走第二个返回值,不抛。
+- **`kernel.exec(src, chunkname?, ...args)`**:编译并执行 `src`。`chunkname` 进 traceback(约定 `"@" .. 路径` 表示真实文件,REPL 用 `"repl"`/`"repl[N]"`、`-e` 用 `"eval"`);其余参数成为 chunk 的 `...`——`run_script` 就靠它把命令行参数递给脚本。返回 `ok, err` 风格:编译或运行错误都走第二个返回值,不抛。
 - **`kernel.check(chunk)`**:只过编译器,把「还差下一行」(`"incomplete"`——以运算符/开括号/裸 `return` 等收尾,解析器明确要求续行)与「真错误」(`"error", msg`)分开。REPL 的多行续行判定就建立在它之上;想在输入层做自己的交互面,这是入口。
 
 ## 输出漏斗

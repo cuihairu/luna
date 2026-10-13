@@ -19,7 +19,7 @@
 | `child_process` | `loop.process`:`run`(聚合)/`spawn`(流式,stdio 直交 `loop.net` sock)/`exec`/`execSync` | ✅ |
 | `cluster` | — | ❌ 多进程可用 `loop.process` 自组 |
 | `console` | 纯 Lua `console` 模块(log/info/debug/warn/error/assert/trace/dir/table/time/timeLog/timeEnd/count/countReset/group 族 + Console 构造器) | ✅ 形状对拍(偏差见 console 勘定) |
-| `crypto` | `crypto`(luaossl:digest/hmac/cipher/rand/kdf/pkey/x509 全家族) | ✅ 证书面比 Node 内建更深 |
+| `crypto` | `crypto`(sha1/sha256/sha384/sha512/hmac/randombytes 便捷层);cipher/kdf/pkey/x509 走 `require "openssl.<sub>"`(luaossl 子模块随二进制分发) | ✅ 证书面比 Node 内建更深 |
 | `dgram` | `loop.udp`(bind 常驻收包、send 按包回调) | ✅ |
 | `diagnostics_channel` | — | ❌ |
 | `dns` | `loop.dns`(lookup/reverse,线程池解析)+ 同步 `net.dns`(luasocket) | ✅ |
@@ -32,7 +32,7 @@
 | `inspector` | `luna --attach`(轮询点观测,非 CDP) | ◐ 形态不同 |
 | `module` | 模块系统:`require` + `luna_modules/` 逐级上溯 + 清单 `main` + `luna install`(LuaRocks 包装,`luna.lock` 离线复现) | ✅ npm 的对应物在包管理面 |
 | `net` | 同步 `net`(luasocket)+ `loop.net`(connect/listen/connectTls/listenTls,多地址回退) | ✅ |
-| `os` | 官方 `os` 不遮蔽 + `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/uptime/loadavg/mem/cpus/networkInterfaces/home/tmpdir) | ✅ 批次 8 |
+| `os` | 官方 `os` 不遮蔽 + `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/uptime/loadavg/freemem/totalmem/cpus/networkInterfaces/home/tmpdir) | ✅ 批次 8 |
 | `path` | `path`(posix 面)+ `path.win32`(设备根/UNC/\?\ 命名空间/保留名/CVE 防护),Node v24 实证钉版,纯 Lua 双面 | ✅ posix + win32 双面(批次 6 解冻项,win32 按 Node 在 Linux 上同款文本语义) |
 | `perf_hooks` | `%time` 魔法 + `loop.os` 的 uptime/loadavg | ◐ 无独立高精度计时库面 |
 | `process` | 纯 Lua `process` 模块(pid/argv/env/cwd/chdir/exit/exitCode/uptime/hrtime/umask/memoryUsage/nextTick/stdio)+ `loop.process`(子进程)+ `loop.os`(系统信息) | ✅ 常用同步面(偏差见 process 勘定) |
@@ -52,7 +52,7 @@
 | `vm` | 官方 `load`(chunkname/env 参数) | ◐ 语言原语覆盖 |
 | `wasi` | — | ❌ |
 | `worker_threads` | — | ❌(并发模型与 Node 同形:单线程事件循环 + 线程池 IO;Lua 协程只做协作式) |
-| `zlib` | `zlib`(deflate/gzip 一次性便捷层 + 流式 closure) | ✅ |
+| `zlib` | `zlib`(deflate/inflate 一次性便捷层 + 流式 closure) | ✅ |
 
 **Node 全局对象对照**:`process`→✅(纯 Lua `process` 模块,常用同步面;子进程仍 `loop.process`);`Buffer`→❌(`string` + `string.pack`);`console`→✅(纯 Lua `console` 模块,形状对拍);`URL`/`fetch`/`AbortController`→❌(`loop.http` 是回调式,无 promise 契约);全局 `setTimeout`→◐(`loop.setTimeout`,opt-in,见 timers 行);`TextEncoder`/`TextDecoder`→官方 `utf8` 库。
 
@@ -150,7 +150,7 @@ p:parse(chunk) p:parse()             -- 增量喂,空参收尾(lxp 的 parse(s) 
 
 | 候选 | 结论 |
 | --- | --- |
-| **libyaml + lyaml** | **入选**:libyaml 是 YAML 规范的参考 C 实现(MIT,PyYAML/libyaml 生态共享);lyaml(gvvaughan,MIT,Lua 5.1–5.4,6.2.8)提供 C 侧快速 decode/emit;5.5 适配同上,vendored 小补丁预期(**实现勘定 2026-09-30**:钉 v6.2.9(最新 release;lukefile 自称支持到 5.5),5.5 下零补丁编译——lyaml.h 的 5.2–5.4 垫片不触发,但 luna 随附 Lua 的 luaconf.h 仍恢复 `lua_objlen`/`lua_strlen` 兼容宏,四个 C 翻译单元原样过;唯 luke 构建系统的 `VERSION` 宏由 CMake 定义) |
+| **libyaml + lyaml** | **入选**:libyaml 是 YAML 规范的参考 C 实现(MIT,PyYAML/libyaml 生态共享);lyaml(gvvaughan,MIT,Lua 5.1–5.4,6.2.9)提供 C 侧快速 decode/emit;5.5 适配同上,vendored 小补丁预期(**实现勘定 2026-09-30**:钉 v6.2.9(最新 release;lukefile 自称支持到 5.5),5.5 下零补丁编译——lyaml.h 的 5.2–5.4 垫片不触发,但 luna 随附 Lua 的 luaconf.h 仍恢复 `lua_objlen`/`lua_strlen` 兼容宏,四个 C 翻译单元原样过;唯 luke 构建系统的 `VERSION` 宏由 CMake 定义) |
 | 纯 Lua(tinyyaml / lua-yaml) | 淘汰:均为子集实现——锚点/别名、块标量缩进、多文档指示器各自缺角;YAML 的歧义输入多,静默错解比报错危险 |
 | js-yaml 移植思路 | 淘汰:规范复杂度不以实现语言转移,理由同上 |
 
@@ -250,7 +250,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 
 ## B. Node 底层能力逐项盘点
 
-先给结论表(现状经源码核实,2026-09-29,`src/luna_loop.c` 4234 行 / `lua/modules/`):
+先给结论表(现状经源码核实,2026-09-29 登记,`src/luna_loop.c` 4828 行 / `lua/modules/`):
 
 | Node 能力 | luna 现状 | 缺口 | 补法 | 层 | 批次 |
 | --- | --- | --- | --- | --- | --- |
@@ -258,7 +258,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 | net | ✅ `loop.net.connect/listen/connectTls/listenTls`(异步)+ **多地址回退(2026-10-01 勘定,见下节)** | — | — | C(luna_loop.c) | 2026-10-01 ✅ |
 | timers | ✅ `loop.setTimeout/setInterval/setImmediate/clear*`(opt-in)+ **脚本尾部自动排水(批次 8 已启用)** + **REPL 集成(2026-10-10,唤醒线程定时面)** | 全局 `setTimeout` 维持推迟(见下节) | 见下节 | C 入口 + Lua 收尾 | 8 ✅ |
 | child_process | ✅ `loop.process.run`(聚合)/`process.spawn`(流式)+ `exec`/`execSync`(批次 8) | — | — | C(loop.c 内) | 8 ✅ |
-| os | ✅ `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/home/tmpdir/uptime/loadavg/mem/cpus/networkInterfaces) | — | — | C(loop.c 内) | 8 ✅ |
+| os | ✅ `loop.os`(hostname/type/arch/release/EOL/userInfo/availableParallelism/home/tmpdir/uptime/loadavg/freemem/totalmem/cpus/networkInterfaces) | — | — | C(loop.c 内) | 8 ✅ |
 | path | ✅ 批次 6 已落地(`path`,纯 Lua) | — | — | Lua | 6 |
 | util | ✅ 批次 6 已落地(`util`,纯 Lua;`luna.introspect` 仍是 REPL 内省,两者分工见下) | — | — | Lua | 6 |
 | events | ✅ 批次 6 已落地(`events`,纯 Lua) | — | — | Lua | 6 |
@@ -273,7 +273,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 - 两条拨号路径解析结果**留链**(挂 sock/tsock,首次成功/全败/关闭三处释放),connect 失败换下一条,全败才把**最后一条**错误交回调(Node `net.connect` 的 autoSelectFamily 语义;单地址路径行为与旧码一致);
 - plain 侧:libuv 不许对失败句柄二次 connect——`uv_close` 后在 close 回调里重初始化句柄再拨;
 - TLS 侧:拒绝经 poll 的 SO_ERROR **异步**浮出,poll 句柄必须随 fd 一起关掉、在 close 回调里重开新 fd 再拨;连接成功之后的错误(如握手失败)不重拨——回退只覆盖 connect 层,与 Node 口径一致;
-- 回归用例 `test_dial_localhost_v4_only_listener_succeeds`:v4-only 监听 + `localhost` 拨号必须成功,plain/TLS 一条用例两腿同盖。`test_tls_client_dials_by_hostname` 的 `'::'` 双栈监听**保留不动**——它现在钉的是双栈监听语义,不再承担绕病职责。
+- 回归面:v4-only 监听 + `localhost` 拨号必须成功(plain/TLS 两腿同盖)与 `'::'` 双栈监听语义,由 loop 组的拨号回归钉住。
 
 ### timers:事件循环现状核实与建议
 

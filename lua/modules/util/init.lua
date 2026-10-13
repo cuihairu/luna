@@ -1,11 +1,13 @@
 --- @module util
--- util: Node util 的 inspect/format 面 (promisify/types 无 Lua 契约锚,
--- 明确不做)。语义按 Node v24.21.0 实证钉版, 详见 docs/node-parity.md:
+-- util: Node util 的 inspect/format/parseArgs 面 (promisify/types 无 Lua
+-- 契约锚, 明确不做)。语义按 Node v24.21.0 实证钉版, 详见 docs/node-parity.md:
 --   format: %s %d %i %f %j %o %O %c 与 %%; %d/%f 不截断 (v24 实测),
 --   %i 向零截断; 无参单串原样返回; 未知转换符原样保留; 超参空格尾接。
 --   扩展 (todo 契约要求, Node v24 util.format 无此对): %x/%X 十六进制。
 --   inspect: 输出为 Lua 源形状 ({} 而非 JS []), 键排序保确定性
 --   (pairs 序不定, 与 Node 插入序无法对齐, 记为适配)。
+--   parseArgs: config 对象唯一形态 (v24 已弃两参形态); 见函数内口径注释
+--   与偏差账 (args 缺省走 arg 尾段, 因 util 不引 process 以避环依赖)。
 
 local M = {}
 
@@ -342,6 +344,305 @@ function M.format(f, ...)
         out[#out + 1] = " " .. display(select(j, ...))
     end
     return table.concat(out)
+end
+
+-- ------------------------------------------------------------------
+-- parseArgs: Node util.parseArgs (v24.21.0 形状对拍, 纯 Lua)
+-- ------------------------------------------------------------------
+-- 口径: parseArgs({ args?, allowPositionals?, options?, strict?, tokens? })
+--   * config 对象唯一形态 (v24.21.0 实测已弃 (args, options) 两参形态);
+--   * args 缺省取脚本参数 (arg[1..#arg]); util 不 require process, 避免与
+--     process 的环依赖 (process 反向 require util);
+--   * options = { <name> = { type, short?, default? } }; type 仅
+--     "string"/"boolean" (v24.21.0 实测数组型 type 被拒), short 须单字符,
+--     default 须与 type 同型;
+--   * values 只含实给选项与声明的 default; 重复选项末次胜; 布尔不消费值;
+--   * 长选项 --name=value 为内联值; --name 后值以 "--" 开头判歧义;
+--   * 短簇逐字符推进, 遇 string 选项则其后全串为值 (含 "=" 原样, 不判歧义);
+--     短选项的值以独立参数给出时同样判歧义;
+--   * "--" 终止选项解析, 其后一律位置参; 单 "-" 当位置参;
+--   * strict (默认真) 遇未知选项报 ERR_PARSE_ARGS_UNKNOWN_OPTION; false 时
+--     未知项按布尔真并入 values;
+--   * 位置参须 allowPositionals 显式开启, 否则报 UNEXPECTED_POSITIONAL;
+--   * tokens 出 {kind, name, rawName, index[, value][, inlineValue]} 序列;
+--   * 错误对象是带 code/message 的表 (非真 TypeError 实例, 与 assert 同口径);
+--   * 不立项: type 数组 (v24 亦拒)、--no- 前缀否定 (v24 不认, 报未知选项)。
+
+local function args_fail(code, message)
+    error(setmetatable(
+        { code = code, message = message },
+        { __tostring = function(self) return self.message end }), 0)
+end
+
+-- Node inspect 原语拼写: 串带双引号 (仅转义反斜杠与引号), nil 走 undefined
+-- (v8 口径, 与 util.format 的 %s 分道)
+local function js_prim(v)
+    local t = type(v)
+    if t == "string" then
+        return '"' .. v:gsub('\\', "\\\\"):gsub('"', '\\"') .. '"'
+    end
+    if t == "number" then
+        return numstr(v)
+    end
+    if t == "boolean" then
+        return v and "true" or "false"
+    end
+    if t == "nil" then
+        return "undefined"
+    end
+    return M.inspect(v)
+end
+
+local function sorted_names(t)
+    local out = {}
+    for k in pairs(t) do
+        out[#out + 1] = k
+    end
+    table.sort(out, function(a, b)
+        return tostring(a) < tostring(b)
+    end)
+    return out
+end
+
+-- 脚本参数: arg 尾段 (arg[0] 是脚本自身, 与 process.argv.slice(2) 对齐)
+local function script_args()
+    local a = rawget(_G, "arg")
+    if type(a) ~= "table" then
+        return {}
+    end
+    local out = {}
+    for i = 1, #a do
+        out[#out + 1] = a[i]
+    end
+    return out
+end
+
+local format = M.format -- M.format 已在上方定义, 取本地别名
+
+local function missing_arg_label(spec, name)
+    if spec.short ~= nil then
+        return format("-%s, --%s <value>", spec.short, name)
+    end
+    return format("--%s <value>", name)
+end
+
+function M.parseArgs(config)
+    config = type(config) == "table" and config or {}
+    local args = config.args ~= nil and config.args or script_args()
+    local options = type(config.options) == "table" and config.options or {}
+    local strict = config.strict ~= false
+    local allow_positionals = config.allowPositionals == true
+    local want_tokens = config.tokens == true
+
+    -- 选项声明校验 + 短名索引
+    local declared, short_map = {}, {}
+    for _, name in ipairs(sorted_names(options)) do
+        local spec = options[name]
+        if type(spec) ~= "table" then
+            args_fail("ERR_INVALID_ARG_TYPE",
+                format('The "options.%s" property must be of type object. ' ..
+                    "Received type %s (%s)",
+                    name, type(spec), js_prim(spec)))
+        end
+        if spec.type ~= nil and spec.type ~= "string" and spec.type ~= "boolean" then
+            args_fail("ERR_INVALID_ARG_TYPE",
+                format('The "options.%s.type" property must be (%s). ' ..
+                    "Received type %s (%s)",
+                    name, "'string|boolean'", type(spec.type), js_prim(spec.type)))
+        end
+        if spec.short ~= nil and (type(spec.short) ~= "string" or #spec.short ~= 1) then
+            args_fail("ERR_INVALID_ARG_VALUE",
+                format("The property 'options.%s.short' must be a single " ..
+                    "character. Received '%s'", name, spec.short))
+        end
+        if spec.default ~= nil then
+            local want = spec.type ~= nil and spec.type or "string"
+            if type(spec.default) ~= want then
+                args_fail("ERR_INVALID_ARG_TYPE",
+                    format('The "options.%s.default" property must be of ' ..
+                        "type %s. Received type %s (%s)",
+                        name, want, type(spec.default), js_prim(spec.default)))
+            end
+        end
+        declared[name] = spec
+        if spec.short ~= nil then
+            short_map[spec.short] = name
+        end
+    end
+
+    local values = {}
+    local positionals = {}
+    local tokens = {}
+    for _, name in ipairs(sorted_names(declared)) do
+        local d = declared[name].default
+        if d ~= nil then
+            values[name] = d
+        end
+    end
+
+    local pos_mode = false
+    local i = 1
+    while i <= #args do
+        local arg = type(args[i]) == "string" and args[i] or tostring(args[i])
+        if not pos_mode and arg == "--" then
+            tokens[#tokens + 1] = { kind = "option-terminator", index = i }
+            pos_mode = true
+        elseif pos_mode or not (arg:sub(1, 1) == "-" and #arg > 1) then
+            if allow_positionals or not strict then
+                positionals[#positionals + 1] = arg
+                tokens[#tokens + 1] = {
+                    kind = "positional", index = i, value = arg,
+                }
+            else
+                args_fail("ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL",
+                    format("Unexpected argument '%s'. This command does not " ..
+                        "take positional arguments", arg))
+            end
+        elseif arg:sub(1, 2) == "--" then
+            -- 长选项: --name[=value]
+            local eq = arg:find("=", 3, true)
+            local name
+            local inline
+            if eq ~= nil then
+                name, inline = arg:sub(3, eq - 1), arg:sub(eq + 1)
+            else
+                name = arg:sub(3)
+            end
+            local raw = "--" .. name
+            local spec = declared[name]
+            if spec == nil then
+                if strict then
+                    args_fail("ERR_PARSE_ARGS_UNKNOWN_OPTION",
+                        format("Unknown option '%s'", raw))
+                end
+                if inline == nil then
+                    values[name] = true
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = name, rawName = raw, index = i,
+                    }
+                else
+                    values[name] = inline
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = name, rawName = raw, index = i,
+                        value = inline, inlineValue = true,
+                    }
+                end
+            elseif spec.type == "boolean" then
+                if inline ~= nil then
+                    args_fail("ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+                        format("Option '%s' does not take an argument", raw))
+                end
+                values[name] = true
+                tokens[#tokens + 1] = {
+                    kind = "option", name = name, rawName = raw, index = i,
+                }
+            else
+                -- string
+                if inline ~= nil then
+                    values[name] = inline
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = name, rawName = raw, index = i,
+                        value = inline, inlineValue = true,
+                    }
+                else
+                    local nxt = i + 1 <= #args and args[i + 1] or nil
+                    if nxt == nil then
+                        args_fail("ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+                            format("Option '%s' argument missing",
+                                missing_arg_label(spec, name)))
+                    end
+                    nxt = type(nxt) == "string" and nxt or tostring(nxt)
+                    if #nxt > 1 and nxt:sub(1, 1) == "-" then
+                        args_fail("ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+                            format("Option '%s' argument is ambiguous.\n" ..
+                                "Did you forget to specify the option " ..
+                                "argument for '%s'?\n" ..
+                                "To specify an option argument starting " ..
+                                "with a dash use '--%s=-XYZ'.",
+                                raw, raw, name))
+                    end
+                    values[name] = nxt
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = name, rawName = raw, index = i,
+                        value = nxt, inlineValue = false,
+                    }
+                    i = i + 1
+                end
+            end
+        else
+            -- 短簇: 逐字符, string 选项吞其后全串; 空则取下一参数
+            local rest = arg:sub(2)
+            local j = 1
+            local consumed_next = false
+            while j <= #rest do
+                local c = rest:sub(j, j)
+                local name = short_map[c]
+                local spec = name ~= nil and declared[name] or nil
+                if spec ~= nil and spec.type == "string" then
+                    local v = rest:sub(j + 1)
+                    if v == "" then
+                        local nxt = i + 1 <= #args and args[i + 1] or nil
+                        if nxt == nil then
+                            args_fail("ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+                                format("Option '%s' argument missing",
+                                    missing_arg_label(spec, name)))
+                        end
+                        nxt = type(nxt) == "string" and nxt or tostring(nxt)
+                        if #nxt > 1 and nxt:sub(1, 1) == "-" then
+                            args_fail("ERR_PARSE_ARGS_INVALID_OPTION_VALUE",
+                                format("Option '%s' argument is ambiguous.\n" ..
+                                    "Did you forget to specify the option " ..
+                                    "argument for '%s'?\n" ..
+                                    "To specify an option argument starting " ..
+                                    "with a dash use '--%s=-XYZ' or '-%s-XYZ'.",
+                                    "-" .. c, "-" .. c, name, c))
+                        end
+                        v = nxt
+                        tokens[#tokens + 1] = {
+                            kind = "option", name = name,
+                            rawName = "-" .. c, index = i, value = v,
+                            inlineValue = false,
+                        }
+                        consumed_next = true
+                    else
+                        tokens[#tokens + 1] = {
+                            kind = "option", name = name,
+                            rawName = "-" .. c, index = i, value = v,
+                            inlineValue = true,
+                        }
+                    end
+                    values[name] = v
+                    break
+                end
+                local raw = "-" .. c
+                if spec ~= nil then
+                    values[name] = true
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = name, rawName = raw, index = i,
+                    }
+                elseif strict then
+                    args_fail("ERR_PARSE_ARGS_UNKNOWN_OPTION",
+                        format("Unknown option '%s'", raw))
+                else
+                    values[c] = true
+                    tokens[#tokens + 1] = {
+                        kind = "option", name = c, rawName = raw, index = i,
+                    }
+                end
+                j = j + 1
+            end
+            if consumed_next then
+                i = i + 1  -- 外层还会再加一
+            end
+        end
+        i = i + 1
+    end
+
+    local out = { values = values, positionals = positionals }
+    if want_tokens then
+        out.tokens = tokens
+    end
+    return out
 end
 
 return M

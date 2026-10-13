@@ -47,7 +47,7 @@
 | `trace_events` | — | ❌ |
 | `tty` | 内核 `kernel.tty()` + REPL 的 tty 形态 | ◐ |
 | `url` | `url`(parse/format/resolve/resolveObject,legacy 面;`loop.http` 仍自持请求行解析) | ◐ legacy 面已移植,WHATWG `URL`/`URLSearchParams`/`domainToASCII`/`pathToFileURL` 未立项(见下方勘定) |
-| `util` | `util.inspect`(确定性键序/深度/循环)+ `util.format`(%s %d %f %i %j %%) | ◐ promisify/callbackify/types 无(Lua 无 promise 契约) |
+| `util` | `util.inspect`(确定性键序/深度/循环)+ `util.format`(%s %d %f %i %j %%) + `util.parseArgs`(长/短选项/内联值/`--` 终止/strict/位置参/`tokens`) | ◐ promisify/callbackify/types 无(Lua 无 promise 契约) |
 | `v8` | `luna.introspect` + REPL 的 `?expr` 帮助 | ◐ 形态不同(无堆快照面) |
 | `vm` | 官方 `load`(chunkname/env 参数) | ◐ 语言原语覆盖 |
 | `wasi` | — | ❌ |
@@ -346,6 +346,7 @@ Node 语义按 **Node v24.21.0 机器实证**逐函数钉死(每个函数的边�
 - **`%j` 的 dkjson 分叉**:dkjson 比浏览器 JSON.stringify 严——函数值直接报错而非省略,失败回退 util.inspect(不抛);
 - **零参与缺值勘定(2026-10-11,Node v24.21.0 对拍)**:`format()` 零参返回空串(Node 同款;此前误返 `"nil"` 已修);Lua 中 `format()` 与 `format(nil)` 参数层面不可区分,统一空串——Node 对 `format(undefined)` 的 `"undefined"` 无 Lua 对应,语言固有偏差;`%j` 缺值不消费(留原样 `%j`);`%j` 遇 nil 按运行时 null 约定序列化为 `"null"`(Node 对 null 同、对 undefined 是 `"undefined"`,取 null 口径)、NaN/Infinity → `"null"` 与 JSON.stringify 同、`{a=NaN}` → `{"a":null}` 同;`%s`/`%o` 遇 nil 显示 `"nil"`(Node `"undefined"`,同语言固有);`%d` 遇 nil → `"NaN"`(Node 同款);
 - inspect 的 **Lua 语法适配**:表一律 `{}` 形态(JS 的 `[]`/`{}` 在 Lua 无对应)、键值 `k = v` 而非 `k: v`;**键排序保确定性**(序列段在前,其余数字升序、字符串字节序、他类按 tostring;pairs 序不定,无法对齐 Node 插入序——适配而非分叉);深度塌缩标记 `[Object]`/`[Array]`(按 `#t` 判);截断省略号用 ASCII `...`;共享(非环)引用各自完整渲染,只有祖先链上的重访标 `[Circular *N]`。
+- **`util.parseArgs(config)`(2026-10-13,纯 Lua,Node v24.21.0 差分对拍)**:配置对象形态 `config = {options?, allowPositionals?, strict?, help?, usage?, tokens?}`,`options = {name = {type, short?, default?}}`;长选项 `--name=value` 内联值、`--name value` 分离值(歧义检测:分离值以 `-` 开头时报错并提示 `--name=-XYZ` 或 `-n-XYZ`)、短簇 `-abc` 逐字符推进(遇 string 选项则其后全串为值,含 `=` 原样)、`--` 终止符切位置参;strict 模式默认开(未知选项报 `ERR_PARSE_ARGS_UNKNOWN_OPTION`),`allowPositionals` 与 `tokens` 开关;`--no-` 前缀不认(v24 同,走未知);配置校验:type 非 string/boolean 报 `ERR_INVALID_ARG_TYPE`、short 非单字符报 `ERR_INVALID_ARG_VALUE`、default 与 type 不符报 `ERR_INVALID_ARG_TYPE`;错误消息逐字对齐 Node(缺值标签、歧义提示长短差异、位置参拒绝、布尔带值拒绝);**偏差账**:tokens 的 `index` 用 Lua 1 序(Node 用 JS 0 序,差 1);`config.args` 可省(v24 从 `process.argv.slice(2)` 取,luna 从 `arg` 表取——两者形状不同,显式传 `args` 最可靠);无 help/usage 生成(v24 的 `--help` 自动输出依赖 ANSI 终端探测,不立项);`tokens.kind` 只出 `option`/`positional`/`option-terminator` 三值(对齐 v24,无 `unknown`/`short` 子区分)。
 
 ### querystring / url(2026-10-11,纯 Lua,Node v24.21.0 差分对拍)
 

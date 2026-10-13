@@ -3294,6 +3294,162 @@ static void test_assert_surface(void **state)
         "false,true,ERR_ASSERTION,true");
 }
 
+static void test_parseargs_surface(void **state)
+{
+    (void)state;
+    /* 选项声明校验: type 数组 / short 非单字符 / default 与 type 不符 / spec 非表 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function code(fn)\n"
+                    "  local ok, e = pcall(fn)\n"
+                    "  if ok then return 'ok' end\n"
+                    "  if type(e) == 'table' then return e.code end\n"
+                    "  return 'str'\n"
+                    "end\n"
+                    "r[1] = code(function() return u.parseArgs({options={s={type={}}}}) end)\n"
+                    "r[2] = code(function() return u.parseArgs({options={s={type='string',short='ss'}}}) end)\n"
+                    "r[3] = code(function() return u.parseArgs({options={s={type='string',default=5}}}) end)\n"
+                    "r[4] = code(function() return u.parseArgs({options={b={type='boolean',default=5}}}) end)\n"
+                    "r[5] = code(function() return u.parseArgs({options={s=5}}) end)\n"
+                    "return table.concat(r, ',')"),
+        "ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_VALUE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE,ERR_INVALID_ARG_TYPE");
+    /* 长选项: 内联 / 分离 / 布尔 / 布尔带等号 / 缺值 / 歧义(长短各一) */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function val(opts, args, key)\n"
+                    "  local ok, res = pcall(u.parseArgs, {options=opts, args=args})\n"
+                    "  if not ok then\n"
+                    "    if type(res) == 'table' then return res.code end\n"
+                    "    return 'str'\n"
+                    "  end\n"
+                    "  return tostring(res.values[key])\n"
+                    "end\n"
+                    "r[1] = val({name={type='string'}}, {'--name=alice'}, 'name')\n"
+                    "r[2] = val({name={type='string'}}, {'--name','bob'}, 'name')\n"
+                    "r[3] = val({flag={type='boolean'}}, {'--flag'}, 'flag')\n"
+                    "r[4] = val({flag={type='boolean'}}, {'--flag=true'}, 'flag')\n"
+                    "r[5] = val({name={type='string'}}, {'--name'}, 'name')\n"
+                    "r[6] = val({name={type='string'}}, {'--name','--x'}, 'name')\n"
+                    "r[7] = val({name={type='string',short='n'}}, {'--name','--x'}, 'name')\n"
+                    "return table.concat(r, ',')"),
+        "alice,bob,true,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,ERR_PARSE_ARGS_INVALID_OPTION_VALUE");
+    /* 未知选项: strict 报错 / non-strict 并入 values / --no- 前缀不认 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function code(cfg)\n"
+                    "  local ok, res = pcall(u.parseArgs, cfg)\n"
+                    "  if not ok then\n"
+                    "    if type(res) == 'table' then return res.code end\n"
+                    "    return 'str'\n"
+                    "  end\n"
+                    "  return res\n"
+                    "end\n"
+                    "r[1] = code({options={}, args={'--zz'}})\n"
+                    "r[2] = code({options={}, args={'-z'}})\n"
+                    "local res3 = code({options={}, strict=false, args={'--q=1'}})\n"
+                    "r[3] = tostring(res3.values.q)\n"
+                    "local res4 = code({options={}, strict=false, args={'-z'}})\n"
+                    "r[4] = tostring(res4.values.z)\n"
+                    "r[5] = code({options={x={type='boolean'}}, args={'--no-x'}})\n"
+                    "return table.concat(r, ',')"),
+        "ERR_PARSE_ARGS_UNKNOWN_OPTION,ERR_PARSE_ARGS_UNKNOWN_OPTION,1,true,ERR_PARSE_ARGS_UNKNOWN_OPTION");
+    /* 短簇: 内联等号 / 空取下一参数 / 连字串吞值 / 歧义与单减号值 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function val(opts, args, key)\n"
+                    "  local ok, res = pcall(u.parseArgs, {options=opts, args=args})\n"
+                    "  if not ok then\n"
+                    "    if type(res) == 'table' then return res.code end\n"
+                    "    return 'str'\n"
+                    "  end\n"
+                    "  return tostring(res.values[key])\n"
+                    "end\n"
+                    "local S = {s={type='string',short='s'}}\n"
+                    "local AB = {a={type='boolean',short='a'},b={type='string',short='b'}}\n"
+                    "r[1] = val(S, {'-s=abc'}, 's')\n"
+                    "r[2] = val(S, {'-s=ab=c'}, 's')\n"
+                    "r[3] = val(S, {'-s--'}, 's')\n"
+                    "r[4] = val(S, {'-s','-'}, 's')\n"
+                    "r[5] = val(S, {'-s'}, 's')\n"
+                    "r[6] = val(S, {'-s','--x'}, 's')\n"
+                    "r[7] = val(S, {'-s','-x'}, 's')\n"
+                    "r[8] = val(AB, {'-ab','val'}, 'b')\n"
+                    "r[9] = val(AB, {'-ab','val'}, 'a')\n"
+                    "r[10] = val(AB, {'-abx'}, 'b')\n"
+                    "r[11] = val(AB, {'-ab=x'}, 'b')\n"
+                    "r[12] = val(AB, {'-ab'}, 'b')\n"
+                    "return table.concat(r, ',')"),
+        "=abc,=ab=c,--,-,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,ERR_PARSE_ARGS_INVALID_OPTION_VALUE,val,true,x,=x,ERR_PARSE_ARGS_INVALID_OPTION_VALUE");
+    /* 终止符与位置参: -- 终止 / 单减号位置参 / strict 报错 / non-strict 允许 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function pos(cfg, args)\n"
+                    "  cfg.args = args\n"
+                    "  local ok, res = pcall(u.parseArgs, cfg)\n"
+                    "  if not ok then\n"
+                    "    if type(res) == 'table' then return res.code end\n"
+                    "    return 'str'\n"
+                    "  end\n"
+                    "  return #res.positionals .. ':' .. tostring(res.positionals[1])\n"
+                    "end\n"
+                    "r[1] = pos({}, {'--','x'})\n"
+                    "r[2] = pos({}, {'-'})\n"
+                    "r[3] = pos({}, {'pos'})\n"
+                    "r[4] = pos({strict=false}, {'pos'})\n"
+                    "r[5] = pos({allowPositionals=true}, {'--','p','q'})\n"
+                    "r[6] = pos({allowPositionals=true}, {'--','-'})\n"
+                    "return table.concat(r, ',')"),
+        "ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL,ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL,ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL,1:pos,2:p,1:-");
+    /* values: default 总在 / 末次胜 / 未给未声明即缺 / tokens 形状 / 默认不出 tokens */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local a = u.parseArgs({options={\n"
+                    "  s={type='string',default='d'},b={type='boolean',default=false},\n"
+                    "  n={type='string'}}, args={'--s','x','--s','y','--b'}})\n"
+                    "r[1] = a.values.s\n"
+                    "r[2] = tostring(a.values.b)\n"
+                    "r[3] = tostring(a.values.n == nil)\n"
+                    "local t = u.parseArgs({options={\n"
+                    "  s={type='string',short='s'},b={type='boolean'}},\n"
+                    "  args={'-s','v','--b','--','p'}, allowPositionals=true, tokens=true}).tokens\n"
+                    "r[4] = t[1].kind .. ',' .. t[1].name .. ',' .. t[1].rawName .. ',' .. t[1].index .. ',' .. t[1].value .. ',' .. tostring(t[1].inlineValue)\n"
+                    "r[5] = t[2].kind .. ',' .. t[2].name .. ',' .. t[2].rawName .. ',' .. t[2].index\n"
+                    "r[6] = t[3].kind .. ',' .. t[3].index\n"
+                    "r[7] = t[4].kind .. ',' .. t[4].index .. ',' .. t[4].value\n"
+                    "local nt = u.parseArgs({options={}})\n"
+                    "r[8] = tostring(nt.tokens == nil)\n"
+                    "return table.concat(r, ',')"),
+        "y,true,true,option,s,-s,1,v,false,option,b,--b,3,option-terminator,4,positional,5,p,true");
+    /* 错误消息形状: 缺值标签 / 歧义提示长短差异 / unknown 与位置参文案 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "local function pl(s, sub)\n"
+                    "  return s:find(sub, 1, true) ~= nil\n"
+                    "end\n"
+                    "local _, e1 = pcall(u.parseArgs, {options={name={type='string'}}, args={'--name'}})\n"
+                    "r[1] = (pl(e1.message, 'argument missing') and 'miss' or 'no')\n"
+                    "  .. (pl(e1.message, '<value>') and '<val>' or 'noval')\n"
+                    "local _, e2 = pcall(u.parseArgs, {options={s={type='string',short='s'}}, args={'-s','--x'}})\n"
+                    "r[2] = tostring(pl(e2.message, '-s-XYZ'))\n"
+                    "local _, e3 = pcall(u.parseArgs, {options={name={type='string'}}, args={'--name','--x'}})\n"
+                    "r[3] = tostring(not pl(e3.message, '-n-XYZ'))\n"
+                    "local _, e4 = pcall(u.parseArgs, {options={s={type='string',short='s'}}, args={'-s'}})\n"
+                    "r[4] = tostring(pl(e4.message, '-s, --s <value>'))\n"
+                    "local _, e5 = pcall(u.parseArgs, {options={}, args={'pos'}})\n"
+                    "r[5] = tostring(pl(e5.message, 'does not take positional'))\n"
+                    "local _, e6 = pcall(u.parseArgs, {options={flag={type='boolean'}}, args={'--flag=true'}})\n"
+                    "r[6] = tostring(pl(e6.message, 'does not take an argument'))\n"
+                    "return table.concat(r, ',')"),
+        "miss<val>,true,true,true,true,true");
+}
+
 static void test_stream_backpressure_roundtrip(void **state)
 {
     (void)state;
@@ -3890,6 +4046,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_process_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_console_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_assert_surface, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_parseargs_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),

@@ -1,6 +1,7 @@
 --- @module util
--- util: Node util 的 inspect/format/parseArgs 面 (promisify/types 无 Lua
--- 契约锚, 明确不做)。语义按 Node v24.21.0 实证钉版, 详见 docs/node-parity.md:
+-- util: Node util 的 inspect/format/parseArgs/parseEnv/stripVTControlCharacters/
+-- styleText/debuglog 面 (promisify/types 无 Lua 契约锚, 明确不做)。语义按
+-- Node v24.21.0 实证钉版, 详见 docs/node-parity.md:
 --   format: %s %d %i %f %j %o %O %c 与 %%; %d/%f 不截断 (v24 实测),
 --   %i 向零截断; 无参单串原样返回; 未知转换符原样保留; 超参空格尾接。
 --   扩展 (todo 契约要求, Node v24 util.format 无此对): %x/%X 十六进制。
@@ -8,6 +9,8 @@
 --   (pairs 序不定, 与 Node 插入序无法对齐, 记为适配)。
 --   parseArgs: config 对象唯一形态 (v24 已弃两参形态); 见函数内口径注释
 --   与偏差账 (args 缺省走 arg 尾段, 因 util 不引 process 以避环依赖)。
+--   parseEnv/stripVTControlCharacters/styleText/debuglog: 见各函数前口径注释
+--   (同样是 v24.21.0 差分对拍)。
 
 local M = {}
 
@@ -643,6 +646,342 @@ function M.parseArgs(config)
         out.tokens = tokens
     end
     return out
+end
+
+-- ------------------------------------------------------------------
+-- parseEnv / stripVTControlCharacters / styleText / debuglog
+-- (Node v24.21.0 差分对拍, 纯 Lua)
+-- ------------------------------------------------------------------
+
+-- parseEnv 口径 (Node 源 node_dotenv.cc 行为对拍):
+--   * 文件级先剔 \r (CRLF 与孤立 CR 一并);
+--   * 行首 (trim 后) # 为注释行; 无 = 的行丢弃; = 前键 trim 后为空丢弃;
+--   * 键 trim 后若以 "export " (7 字符含空格) 开头则剥前缀再 trim
+--     ("export" 单词无空格不剥; "export =1" 键为 export 不剥);
+--   * 值 trim 后以 " ' ` 开头 → 在其后全文找同引号闭合 (可跨行, 闭合引号后
+--     同行尾文全弃, 中间行整行吞掉); 双引号内字面 \n 展开为真换行, 其余
+--     转义 (\r \\ 等) 原样; 未闭合则保留开引号只取本行;
+--   * 无引号值: 首 # 截断再 trim; 键不剥引号; 重复键末次胜; 空输入 {}。
+local function env_trim(s)
+    return (s:gsub("^[ \t]+", ""):gsub("[ \t]+$", ""))
+end
+
+function M.parseEnv(content)
+    if type(content) ~= "string" then
+        error("util: parseEnv content must be a string", 2)
+    end
+    local s = content:gsub("\r", "")
+    local out = {}
+    local i, n = 1, #s
+    while i <= n do
+        local nl = s:find("\n", i, true) or (n + 1)
+        local line = s:sub(i, nl - 1)
+        local trimmed = env_trim(line)
+        if trimmed ~= "" and trimmed:sub(1, 1) ~= "#" then
+            local eq = line:find("=", 1, true)
+            if eq ~= nil then
+                local key = env_trim(line:sub(1, eq - 1))
+                if key ~= "" then
+                    if #key >= 7 and key:sub(1, 7) == "export " then
+                        key = env_trim(key:sub(8))
+                    end
+                    local vstart = eq + 1
+                    local value = env_trim(line:sub(vstart))
+                    local q = value:sub(1, 1)
+                    if q == '"' or q == "'" or q == "`" then
+                        -- 全文找同引号闭合 (可跨行)
+                        local vabs = i + vstart - 1
+                        local close = s:find(q, vabs + 1, true)
+                        if close ~= nil then
+                            value = s:sub(vabs + 1, close - 1)
+                            if q == '"' then
+                                value = value:gsub("\\n", "\n")
+                            end
+                            -- 跳到闭合引号所在行的行尾之后
+                            i = s:find("\n", close, true) or (n + 1)
+                        end
+                        -- 未闭合: 开引号保留, 值只取本行, 下一行照常解析
+                    else
+                        local hash = value:find("#", 1, true)
+                        if hash ~= nil then
+                            value = env_trim(value:sub(1, hash - 1))
+                        end
+                    end
+                    out[key] = value
+                end
+            end
+        end
+        i = nl + 1
+    end
+    return out
+end
+
+-- stripVTControlCharacters: 剔 ANSI/VT 控制序列 (Node 内建 ansi-regex 语义):
+--   OSC = ESC] ... 至 BEL | ESC\ | \156 (未闭合落到 CSI 分支);
+--   CSI = (ESC|\155) + 中间符 []()#;? + 可选参数 (1-4 位数字, (;: 分隔可重复)
+--   + 终符类 (数字与 A-PR-TZ cf-nq-uy=><~); 匹配失败的 ESC 原样保留。
+local VT_INTERM = {}
+for _, c in ipairs({ "[", "]", "(", ")", "#", ";", "?" }) do
+    VT_INTERM[c] = true
+end
+local VT_FINAL = {} -- [\dA-PR-TZcf-nq-uy=><~]
+for _, rg in ipairs({
+    { 48, 57 }, { 65, 80 }, { 82, 84 }, { 90, 90 }, { 99, 99 },
+    { 102, 110 }, { 113, 117 }, { 121, 121 }, { 61, 61 }, { 62, 62 },
+    { 60, 60 }, { 126, 126 },
+}) do
+    for c = rg[1], rg[2] do
+        VT_FINAL[string.char(c)] = true
+    end
+end
+
+function M.stripVTControlCharacters(str)
+    if type(str) ~= "string" then
+        error("util: stripVTControlCharacters str must be a string", 2)
+    end
+    if not str:find("\27", 1, true) and not str:find("\155", 1, true) then
+        return str
+    end
+    local out = {}
+    local i, n = 1, #str
+    while i <= n do
+        local c = str:sub(i, i)
+        if c ~= "\27" and c ~= "\155" then
+            out[#out + 1] = c
+            i = i + 1
+        else
+            local handled = false
+            -- OSC: ESC] 惰性扫描首个终结符 (BEL | ESC\ | \156)
+            if c == "\27" and str:sub(i + 1, i + 1) == "]" then
+                local j = i + 2
+                while j <= n do
+                    local cc = str:sub(j, j)
+                    if cc == "\7" then
+                        i = j + 1
+                        handled = true
+                        break
+                    elseif cc == "\27" and str:sub(j + 1, j + 1) == "\\" then
+                        i = j + 2
+                        handled = true
+                        break
+                    elseif cc == "\156" then
+                        i = j + 1
+                        handled = true
+                        break
+                    end
+                    j = j + 1
+                end
+            end
+            if not handled then
+                -- CSI: 中间符 + 参数 (1-4 位数字, (;: 分隔) + 终符
+                local j = i + 1
+                while j <= n and VT_INTERM[str:sub(j, j)] do
+                    j = j + 1
+                end
+                local k = j
+                if str:sub(k, k):match("^%d") then
+                    local cnt = 0
+                    while k <= n and cnt < 4 and str:sub(k, k):match("^%d") do
+                        k = k + 1
+                        cnt = cnt + 1
+                    end
+                    while str:sub(k, k) == ";" or str:sub(k, k) == ":" do
+                        k = k + 1
+                        local cnt2 = 0
+                        while k <= n and cnt2 < 4 and str:sub(k, k):match("^%d") do
+                            k = k + 1
+                            cnt2 = cnt2 + 1
+                        end
+                    end
+                end
+                if VT_FINAL[str:sub(k, k)] then
+                    i = k + 1
+                    handled = true
+                end
+            end
+            if not handled then
+                out[#out + 1] = c -- ESC 原样保留, 前进一位
+                i = i + 1
+            end
+        end
+    end
+    return table.concat(out)
+end
+
+-- styleText: 色名/十六进制/数组 → SGR 码包裹 (Node v24 口径):
+--   * 默认 validateStream=true 且无 TTY → 原样返回 (luna 默认非 TTY);
+--     validateStream=false 恒出码, stream.isTTY == true 出码;
+--   * 数组按序开码、逆序前插闭码 (["bold","red"] → 开 1,31 闭 39,22);
+--   * none 与空数组原样; #RGB 三位每位 ×17 (CSS 口径), #RRGGBB 直接;
+--   * 非法名/非法十六进制报 ERR_INVALID_ARG_VALUE (错误消息列全名);
+--   * 偏差: Node 的 replaceCloseCode 嵌套重开不实现 (简单包裹)。
+local STYLE_CODES = {
+    reset = { 0, 0 }, bold = { 1, 22 }, dim = { 2, 22 }, italic = { 3, 23 },
+    underline = { 4, 24 }, blink = { 5, 25 }, inverse = { 7, 27 },
+    hidden = { 8, 28 }, strikethrough = { 9, 29 }, doubleunderline = { 21, 24 },
+    black = { 30, 39 }, red = { 31, 39 }, green = { 32, 39 }, yellow = { 33, 39 },
+    blue = { 34, 39 }, magenta = { 35, 39 }, cyan = { 36, 39 }, white = { 37, 39 },
+    bgBlack = { 40, 49 }, bgRed = { 41, 49 }, bgGreen = { 42, 49 },
+    bgYellow = { 43, 49 }, bgBlue = { 44, 49 }, bgMagenta = { 45, 49 },
+    bgCyan = { 46, 49 }, bgWhite = { 47, 49 }, framed = { 51, 54 },
+    overlined = { 53, 55 }, gray = { 90, 39 }, redBright = { 91, 39 },
+    greenBright = { 92, 39 }, yellowBright = { 93, 39 }, blueBright = { 94, 39 },
+    magentaBright = { 95, 39 }, cyanBright = { 96, 39 }, whiteBright = { 97, 39 },
+    bgGray = { 100, 49 }, bgRedBright = { 101, 49 }, bgGreenBright = { 102, 49 },
+    bgYellowBright = { 103, 49 }, bgBlueBright = { 104, 49 },
+    bgMagentaBright = { 105, 49 }, bgCyanBright = { 106, 49 },
+    bgWhiteBright = { 107, 49 }, grey = { 90, 39 }, blackBright = { 90, 39 },
+    bgGrey = { 100, 49 }, bgBlackBright = { 100, 49 }, faint = { 2, 22 },
+    crossedout = { 9, 29 }, strikeThrough = { 9, 29 }, crossedOut = { 9, 29 },
+    conceal = { 8, 28 }, swapColors = { 7, 27 }, swapcolors = { 7, 27 },
+    doubleUnderline = { 21, 24 },
+}
+-- 错误消息的合法名清单 (Node 声明序)
+local STYLE_LIST = table.concat({
+    "reset", "bold", "dim", "italic", "underline", "blink", "inverse",
+    "hidden", "strikethrough", "doubleunderline", "black", "red", "green",
+    "yellow", "blue", "magenta", "cyan", "white", "bgBlack", "bgRed",
+    "bgGreen", "bgYellow", "bgBlue", "bgMagenta", "bgCyan", "bgWhite",
+    "framed", "overlined", "gray", "redBright", "greenBright",
+    "yellowBright", "blueBright", "magentaBright", "cyanBright",
+    "whiteBright", "bgGray", "bgRedBright", "bgGreenBright",
+    "bgYellowBright", "bgBlueBright", "bgMagentaBright", "bgCyanBright",
+    "bgWhiteBright", "grey", "blackBright", "bgGrey", "bgBlackBright",
+    "faint", "crossedout", "strikeThrough", "crossedOut", "conceal",
+    "swapColors", "swapcolors", "doubleUnderline",
+}, "', '")
+STYLE_LIST = "'" .. STYLE_LIST .. "'"
+
+local function style_fail(received)
+    error(setmetatable(
+        { code = "ERR_INVALID_ARG_VALUE",
+          message = format("The argument 'format' must be one of: %s. " ..
+            "Received %s", STYLE_LIST, js_prim(received)) },
+        { __tostring = function(self) return self.message end }), 0)
+end
+
+local function hex_rgb(f)
+    -- #RGB (每位 ×17, CSS 口径) / #RRGGBB; 非法返回 nil
+    if #f == 4 then
+        local r, g, b = tonumber(f:sub(2, 2), 16), tonumber(f:sub(3, 3), 16),
+            tonumber(f:sub(4, 4), 16)
+        if r and g and b then
+            return r * 17, g * 17, b * 17
+        end
+        return nil
+    end
+    if #f == 7 then
+        local r, g, b = tonumber(f:sub(2, 3), 16), tonumber(f:sub(4, 5), 16),
+            tonumber(f:sub(6, 7), 16)
+        if r and g and b then
+            return r, g, b
+        end
+        return nil
+    end
+    return nil
+end
+
+function M.styleText(f, text, opts)
+    if type(f) ~= "string" and type(f) ~= "table" then
+        error("util: styleText format must be a string or an array", 2)
+    end
+    if type(text) ~= "string" then
+        error("util: styleText text must be a string", 2)
+    end
+    opts = opts or {}
+    if type(opts) ~= "table" then
+        error("util: styleText opts must be a table", 2)
+    end
+    local colorize
+    if opts.validateStream == false then
+        colorize = true
+    else
+        local stream = opts.stream or {} -- luna 默认非 TTY (无 isTTY 字段)
+        if type(stream) ~= "table" then
+            error("util: styleText opts.stream must be a table", 2)
+        end
+        colorize = stream.isTTY == true
+    end
+    local opens, closes = {}, {}
+    local fmts = type(f) == "table" and f or { f }
+    for idx = 1, #fmts do
+        local one = fmts[idx]
+        if type(one) ~= "string" then
+            style_fail(one)
+        end
+        if one ~= "none" then
+            local open, close
+            if one:sub(1, 1) == "#" then
+                local r, g, b = hex_rgb(one)
+                if r == nil then
+                    style_fail(one)
+                end
+                open = format("\27[38;2;%d;%d;%dm", r, g, b)
+                close = "\27[39m"
+            else
+                local pair = STYLE_CODES[one]
+                if pair == nil then
+                    style_fail(one)
+                end
+                open = format("\27[%dm", pair[1])
+                close = format("\27[%dm", pair[2])
+            end
+            opens[#opens + 1] = open
+            table.insert(closes, 1, close) -- 逆序前插: 闭码反序
+        end
+    end
+    if #opens == 0 or not colorize then
+        return text
+    end
+    return table.concat(opens) .. text .. table.concat(closes)
+end
+
+-- debuglog(section): NODE_DEBUG 门控的 stderr 调试日志 (Node v24 口径):
+--   * 门控: 逗号分隔条目, 大小写不敏感, 条目不 trim (带空格不匹配),
+--     "*" 全量, 尾 "*" 前缀通配 (plain 条目精确匹配);
+--   * 每次调用现读 env (惰性, 不在创建时快照);
+--   * 输出 "SECTION PID: msg\n" 至 io.stderr (SECTION 大写, msg 走
+--     util.format 格式化); 未启用时 no-op;
+--   * pid 经 kernel 模块 (util 不引 process 避环依赖, kernel 是 C 模块无环);
+--   * 偏差: 回调第二参 (Node 传 stream) 不支持。
+local kernel_pid
+do
+    local ok, kernel = pcall(require, "kernel")
+    if ok and type(kernel) == "table" and type(kernel.pid) == "function" then
+        kernel_pid = kernel.pid
+    else
+        kernel_pid = function() return 0 end
+    end
+end
+
+function M.debuglog(section)
+    if type(section) ~= "string" then
+        error("util: debuglog section must be a string", 2)
+    end
+    local lower = section:lower()
+    return function(...)
+        local env = os.getenv("NODE_DEBUG")
+        if env == nil then
+            return
+        end
+        local on = false
+        for raw_entry in env:gmatch("[^,]+") do
+            local entry = raw_entry:lower()
+            if entry == "*" or entry == lower then
+                on = true
+                break
+            end
+            if entry:sub(-1) == "*" and lower:sub(1, #entry - 1) == entry:sub(1, -2) then
+                on = true
+                break
+            end
+        end
+        if not on then
+            return
+        end
+        io.stderr:write(format("%s %d: %s\n",
+            section:upper(), kernel_pid(), M.format(...)))
+    end
 end
 
 return M

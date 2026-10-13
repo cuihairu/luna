@@ -3450,6 +3450,184 @@ static void test_parseargs_surface(void **state)
         "miss<val>,true,true,true,true,true");
 }
 
+static void test_util_parseenv_surface(void **state)
+{
+    (void)state;
+    /* 基础: 引号剥壳 / 引号内保留原样 / 闭合引号后同行文本丢弃 / # 截断 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local e = u.parseEnv\n"
+                    "local function render(t)\n"
+                    "  local ks = {}\n"
+                    "  for k in pairs(t) do ks[#ks+1] = k end\n"
+                    "  table.sort(ks)\n"
+                    "  local parts = {}\n"
+                    "  for _, k in ipairs(ks) do parts[#parts+1] = k .. '<' .. t[k] .. '>' end\n"
+                    "  return table.concat(parts, ';')\n"
+                    "end\n"
+                    "local r = {}\n"
+                    "r[1] = render(e('A=1'))\n"
+                    "r[2] = render(e('A=1\\nB=2'))\n"
+                    "r[3] = render(e('A=\"1\"'))\n"
+                    "r[4] = render(e(\"A='1'\"))\n"
+                    "r[5] = render(e('A=\" 1 \"'))\n"
+                    "r[6] = render(e('A=\"a\"b\"'))\n"
+                    "r[7] = render(e('A=a\"b'))\n"
+                    "r[8] = render(e('A=1 # c'))\n"
+                    "r[9] = render(e('A=##'))\n"
+                    "r[10] = render(e('A=\"a#b\"'))\n"
+                    "r[11] = render(e('A=`x`'))\n"
+                    "return table.concat(r, ',')"),
+        "A<1>,A<1>;B<2>,A<1>,A<1>,A< 1 >,A<a>,A<a\"b>,A<1>,A<>,A<a#b>,A<x>");
+    /* export 前缀 / 注释行 / 无 = 行 / 空键 / CR 剔除 / 重复键 / trim */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local e = u.parseEnv\n"
+                    "local function render(t)\n"
+                    "  local ks = {}\n"
+                    "  for k in pairs(t) do ks[#ks+1] = k end\n"
+                    "  table.sort(ks)\n"
+                    "  local parts = {}\n"
+                    "  for _, k in ipairs(ks) do parts[#parts+1] = k .. '<' .. t[k] .. '>' end\n"
+                    "  return table.concat(parts, ';')\n"
+                    "end\n"
+                    "local r = {}\n"
+                    "r[1] = render(e('export A=1'))\n"
+                    "r[2] = render(e('export  A=1'))\n"
+                    "r[3] = render(e('exportA=1'))\n"
+                    "r[4] = render(e('export =1'))\n"
+                    "r[5] = render(e('#c\\nA=1'))\n"
+                    "r[6] = render(e('  #c\\n  export B=2'))\n"
+                    "r[7] = render(e('NOEQ'))\n"
+                    "r[8] = render(e('A='))\n"
+                    "r[9] = render(e('=1'))\n"
+                    "r[10] = render(e('A=1\\r\\nB=2'))\n"
+                    "r[11] = render(e('A=1\\rB=2'))\n"
+                    "r[12] = render(e('A=1\\nA=2'))\n"
+                    "r[13] = render(e(' A  =  1 '))\n"
+                    "r[14] = render(e('A B=1'))\n"
+                    "r[15] = render(e('0=1'))\n"
+                    "return table.concat(r, ',')"),
+        "A<1>,A<1>,exportA<1>,export<1>,A<1>,B<2>,,A<>,,A<1>;B<2>,A<1B=2>,A<2>,A<1>,A B<1>,0<1>");
+    /* 跨行引号 / 双引号字面 \\n 展开 (其余转义不展开) / 未闭合保留开引号 / 值内 CR 已剔 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local e = u.parseEnv\n"
+                    "local function r3(t)\n"
+                    "  local ks = {}\n"
+                    "  for k in pairs(t) do ks[#ks+1] = k end\n"
+                    "  table.sort(ks)\n"
+                    "  local parts = {}\n"
+                    "  for _, k in ipairs(ks) do\n"
+                    "    parts[#parts+1] = k .. '<' .. t[k]:gsub('\\\\', '\\\\\\\\'):gsub('\\n', '\\\\n') .. '>'\n"
+                    "  end\n"
+                    "  return table.concat(parts, ';')\n"
+                    "end\n"
+                    "local r = {}\n"
+                    "r[1] = r3(e('A=\"a\\nb\"'))\n"
+                    "r[2] = r3(e(\"A='a\\nb'\"))\n"
+                    "r[3] = r3(e('A=\"a\\\\nb\"'))\n"
+                    "r[4] = r3(e(\"A='a\\\\nb'\"))\n"
+                    "r[5] = r3(e('A=\"unclosed\\nB=2'))\n"
+                    "r[6] = r3(e('A=\"a\"tr\\nB=2'))\n"
+                    "r[7] = r3(e('A=\"a\\n\\nb\"'))\n"
+                    "r[8] = r3(e('A=\"a\\rb\"'))\n"
+                    "return table.concat(r, ',')"),
+        "A<a\\nb>,A<a\\nb>,A<a\\nb>,A<a\\\\nb>,A<\"unclosed>;B<2>,"
+        "A<a>;B<2>,A<a\\n\\nb>,A<ab>");
+}
+
+static void test_util_text_surface(void **state)
+{
+    (void)state;
+    /* stripVTControlCharacters: CSI/OSC/SS3 剥除, 非终符 ESC 原样保留,
+     * 参数 4 位上限后数字作终符 (Node ansi-regex 语义) */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local s = u.stripVTControlCharacters\n"
+                    "local r = {}\n"
+                    "local function q(x) return string.format('%q', x) end\n"
+                    "r[1] = q(s('\\27[31mred\\27[0m'))\n"
+                    "r[2] = q(s('\\27]0;title\\7after'))\n"
+                    "r[3] = q(s('plain'))\n"
+                    "r[4] = q(s(''))\n"
+                    "r[5] = q(s('\\27[1;32mg\\27[39m'))\n"
+                    "r[6] = q(s('a\\27b'))\n"
+                    "r[7] = q(s('\\27]0;t'))\n"
+                    "r[8] = q(s('\\27]8;;url\\27\\\\link'))\n"
+                    "r[9] = q(s('\\7'))\n"
+                    "r[10] = q(s('\\27[Aup'))\n"
+                    "r[11] = q(s('a\\27(Bb'))\n"
+                    "r[12] = q(s('a\\27Om'))\n"
+                    "r[13] = q(s('\\27[?25lh'))\n"
+                    "r[14] = q(s('a\\27Xx'))\n"
+                    "r[15] = q(s('\\27[123456m'))\n"
+                    "r[16] = q(s('a\\27]x'))\n"
+                    "return table.concat(r, ',')"),
+        "\"red\",\"after\",\"plain\",\"\",\"g\",\"a\\27b\",\"\",\"link\",\"\\7\","
+        "\"up\",\"ab\",\"am\",\"h\",\"a\\27Xx\",\"6m\",\"a\\27]x\"");
+    /* styleText: 默认非 TTY 不出码 / validateStream=false 或 isTTY=true 出码 /
+     * 数组逆序闭合 / none 与空数组原样 / 十六进制 #RGB 与 #RRGGBB / 非法名报错 */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local T = u.styleText\n"
+                    "local r = {}\n"
+                    "local function q(x) return string.format('%q', x) end\n"
+                    "local function code(...)\n"
+                    "  local ok, e = pcall(...)\n"
+                    "  if ok then return 'ok' end\n"
+                    "  if type(e) == 'table' then return e.code end\n"
+                    "  return 'str'\n"
+                    "end\n"
+                    "r[1] = q(T('red', 'x'))\n"
+                    "r[2] = q(T({'red','bold'}, 'x'))\n"
+                    "r[3] = q(T('red', 'x', {validateStream=false}))\n"
+                    "r[4] = q(T({'bold','red'}, 'x', {validateStream=false}))\n"
+                    "r[5] = q(T('reset', 'x', {validateStream=false}))\n"
+                    "r[6] = q(T('none', 'x', {validateStream=false}))\n"
+                    "r[7] = q(T('grey', 'x', {validateStream=false}))\n"
+                    "r[8] = q(T('swapcolors', 'x', {validateStream=false}))\n"
+                    "r[9] = q(T('#f00', 'x', {validateStream=false}))\n"
+                    "r[10] = q(T('#0011ff', 'x', {validateStream=false}))\n"
+                    "r[11] = q(T('red', 'x', {stream={isTTY=true}}))\n"
+                    "r[12] = q(T({}, 'x', {validateStream=false}))\n"
+                    "r[13] = code(T, 'nope', 'x')\n"
+                    "r[14] = code(T, '#12345', 'x')\n"
+                    "r[15] = code(T, {'red','zz'}, 'x')\n"
+                    "return table.concat(r, ',')"),
+        "\"x\",\"x\",\"\\27[31mx\\27[39m\",\"\\27[1m\\27[31mx\\27[39m\\27[22m\","
+        "\"\\27[0mx\\27[0m\",\"x\",\"\\27[90mx\\27[39m\",\"\\27[7mx\\27[27m\","
+        "\"\\27[38;2;255;0;0mx\\27[39m\",\"\\27[38;2;0;17;255mx\\27[39m\","
+        "\"\\27[31mx\\27[39m\",\"x\",ERR_INVALID_ARG_VALUE,ERR_INVALID_ARG_VALUE,"
+        "ERR_INVALID_ARG_VALUE");
+    /* debuglog: NODE_DEBUG 门控 (逗号分隔/大小写不敏感/条目不 trim/*全量/前缀*)/
+     * 输出 "SECTION PID: msg" 至 io.stderr / 未启用 no-op */
+    assert_string_equal(
+        eval_string("local u = require('util')\n"
+                    "local r = {}\n"
+                    "r[1] = tostring(type(u.debuglog('mysection')) == 'function')\n"
+                    "local fn = u.debuglog('mysection')\n"
+                    "r[2] = tostring(pcall(fn, 'x'))\n"
+                    "local saved_getenv, saved_err = os.getenv, io.stderr\n"
+                    "local captured = {}\n"
+                    "os.getenv = function(k)\n"
+                    "  if k == 'NODE_DEBUG' then return 'mysection,other*' end\n"
+                    "  return saved_getenv(k)\n"
+                    "end\n"
+                    "io.stderr = { write = function(_, s) captured[#captured+1] = s end }\n"
+                    "u.debuglog('mysection')('hello %d', 42)\n"
+                    "u.debuglog('three')('nope')\n"
+                    "u.debuglog('other:sub')('yes')\n"
+                    "os.getenv = saved_getenv\n"
+                    "io.stderr = saved_err\n"
+                    "local pid = require('kernel').pid()\n"
+                    "r[3] = tostring(#captured == 2)\n"
+                    "r[4] = captured[1] == ('MYSECTION %d: hello 42\\n'):format(pid) and 'm1ok' or tostring(captured[1])\n"
+                    "r[5] = captured[2] == ('OTHER:SUB %d: yes\\n'):format(pid) and 'm2ok' or tostring(captured[2])\n"
+                    "return table.concat(r, ',')"),
+        "true,true,true,m1ok,m2ok");
+}
+
 static void test_stream_backpressure_roundtrip(void **state)
 {
     (void)state;
@@ -4047,6 +4225,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_console_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_assert_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_parseargs_surface, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_parseenv_surface, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_util_text_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),

@@ -9,7 +9,7 @@
 | json | JSON 编解码(附 Node 式 `parse`/`stringify` 别名) | dkjson | [json](/stdlib/json) |
 | fs | 文件系统:Node 式同步便利 + 完整 lfs 面 | luafilesystem | [fs](/stdlib/fs) |
 | path | 路径处理,Node `path` 同款 API | 纯 Lua | [path](/stdlib/path) |
-| util | `format`/`inspect`/`parseArgs`,Node v24 语义 | 纯 Lua | [stdlib/util](/stdlib/util) |
+| util | `format`/`inspect`/`parseArgs`/`parseEnv`/`styleText`/`debuglog`,Node v24 语义 | 纯 Lua | [stdlib/util](/stdlib/util) |
 | events | EventEmitter:on/once/emit/错误契约 | 纯 Lua | [events](/stdlib/events) |
 | stream | Readable/Writable/Transform/pipe/背压 | 纯 Lua | [stream](/stdlib/stream) |
 | net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/stdlib/net) |

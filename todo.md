@@ -11,6 +11,7 @@
 - [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
 
 - [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,3caedde
+- [x] util 四件套:parseEnv/stripVTControlCharacters/styleText/debuglog(Node v24.21.0 差分对拍,NODE_DEBUG 条目不 trim/OSC 未闭合落 CSI/参数 4 位上限/#RGB ×17)。modules 110
 
 - [x] REPL 寄存器与时间魔法:In 记录、%time 与 %timeit 支持语句、%plugins 报遮蔽。ce21660,repl 4 例,magic 2 例
 - [x] 错误提示与补全:did-you-mean 建议、require 目标 Tab 补全、luna_modules 包内子模块。8527d80,complete 6 例,modules 3 例

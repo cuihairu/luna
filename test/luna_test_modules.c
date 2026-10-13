@@ -3196,6 +3196,104 @@ static void test_stream_readable_flow(void **state)
         "solo");
 }
 
+static void test_assert_surface(void **state)
+{
+    (void)state;
+    /* 真值集 (Node falsy: nil/false/0/''/NaN) + message 覆盖 */
+    assert_string_equal(
+        eval_string("local a = require('assert')\n"
+                    "local ok, msgs = {}, {}\n"
+                    "local falsy = {nil, false, 0, '', math.sqrt(-1)}\n"
+                    "for i = 1, #falsy do\n"
+                    "  ok[#ok+1] = tostring(pcall(a.assert, falsy[i]))\n"
+                    "end\n"
+                    "for _, v in ipairs({'x', {}, {}, 1, true}) do\n"
+                    "  ok[#ok+1] = tostring(pcall(a.assert, v))\n"
+                    "end\n"
+                    "ok[#ok+1] = tostring(pcall(a.assert, 'truthy'))\n"
+                    "local _, err2 = pcall(a.assert, 0, 'boom')\n"
+                    "msgs[1] = err2.code\n"
+                    "msgs[2] = tostring(err2.message == 'boom')\n"
+                    "msgs[3] = err2.operator\n"
+                    "return table.concat(ok, ',') .. ','\n"
+                    "  .. table.concat(msgs, ',')"),
+        "false,false,false,false,false,true,true,true,true,true,true,ERR_ASSERTION,true,==");
+    /* 标量比较: equal 强转 / strictEqual 无强转 / -0≠0 / NaN==NaN */
+    assert_string_equal(
+        eval_string("local a = require('assert')\n"
+                    "local r = {}\n"
+                    "r[1] = tostring(pcall(a.equal, 1, '1'))\n"
+                    "r[2] = tostring(pcall(a.equal, '1', 1))\n"
+                    "r[3] = tostring(pcall(a.strictEqual, 1, '1'))\n"
+                    "r[4] = tostring(pcall(a.notStrictEqual, 1, 1))\n"
+                    "r[5] = tostring(pcall(a.strictEqual, math.sqrt(-1), math.sqrt(-1)))\n"
+                    "r[6] = tostring(pcall(a.strictEqual, -0.0, 0))\n"
+                    "r[7] = tostring(pcall(a.equal, -0.0, 0))\n"
+                    "local _, e = pcall(a.equal, 1, 2)\n"
+                    "r[8] = e.code\n"
+                    "r[9] = e.operator\n"
+                    "r[10] = e.message\n"
+                    "return table.concat(r, ',')"),
+        "true,true,false,false,true,false,true,ERR_ASSERTION,==,1 == 2");
+    /* 深比较: 宽松强转 / 严格 -0≠0 / 缺键即不等 / 表键集须一致 */
+    assert_string_equal(
+        eval_string("local a = require('assert')\n"
+                    "local r = {}\n"
+                    "r[1] = tostring(pcall(a.deepEqual, 1, '1'))\n"
+                    "r[2] = tostring(pcall(a.deepStrictEqual, 1, '1'))\n"
+                    "r[3] = tostring(pcall(a.deepEqual, {x = 1}, {x = 1}))\n"
+                    "r[4] = tostring(pcall(a.deepEqual, {x = 1}, {x = 1, y = 2}))\n"
+                    "r[5] = tostring(pcall(a.deepEqual, {1, 2}, {1, 2, 3}))\n"
+                    "r[6] = tostring(pcall(a.deepStrictEqual, {1, 2}, {1, 2}))\n"
+                    "r[7] = tostring(pcall(a.notDeepEqual, {1, 2}, {1, 2}))\n"
+                    "r[8] = tostring(pcall(a.deepEqual, -0.0, 0))\n"
+                    "r[9] = tostring(pcall(a.deepStrictEqual, -0.0, 0))\n"
+                    "local _, e = pcall(a.deepStrictEqual, {a = 1}, {a = 2})\n"
+                    "r[10] = e.code\n"
+                    "r[11] = e.operator\n"
+                    "return table.concat(r, ',')"),
+        "true,false,true,false,false,true,false,true,false,ERR_ASSERTION,deepStrictEqual");
+    /* fail / ifError / throws / doesNotThrow */
+    assert_string_equal(
+        eval_string("local a = require('assert')\n"
+                    "local r = {}\n"
+                    "local _, e1 = pcall(a.fail)\n"
+                    "r[1] = e1.message\n"
+                    "local _, e2 = pcall(a.fail, 'kaboom')\n"
+                    "r[2] = e2.message\n"
+                    "r[3] = tostring(pcall(a.ifError, nil))\n"
+                    "local _, e3 = pcall(a.ifError, 'bad')\n"
+                    "r[4] = e3.code\n"
+                    "r[5] = tostring(e3.message:find('unwanted exception') ~= nil)\n"
+                    "r[6] = tostring(pcall(a.throws, function() error('boom') end))\n"
+                    "r[7] = tostring(pcall(a.throws, function() error('boom') end,\n"
+                    "  { message = 'boom' }))\n"
+                    "r[8] = tostring(pcall(a.throws, function() error('boom') end,\n"
+                    "  { message = 'other' }))\n"
+                    "r[9] = tostring(pcall(a.throws, function() end))\n"
+                    "r[10] = tostring(pcall(a.doesNotThrow, function() end))\n"
+                    "r[11] = tostring(pcall(a.doesNotThrow, function() error('x') end))\n"
+                    "return table.concat(r, ',')"),
+        "Failed,kaboom,true,ERR_ASSERTION,true,true,true,false,false,true,false");
+    /* throws 的 error 匹配: 表 (message|code|name) 与函数 (构造器) */
+    assert_string_equal(
+        eval_string("local a = require('assert')\n"
+                    "local r = {}\n"
+                    "r[1] = tostring(pcall(a.throws, function() error('boom') end,\n"
+                    "  { code = 'ERR_ASSERTION' }))\n"
+                    "local T = {}\n"
+                    "local t = setmetatable({}, { __index = T })\n"
+                    "t.name = 'TypeError'\n"
+                    "t.code = nil\n"
+                    "r[2] = tostring(pcall(a.throws, function() error(t) end,\n"
+                    "  { name = 'TypeError' }))\n"
+                    "local _, e = pcall(a.throws, function() end, { message = 'x' })\n"
+                    "r[3] = e.code\n"
+                    "r[4] = tostring(pcall(a.strictEqual, nil, nil))\n"
+                    "return table.concat(r, ',')"),
+        "false,true,ERR_ASSERTION,true");
+}
+
 static void test_stream_backpressure_roundtrip(void **state)
 {
     (void)state;
@@ -3791,6 +3889,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_util_args_contract, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_process_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_console_surface, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_assert_surface, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_parse_opts_and_escape, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_qs_stringify, setup_modules, teardown_modules),

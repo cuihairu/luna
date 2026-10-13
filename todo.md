@@ -5,9 +5,10 @@
 ## 待办
 
 - [ ] 双每日管线(daily 加 nightly 滚动 Release)在下列任一条件成立时重评:发布职能归回 daily、nightly 交付通道更换、双构建配置漂移造成事故。
-- [ ] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)未立项。
 
 ## 已完成
+
+- [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
 
 - [x] REPL 寄存器与时间魔法:In 记录、%time 与 %timeit 支持语句、%plugins 报遮蔽。ce21660,repl 4 例,magic 2 例
 - [x] 错误提示与补全:did-you-mean 建议、require 目标 Tab 补全、luna_modules 包内子模块。8527d80,complete 6 例,modules 3 例

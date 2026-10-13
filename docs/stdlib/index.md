@@ -19,6 +19,7 @@
 | process | Node process 同步子集:argv/env/cwd/exit/stdio | 纯 Lua | (见 [Node 对照](/node-parity)) |
 | querystring | URL 查询串编解码(Node 语义) | 纯 Lua | (见 [Node 对照](/node-parity)) |
 | url | URL 拆解/重组/解析(legacy 面) | 纯 Lua | (见 [Node 对照](/node-parity)) |
+| assert | Node assert 面:assert/equal/strictEqual/deepEqual/deepStrictEqual/throws 族 | 纯 Lua | (见 [Node 对照](/node-parity)) |
 
 ## Data-Format — 数据格式编解码
 

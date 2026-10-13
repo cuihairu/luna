@@ -29,5 +29,6 @@ return {
     "luna_modules/url/",
     "luna_modules/process/",
     "luna_modules/console/",
+    "luna_modules/assert/",
   },
 }

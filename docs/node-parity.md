@@ -13,7 +13,7 @@
 
 | Node 模块 | luna 对应 | 状态 |
 | --- | --- | --- |
-| `assert` | 官方 `assert` / `error`(语言原语) | ◐ 无 deepEqual 等断言库 |
+| `assert` | 纯 Lua `assert` 模块(assert/ok/equal/notEqual/strictEqual/notStrictEqual/deepEqual/notDeepEqual/deepStrictEqual/notDeepStrictEqual/fail/ifError/throws/doesNotThrow;Node v24.21.0 形状对拍) | ✅ 纯 Lua(偏差见 assert 勘定) |
 | `async_hooks` | — | ❌ 单线程回调面无对等钩子 |
 | `buffer` | Lua 字符串即 8-bit 串;二进制打包走官方 `string.pack`/`unpack` | ◐ 语言原语覆盖,无独立 Buffer 类型 |
 | `child_process` | `loop.process`:`run`(聚合)/`spawn`(流式,stdio 直交 `loop.net` sock)/`exec`/`execSync` | ✅ |
@@ -428,6 +428,38 @@ c.table({{x=1,y=2},{y=3,z=4}}, {"y","z"})  -- ASCII 网格,缺格出空
 - **账记偏差**:`time`/`timeLog`/`timeEnd` 毫秒分辨率(整毫秒出 `5ms`,Node 同形;亚毫秒出 `0`);单元与 `dir` 走 `util.inspect`(Lua 源形态、键序确定性——Node 是 JS inspect 单引号与 `[ 1, 2 ]` 形态),列宽按 UTF-8 码点计(CJK/emoji 单元会窄);Lua 无 Set/Map,`(iteration index)` 列不出现;对象行键序为字节序(Node 插入序);trace 栈是 `debug.traceback` 形态;告警无 `(node:NNNN)` 进程前缀与 trace-warnings 提示;`clear` 探不到 stdout TTY 恒 no-op(Node 非 TTY 同款行为);
 - **明确不立项**:Inspector/color 面(`profile`/`profileEnd`/`timeStamp` 恒 no-op,Node 无 Inspector 时同形)、`console.Console` 的 color/inspectOptions 面;
 - C 测试 8 例钉形状(单例漏斗捕获 + 自备流隔离,毫秒量用模式匹配免时序抖动);modules 组 105 → 106。
+
+### assert(2026-10-13,纯 Lua,Node v24.21.0 形状对拍)
+
+Node `assert` 是纯 JS 断言库,整面都是比较 + 错误构造——纯 Lua 可聚合:标量比较走 `loose_eq`(JS `==` 强转语义)/ `strict_eq`(Object.is 语义),深比较递归比键,错误对象是带 `code`/`actual`/`expected`/`operator`/`message` 字段的表(Node `AssertionError` 形状):
+
+```lua
+local a = require "assert"
+a.assert(value, message)          -- 假值抛 "The expression evaluated to a falsy value:\n\n  assert(<inspect(v)>)\n"
+a.ok(value)                       -- assert 别名
+a.equal(actual, expected, msg)    -- == 强转;失败 "<inspect(a)> == <inspect(b)>"
+a.notEqual(actual, expected, msg) -- != 强转
+a.strictEqual(actual, expected, msg)    -- Object.is(NaN==NaN, -0≠0, 无强转)
+a.notStrictEqual(actual, expected, msg)
+a.deepEqual(actual, expected, msg)      -- 宽松深比较(强转, -0==0, NaN==NaN)
+a.notDeepEqual(actual, expected, msg)
+a.deepStrictEqual(actual, expected, msg) -- 严格深比较(-0≠0, 无强转)
+a.notDeepStrictEqual(actual, expected, msg)
+a.fail(message)                   -- "Failed" 或自定义消息
+a.ifError(err)                    -- "ifError got unwanted exception: <err>"
+a.throws(fn, error?, message?)    -- 期望抛;error 匹配: 串(message 子串)/表(message|code|name 字段)/函数(构造器)
+a.doesNotThrow(fn, error?, message?) -- 期望不抛
+```
+
+**实现勘定(5 组形状对拍,Node v24.21.0 逐项对账)**:
+- **真值集按 Node 收口**:falsy = `nil`/`false`/`0`/`''`/`NaN`(Lua 本只 `nil`/`false` 为假,语言边界);
+- **宽松相等**:`loose_eq` 实现 JS `==` 强转(布尔转数字、串转数字),`1 == '1'` 为 true;`strict_eq` 实现 Object.is(NaN 相等、`-0 ≠ 0` 靠 `string.format("%.17g")` 辨号、无强转);
+- **深比较**:`deepEqual` 宽松(标量走强转、表递归比键集、缺键即不等);`deepStrictEqual` 严格(标量走 Object.is、表递归比键集);`-0` 与 `0` 在 `deepEqual` 相等、在 `deepStrictEqual` 不等;
+- **错误对象**:表带 `code`/`actual`/`expected`/`operator`/`message` 字段,`__tostring` 返 message;`operator` 取值 `==`/`!=`/`strictEqual`/`!==`/`deepEqual`/`notDeepEqual`/`deepStrictEqual`/`notDeepStrictEqual`/`fail`/`ifError`/`throws`/`doesNotThrow`;
+- **throws 的 error 匹配**:串作第二参是断言 message(Node 同款);表作 validation object 按 `message`/`code`/`name` 字段比;函数作构造器比 `type`;不支持正则(Lua 无内建正则,账记);
+- **账记偏差**:错误对象是表非 Lua error 串(Node 的 `AssertionError` 实例在 Lua 无对应物,字段口径一致);`ifError` 对串错误直接拼接(Node 同款);`throws` 的 error 匹配不支持正则;
+- **明确不立项**:async 面(`rejects`/`doesNotReject`)——luna 的 promise 契约在 `task` 模块,异步断言随 task 面另立;
+- C 测试 1 例钉形状(5 组 `assert_string_equal` 覆盖真值集/标量比较/深比较/fail+ifError+throws+doesNotThrow/throws error 匹配);modules 组 106 → 107。
 
 ### events(批次 6,纯 Lua)
 

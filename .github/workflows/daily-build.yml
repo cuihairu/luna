@@ -90,9 +90,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install ninja pkg-config openssl@3
 
-      # 试运行探针：runner 预装 vcpkg，静态三元组装 zlib 与 openssl 让
-      # Configure 过关，编译器才能把下一层未移植面全数报出来
-      - name: Provision zlib + openssl (Windows probe)
+      # Windows 依赖装配：runner 预装 vcpkg，静态三元组装 zlib 与 openssl
+      # (zlib 走 vcpkg 静态三元组是设计裁定，未 vendor 源码；见 build.md)
+      - name: Provision zlib + openssl (Windows)
         if: runner.os == 'Windows'
         run: vcpkg install zlib:x64-windows-static openssl:x64-windows-static
 
@@ -274,7 +274,7 @@ jobs:
               echo "  $(basename "$z")  (+ .zip.sha256 校验侧车)"
             done
             if [ ! -f pkgs/luna-nightly-windows-x86_64.zip ]; then
-              echo "  luna-nightly-windows-x86_64.zip  （试运行腿随 Windows 移植落定自动上线）"
+              echo "  luna-nightly-windows-x86_64.zip  （本腿构建失败，红不拖垮全平台交付）"
             fi
             echo ""
             echo "滚动 nightly Release: 固定 tag nightly，清旧传新，每次覆盖。"
@@ -374,7 +374,7 @@ jobs:
           done
           WINNOTE=""
           if [ ! -f pkgs/luna-nightly-windows-x86_64.zip ]; then
-            WINNOTE="Windows 资产随移植收尾自动上线（试运行腿，红不拖垮夜间绿）。
+            WINNOTE="Windows 资产本轮缺席（单腿构建失败，红不拖垮全平台交付；红报警在验证面 daily.yml）。
           "
           fi
           cat > release-notes.md <<NOTES
@@ -418,7 +418,7 @@ jobs:
             echo "| Commit | \`${GITHUB_SHA}\` |"
             echo "| 交付 | Release **Luna Nightly Build (nightly)**（固定 tag，清旧传新，匿名可下） |"
             echo "| 留档 | artifact **daily-build**（run 页副本，历史已清理） |"
-            echo "| 平台 | linux-x86_64 / linux-aarch64 / macos-aarch64（单二进制+侧车）；windows-x86_64 试运行 |"
+            echo "| 平台 | linux-x86_64 / linux-aarch64 / macos-aarch64 / windows-x86_64（单二进制+侧车；windows 红不拖垮全平台交付） |"
             echo ""
             echo "下载: <https://github.com/${GITHUB_REPOSITORY}/releases/tag/nightly>（匿名）。"
             echo "验证方式见包内 VERIFY.md。固定 tag nightly 是分发通道，非版本发布。"

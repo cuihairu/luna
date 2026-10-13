@@ -34,7 +34,7 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-**Windows 不在支持面**(replxx 桥未编 windows.cxx、attach 走 unix 域 socket),推荐 WSL2——见 [FAQ](/other/faq)。
+**Windows 源码构建同面支持**:交付面与验证面都在 `windows-latest` 上构建与跑全量 ctest,依赖装配走 vcpkg 静态三元组(`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`,zlib 与 openssl),无 brew;安装走 `install.ps1`。此前记的「Windows 不在支持面」(replxx 桥、unix 域 socket 路径)已随编译期阻碍消化清掉,现况见 [FAQ](/other/faq)。
 
 ### 可选:启用 crypto 模块
 
@@ -138,14 +138,22 @@ pnpm run docs:build    # 产物在 .vitepress/dist/
 
 VitePress 2.0-alpha,base `/luna/`,中文本地搜索。
 
-## CI:Daily Build
+## CI:两条每日管线(daily 门禁 + daily-build 交付)
 
-`.github/workflows/daily-build.yml`:
+**双管线裁定(2026-10-14 重评):两条管线角色互补,不退役任一条。** daily 是验证面(全量测试、红即拉响),daily-build 是交付面(打包、滚动 Release)——退役门禁腿就丢红报警,退役交付腿就丢唯一交付通道。此前「旧管线是否退役属待裁定」的悬置项以此结论关闭;触发重评的是 2026-10-08 Windows 腿转正(`12c90bd`)后,交付面的文档与回显文案未同步:windows 资产实为在传(2026-10-13 一轮实核,见下),文案仍称「尚无产物」。
 
-- `schedule`: 每天 UTC 01:23(北京时间 09:23,错开整点 runner 高峰);`workflow_dispatch` 手动触发;
-- 四平台并行构建:linux-x86_64 / linux-aarch64 / macos-aarch64(稳定腿)+ windows-x86_64(试运行,`continue-on-error`,红了不拖垮夜间绿——Windows 移植未完,尚无产物,移植落定后自动上线);
-- 交付面是**滚动 nightly Release**:collect & publish job 建/移固定 tag `nightly`(pre-release),清旧传新各平台 zip + `.sha256` 侧车,重跑幂等;Release notes 即 `BUILD_INFO`(commit 与时间)加 `VERIFY`(验证步骤);
-- Actions artifact(`daily-build`,保留 3 天)只是 run 页面的临时副本,不算交付。
+### daily.yml —— 验证门禁
+
+- `schedule`: 每天 UTC 21:13(北京时间次日 05:13,错开整点 runner 高峰);`workflow_dispatch` 手动触发;
+- 四平台测试矩阵,每腿全量 ctest,`fail-fast: false`;四腿全转正(Windows 2026-10-08、macOS 2026-10-09),无试运行豁免腿——构建或测试红直接拉响夜间;
+- 不打 tag、不发 Release;per-run artifact `luna-nightly-<os>-<arch>` 保留 14 天,仅作佐证,不算交付。
+
+### daily-build.yml —— 交付面
+
+- `schedule`: 每天 UTC 01:23(北京时间 09:23);`workflow_dispatch` 手动触发;
+- 四平台并行构建:linux-x86_64 / linux-aarch64 / macos-aarch64 稳定腿 + windows-x86_64(`continue-on-error`——单腿构建失败不冻结全平台发货,红报警由验证面负责;windows 腿在传资产,2026-10-13 一轮实核);
+- 交付面是**滚动 nightly Release**:collect & publish job 建/移固定 tag `nightly`(pre-release),清旧传新各平台 zip + `.sha256` 侧车与 `BUILD_INFO.txt` / `SHA256SUMS.txt` / `VERIFY.md`,重跑幂等;Release notes 即 commit 与时间加验证步骤;
+- run 页 artifact 两档:`pkg-<平台>` 保留 3 天(构建腿产物),`daily-build` 保留 14 天(收集后的同名副本,上传前先删历史同名)——都只是 run 页副本,不算交付。
 
 取件走 Release 页匿名直下:`releases/download/nightly/luna-nightly-<os>-<arch>.zip`(安装器的下载坐标即此);run 页 artifact 仅作佐证。
 

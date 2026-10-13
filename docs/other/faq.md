@@ -139,10 +139,11 @@ luna 设计为**单二进制 CLI**,不是库。嵌入场景建议:
 
 ## Windows 支持现状
 
-- **试运行中,尚无产物**:nightly 矩阵挂着 windows 探针腿(experimental,红不拖垮其余平台)——vcpkg 静态 zlib 已通,`LUA_USE_POSIX` 已平台收窄,编译期阻碍清单(kernel `mode_t`、luasocket 平台源选型、unix 域 socket 目标、loop 网络层 POSIX 头、测试 `poll.h`)已登记,逐层消化中
-- `install.ps1` 已就位,Windows 产物落地后即可一键安装
+- **原生 Windows 可用**:四平台验证面(daily.yml)的 windows 腿 2026-10-08 转正(`experimental: false`,红了直接拉响夜间);交付面(daily-build.yml)的 windows 腿在传 `luna-nightly-windows-x86_64.zip`(+`.sha256` 侧车,最近一轮 2026-10-13 已核)——此前的编译期阻碍(kernel `mode_t`、luasocket 平台源选型、unix 域 socket 目标、loop 网络层 POSIX 头、测试 `poll.h`)已全部消化
+- 交付面的 Windows 腿保留 `continue-on-error`:单腿构建失败不冻结全平台发货(验证面已红报警),属交付健壮性口径,不是试运行
+- `install.ps1` 与 `install.sh` 同款匿名直拉,Windows 一键安装
 - `path` 模块提供 `path.posix` 与 `path.win32` 双面(均 Node v24 语义;win32 是平台无关的文本语义,在 Linux 上同样可用)
-- **当前推荐 WSL2 或原生 Linux/macOS**;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
+- 原生 Windows 与 Linux/macOS 同功能集,WSL2 同样支持;`^C` 退出码 130、attach、`luna serve` 的 ^C 契约在 POSIX 下逐条走查过
 
 ## 如何贡献/报告问题
 

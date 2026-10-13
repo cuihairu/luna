@@ -41,7 +41,7 @@ macOS 另需 `brew install pkg-config autoconf cmake`。测试组清单与覆盖
 
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 
-**Windows 源码移植未完**(nightly 矩阵有探针腿,逐层消化中),当前推荐 WSL2——见 [FAQ](/other/faq)。
+**Windows 原生可用**:四腿全矩阵转正(2026-10-08),nightly 四平台资产齐发,`install.ps1` 一键安装——见 [FAQ](/other/faq)。
 
 ## 三十秒上手
 

@@ -4,13 +4,13 @@
 
 ## 待办
 
-- [ ] 双每日管线(daily 加 nightly 滚动 Release)在下列任一条件成立时重评:发布职能归回 daily、nightly 交付通道更换、双构建配置漂移造成事故。
-
 ## 已完成
 
 - [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
 
-- [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,3caedde
+- [x] 双每日管线重评(2026-10-14):裁定为互补保留不退役(daily=验证门禁,daily-build=交付面),记录见 docs/other/build.md。触发条件之三成立——Windows 腿 2026-10-08 转正后交付面文案/文档未同步,漂移造成发布文案失实(build.md/faq/getting-started 仍称 Windows 尚无产物/不在支持面,而 windows 资产 2026-10-13 实核在传)。修复:Windows 状态四份文档与 daily-build.yml 三处回显串同步到实态,顺带修 build.md 的 artifact 保留天数错记(daily-build 实为 14 天)。门禁:docs build 绿,ctest 16/16。
+
+- [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,8a63b97
 - [x] util 四件套:parseEnv/stripVTControlCharacters/styleText/debuglog(Node v24.21.0 差分对拍,NODE_DEBUG 条目不 trim/OSC 未闭合落 CSI/参数 4 位上限/#RGB ×17)。modules 110
 
 - [x] REPL 寄存器与时间魔法:In 记录、%time 与 %timeit 支持语句、%plugins 报遮蔽。ce21660,repl 4 例,magic 2 例

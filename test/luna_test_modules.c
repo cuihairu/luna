@@ -2558,23 +2558,40 @@ static void test_process_surface(void **state)
 {
     (void)state;
     /* 基本字段: pid/ppid/platform/arch/type/release/version; exitCode
-     * 缺省 nil (Node undefined)。ppid 仅 linux 可探 (win 宿主 nil,
-     * 账记); platform/type 按宿主口径 (win32/Windows_NT vs linux/Linux) */
+     * 缺省 nil (Node undefined)。三个宿主都断言, 但按模块自己的探测
+     * 口径逐项校验, 不写死两宿主:
+     *   platform ∈ {win32, linux, darwin}, 且 win32 当且仅当 package.config
+     *     的分隔符是反斜杠;
+     *   type = 该 platform 在 TYPE_BY_PLATFORM 里的映射 (三个宿主各自
+     *     对上, 不是「非 win 即 linux」);
+     *   ppid 仅 linux 可探 (win/darwin nil, 账记);
+     *   arch: linux 走 /proc/version 必须命中 Node arch 词, win32 无可靠
+     *     探测按账记假定 x64, darwin 两样都没有 → 允许 nil */
     assert_string_equal(
         eval_string("local p = require('process')\n"
                     "local win = package.config:sub(1, 1) == '\\\\'\n"
-                    "return tostring(p.pid > 0) .. ','\n"
-                    "  .. tostring(p.ppid == nil or p.ppid > 0)\n"
-                    "  .. ',' .. tostring(p.platform == (win and 'win32' or 'linux'))\n"
-                    "  .. ',' .. tostring(p.arch == 'x64' or p.arch == 'arm64')\n"
-                    "  .. ',' .. tostring(p.type == (win and 'Windows_NT' or 'Linux'))\n"
+                    "local TYPES = { win32 = 'Windows_NT', linux = 'Linux',\n"
+                    "                 darwin = 'Darwin' }\n"
+                    "local ARCHS = { x64 = true, arm64 = true, ia32 = true,\n"
+                    "                arm = true }\n"
+                    "local arch_ok\n"
+                    "if p.platform == 'win32' then arch_ok = p.arch == 'x64'\n"
+                    "elseif p.platform == 'darwin' then\n"
+                    "    arch_ok = p.arch == nil or ARCHS[p.arch] == true\n"
+                    "else arch_ok = ARCHS[p.arch] == true end\n"
+                    "return tostring(p.pid > 0)\n"
+                    "  .. ',' .. tostring(p.ppid == nil or p.ppid > 0)\n"
+                    "  .. ',' .. tostring(TYPES[p.platform] ~= nil)\n"
+                    "  .. ',' .. tostring((p.platform == 'win32') == win)\n"
+                    "  .. ',' .. tostring(arch_ok)\n"
+                    "  .. ',' .. tostring(p.type == TYPES[p.platform])\n"
                     "  .. ',' .. tostring(p.release ~= nil)\n"
                     "  .. ',' .. tostring(p.version == require('kernel').version())\n"
                     "  .. ',' .. tostring(p.versions.lua == '5.5')\n"
                     "  .. ',' .. tostring(p.versions.luna == '0.1.0')\n"
                     "  .. ',' .. tostring(next(p.execArgv) == nil)\n"
                     "  .. ',' .. tostring(p.exitCode == nil)"),
-        "true,true,true,true,true,true,true,true,true,true,true");
+        "true,true,true,true,true,true,true,true,true,true,true,true");
     /* argv 形状: 测试 VM 无 arg 全表 (嵌入宿主语境) → argv[1]='[eval]';
      * argv[0]=argv0=execPath (Node argv0 是原始 argv[0]=解释器,
      * 非脚本路径) */

@@ -464,6 +464,102 @@ static void test_reset_clears_underscore_registers(void **state)
     assert_non_null(strstr(outbuf, "Out[1]: 64"));
 }
 
+/* -- timed-face arm policy ------------------------------------------- */
+
+/* The editor's one-shot is armed from the loop top, before every read.
+ * What may be armed there is a pure function of the loop's answer, so it
+ * is exercised here with a stand-in loop instead of a live one: the
+ * decision is what keeps the macOS prompt spinning, and a live loop on
+ * this host never produces the answers that trigger it. */
+
+/* answers: the comma-separated waitMs() results to hand back, in order;
+ * the last one repeats for every further call. Records how many times
+ * the loop was turned and what the policy answered. */
+static const char *arm_with(const char *answers)
+{
+    static char src[1024];
+    snprintf(src, sizeof(src),
+             "local r = assert(load(__LUNA_REPL_SRC, 'repl'))()\n"
+             "local answers, i, turned = {%s}, 1, 0\n"
+             "local fake = {\n"
+             "  waitMs = function()\n"
+             "    local v = answers[i]\n"
+             "    if i < #answers then i = i + 1 end\n"
+             "    return v\n"
+             "  end,\n"
+             "  turn = function() turned = turned + 1 end,\n"
+             "}\n"
+             "local ms = r.tick_arm_ms(fake)\n"
+             "return tostring(ms) .. '/turns=' .. turned",
+             answers);
+    return eval_in_vm(src);
+}
+
+static void test_arm_ms_passes_a_real_delay_through(void **state)
+{
+    (void)state;
+    assert_string_equal(arm_with("250"), "250/turns=0");
+}
+
+static void test_arm_ms_plain_waits_when_nothing_is_due(void **state)
+{
+    (void)state;
+    /* nil (no timers, loop not alive) = block in the prompt as usual */
+    assert_string_equal(arm_with(""), "nil/turns=0");
+}
+
+static void test_arm_ms_turns_a_lone_zero_and_asks_again(void **state)
+{
+    (void)state;
+    /* a fresh timer reads 0 until a pass updates the backend; turn once
+     * so it does not burn a tick before its real deadline */
+    assert_string_equal(arm_with("0, 120"), "120/turns=1");
+}
+
+static void test_arm_ms_refuses_a_zero_that_survives_the_turn(void **state)
+{
+    (void)state;
+    /* The spin: libuv answers 0 for "due now" AND for "a live loop with
+     * handles but nothing to wait for". When the turn cannot break the
+     * tie the answer is still ambiguous, and arming it fires the
+     * sentinel the instant the read starts — on an empty prompt that
+     * returns a phantom empty line, so turn/arm/tick would run forever
+     * without the editor ever reading a key. Ambiguity that outlives a
+     * turn resolves to "nothing to wait for": a plain blocking read. */
+    assert_string_equal(arm_with("0, 0"), "nil/turns=1");
+}
+
+static void test_arm_ms_without_a_loop_arms_nothing(void **state)
+{
+    (void)state;
+    /* loop never required (no timed face), or an older build missing
+     * waitMs/turn: no arm, and nothing reported as an error */
+    assert_string_equal(
+        eval_in_vm("local r = assert(load(__LUNA_REPL_SRC, 'repl'))()\n"
+                   "local ms, err = r.tick_arm_ms(nil)\n"
+                   "return tostring(ms) .. '/' .. tostring(err)"),
+        "nil/nil");
+    assert_string_equal(
+        eval_in_vm("local r = assert(load(__LUNA_REPL_SRC, 'repl'))()\n"
+                   "local ms, err = r.tick_arm_ms({ waitMs = function() return 5 end })\n"
+                   "return tostring(ms) .. '/' .. tostring(err)"),
+        "nil/nil");
+}
+
+static void test_arm_ms_reports_a_broken_wait(void **state)
+{
+    (void)state;
+    /* the answer is the message, so the caller paints it in red and the
+     * prompt still opens — same as before the policy moved out */
+    const char *r = eval_in_vm(
+        "local r = assert(load(__LUNA_REPL_SRC, 'repl'))()\n"
+        "local ms, err = r.tick_arm_ms({ waitMs = function() error('boom') end,\n"
+        "                             turn = function() end })\n"
+        "return tostring(ms) .. '/' .. tostring(err)");
+    assert_non_null(strstr(r, "nil/"));
+    assert_non_null(strstr(r, "boom"));
+}
+
 /* -- runner ----------------------------------------------------------- */
 
 int main(void)
@@ -496,6 +592,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_multiline_chunk_recorded_wholesale, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_help_sugar_is_numbered_input, setup_session, teardown_session),
         cmocka_unit_test_setup_teardown(test_reset_clears_underscore_registers, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_passes_a_real_delay_through, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_plain_waits_when_nothing_is_due, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_turns_a_lone_zero_and_asks_again, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_refuses_a_zero_that_survives_the_turn, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_without_a_loop_arms_nothing, setup_session, teardown_session),
+        cmocka_unit_test_setup_teardown(test_arm_ms_reports_a_broken_wait, setup_session, teardown_session),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -230,6 +230,44 @@ function Session:completions(line)
     return complete.line(line)
 end
 
+-- How long the editor's one-shot may block for this prompt, or nil when
+-- the read should block plainly. loop.waitMs answers 0 for two different
+-- things -- "due now" and "run one pass to refresh the backend fd state"
+-- (a timer registered since the last turn reads 0 too) -- so a lone 0
+-- gets one turn and a re-ask, and a fresh timer does not burn an
+-- empty-prompt tick before its real deadline.
+--
+-- A 0 that survives the turn is still ambiguous: libuv answers 0 for a
+-- live loop that has handles but nothing to wait for, which is exactly
+-- the state the console is in once the last timer has been turned. It
+-- must not be armed. The sentinel fires the instant the read starts and
+-- an empty prompt answers it with a phantom empty line, so arming an
+-- unbreakable 0 turns the console into a turn/arm/tick loop that never
+-- reads a key again -- no echo, no ^D, a spinning prompt. Ambiguity
+-- that outlives a turn resolves to "nothing to wait for".
+--
+-- Returns ms, or nil plus the message when the loop raised (the caller
+-- paints that and opens the prompt anyway, as before).
+function repl.tick_arm_ms(loop)
+    if not (loop and loop.waitMs and loop.turn) then
+        return nil
+    end
+    local ok, ms = pcall(loop.waitMs, loop)
+    if ok and ms == 0 then
+        ok, ms = pcall(function()
+            loop.turn()
+            return loop.waitMs()
+        end)
+    end
+    if not ok then
+        return nil, ms
+    end
+    if type(ms) == "number" and ms > 0 then
+        return ms
+    end
+    return nil
+end
+
 -- Interactive driver. Editing, history recall and the line-editor
 -- completions come from the linedit bridge; piped stdin keeps the plain
 -- io.read loop. argt.color turns on ANSI chrome and value highlighting;
@@ -299,26 +337,12 @@ function repl.run(argt)
             -- Never armed mid-block: an empty line is block content
             -- there, not a tick.
             if timer_ok and not session.pending then
-                local loop = package.loaded.loop
-                if loop and loop.waitMs and loop.turn then
-                    local ok, ms = pcall(loop.waitMs, loop)
-                    -- 0 is ambiguous in libuv ("due now" vs "run one
-                    -- pass to update the backend fd state" — a timer
-                    -- armed since the last turn reads 0 too): turn once
-                    -- and ask again, so a fresh timer does not burn an
-                    -- empty-prompt tick before its real deadline
-                    if ok and ms == 0 then
-                        ok, ms = pcall(function()
-                            loop.turn()
-                            return loop.waitMs()
-                        end)
-                    end
-                    if ok and type(ms) == "number" and ms >= 0 then
-                        linedit.arm_timer(ms)
-                    elseif not ok then
-                        emit(paint(tostring(ms) .. "\n", COLOR_ERR,
-                            session.color))
-                    end
+                local ms, err = repl.tick_arm_ms(package.loaded.loop)
+                if ms then
+                    linedit.arm_timer(ms)
+                elseif err then
+                    emit(paint(tostring(err) .. "\n", COLOR_ERR,
+                        session.color))
                 end
             end
             line, aborted = linedit.read(session:prompt())

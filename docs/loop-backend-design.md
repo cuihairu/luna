@@ -1,3 +1,5 @@
+[English](loop-backend-design.en.md) | [中文](loop-backend-design.md)
+
 # 事件循环后端设计:libuv、io_uring 与自建后端的边界
 
 这是一篇**纯讨论文档**(先文档后实现,不附代码),回答一个问题:luna 的异步 IO 底座,停在 libuv 就够了吗?io_uring 要不要现在接?Windows 的 IOCP 要不要自己碰?

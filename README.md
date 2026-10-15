@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README.zh.md)
 
 <p align="center">
-  <img src="assets/logo.svg" alt="luna logo" width="140"/>
+  <img src="assets/logo.svg" alt="luna logo" width="64"/>
 </p>
 
 <h1 align="center">luna</h1>
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/terminal.svg" alt="A luna terminal session: REPL evaluation, a multiline function definition, %timeit and JSON encoding; output and highlighting captured from a real session" width="560"/>
+  <img src="assets/terminal.svg" alt="A luna terminal session: REPL evaluation, a multiline function definition, %timeit and JSON encoding; output and highlighting captured from a real session" width="64"/>
 </p>
 
 ## What luna is

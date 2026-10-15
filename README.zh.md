@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README.zh.md)
 
 <p align="center">
-  <img src="assets/logo.svg" alt="luna logo" width="140"/>
+  <img src="assets/logo.svg" alt="luna logo" width="64"/>
 </p>
 
 <h1 align="center">luna</h1>
@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码,输出与高亮为真实抓取" width="560"/>
+  <img src="assets/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码,输出与高亮为真实抓取" width="64"/>
 </p>
 
 ## 定位

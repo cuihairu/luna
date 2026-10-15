@@ -1,3 +1,5 @@
+[English](architecture.en.md) | [中文](architecture.md)
+
 # 架构设计
 
 本文回答四个问题:**代码怎么分层、第三方怎么选、插件边界在哪、事件循环的边界在哪**。

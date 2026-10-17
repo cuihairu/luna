@@ -32,7 +32,6 @@ features:
     details: ./plugins discovered in place, plugin.json manifests, four extension points — magic commands, completion sources, highlight rules, module injection — with failure isolation, never fatal.
 ---
 
-[English](index.en.md) | [中文](index.md)
 
 ## In the terminal
 

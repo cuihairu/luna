@@ -1,4 +1,3 @@
-[English](loop-backend-design.en.md) | [中文](loop-backend-design.md)
 
 # Event loop backend design: libuv, io_uring, and where the boundaries of a self-built backend sit
 

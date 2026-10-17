@@ -51,3 +51,8 @@ GTAGS
 Testing/
 # build-tool example output
 examples/build-tool/dist/
+
+# 2026-10-17: 依赖目录，禁止任何操作（含 git mv / glob 展开）
+node_modules/
+**/node_modules/
+.pnpm-store/

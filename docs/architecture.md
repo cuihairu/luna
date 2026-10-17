@@ -1,4 +1,3 @@
-[English](architecture.en.md) | [中文](architecture.md)
 
 # 架构设计
 

@@ -32,7 +32,6 @@ features:
     details: ./plugins 就近发现,plugin.json 清单,魔法命令、补全源、高亮规则、模块注入四个扩展点,失败隔离不致命。
 ---
 
-[English](index.en.md) | [中文](index.md)
 
 ## 在终端里
 

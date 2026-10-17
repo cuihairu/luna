@@ -1,4 +1,3 @@
-[English](loop-backend-design.en.md) | [中文](loop-backend-design.md)
 
 # 事件循环后端设计:libuv、io_uring 与自建后端的边界
 

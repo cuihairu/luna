@@ -93,5 +93,7 @@ export default defineConfig({
       prev: '上一篇',
       next: '下一篇'
     }
-  }
+  },
+  // review/ 是审核底稿（含原始工具记录与未闭合标签），只留档不入站
+  srcExclude: ['review/**'],
 })

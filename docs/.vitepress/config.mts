@@ -14,7 +14,6 @@ export default defineConfig({
     nav: [
       { text: '指南', link: '/guide/introduction' },
       { text: '架构', link: '/architecture' },
-      { text: 'GitHub', link: 'https://github.com/cuihairu/luna' }
     ],
     sidebar: [
       {

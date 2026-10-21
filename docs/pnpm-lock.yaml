@@ -4,13 +4,16 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  source-map-js: ^1.2.2
+
 importers:
 
   .:
     devDependencies:
       vitepress:
         specifier: ^2.0.0-alpha.20
-        version: 2.0.0-alpha.20(postcss@8.5.28)
+        version: 2.0.0-alpha.20(postcss@8.5.31)
 
 packages:
 
@@ -1147,7 +1150,7 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  vitepress@2.0.0-alpha.20(postcss@8.5.28):
+  vitepress@2.0.0-alpha.20(postcss@8.5.31):
     dependencies:
       '@docsearch/css': 4.7.0
       '@docsearch/js': 4.7.0
@@ -1167,7 +1170,7 @@ snapshots:
       vite: 8.3.4
       vue: 3.5.43
     optionalDependencies:
-      postcss: 8.5.28
+      postcss: 8.5.31
     transitivePeerDependencies:
       - '@types/node'
       - '@vitejs/devtools'

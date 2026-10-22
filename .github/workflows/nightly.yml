@@ -74,7 +74,7 @@ jobs:
             experimental: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           submodules: recursive
 
@@ -212,7 +212,7 @@ jobs:
             Set-Content "$Asset.zip.sha256"
 
       - name: Upload platform package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: pkg-${{ matrix.name }}
           path: |
@@ -234,7 +234,7 @@ jobs:
       actions: write # 删除历史 daily-build artifact 需要
     steps:
       - name: Download platform packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: pkg-*
           merge-multiple: true
@@ -315,7 +315,7 @@ jobs:
       # 同一份东西留档 run 页副本(不算交付;v4 产物不可变,上传前先删
       # 历史同名——collect 头部的清理步给这一步清场)
       - name: Upload daily-build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: daily-build
           path: ${{ env.daily_zip }}

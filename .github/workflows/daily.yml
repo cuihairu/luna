@@ -53,7 +53,7 @@ jobs:
             experimental: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
       - name: Configure
         if: runner.os != 'Windows'
@@ -109,7 +109,7 @@ jobs:
           fi
           cp -r build/luna_modules stage/luna_modules
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ matrix.artifact }}
           path: stage/

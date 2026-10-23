@@ -1,185 +1,185 @@
 
-# Architecture design
+# 架构设计
 
-This document answers four questions: **how the code is layered, how third-party libraries are chosen, where the plugin boundary sits, and where the boundary of the event loop sits**.
+本文回答四个问题:**代码怎么分层、第三方怎么选、插件边界在哪、事件循环的边界在哪**。
 
-## Layering: a three-layer model
+## 分层:三层模型
 
-luna's shape is told by three layers — **User Space / Luna Runtime / Native Runtime**. The product identity is a general-purpose Lua runtime; the isomorphism with Node.js's official dependency-layering diagram happens only at the level of architectural reference (the comparison follows in the next section).
+luna 的形态用三层模型讲清楚——**User Space(用户空间)/ Luna Runtime(Luna 运行时)/ Native Runtime(原生运行时)**。产品身份是 Lua 通用运行时;与 Node.js 官方依赖分层图的同构只发生在架构参考的意义上(对照见下节)。
 
 ```
-┌─ User Space ─────────────────────────────────────────────────────────────────┐
-│  your script · REPL session · CLI · app                                      │
-│  luna script.lua · luna build.lua · luna -e · luna --attach <pid>            │
-├─ Luna Runtime ───────────────────────────────────────────────────────────────┤
-│  luna_modules/ packages (Node-style resolution: relative require,            │
-│    climbing up level by level · manifest main)                               │
-│  LuaRocks wrapper: luna install/search/list/update → .luna/rocks tree        │
-│  stdlib (ships with the binary, require-and-go; four-way                     │
-│    classification on the stdlib overview page)                               │
-│    Core        json fs path util events stream net http crypto               │
-│    Data-Format csv ini toml yaml xml zlib                                    │
-│    Dev tooling logging · repl/introspect/magic/complete/highlight            │
-│    Ecosystem   plugins · LuaRocks · the lua_modules integration face         │
-│  plugins plugins/ (project → user → $LUNA_PLUGIN_PATH, isolated)             │
-│    extension points: magic.register · complete.add_source ·                  │
-│    highlight.set · module injection                                          │
-│  REPL policy layer (pure Lua, compiled into the binary at build time)        │
-│    repl · complete · highlight · magic · introspect · serve(attach)          │
-├─ Native Runtime ─────────────────────────────────────────────────────────────┤
-│  C kernel (thin): signals · ms clock · isatty · output sink ·                │
-│    replxx bridge                                                             │
-│    luna_main entry/CLI · luna_kernel state/binding registration ·            │
-│    luna_line                                                                 │
-│    luna_kernel counting hook · luna_loop libuv wiring · luna_toml            │
-│    tomlc17 bridge                                                            │
-│  a row of vendored libraries:                                                │
-│    Lua 5.5 · libuv · OpenSSL · replxx · luasocket                            │
-│    LPeg · lfs · lua-zlib · luaossl · tomlc17                                 │
-│    libyaml + lyaml · expat + lua-expat · dkjson (pure Lua)                   │
-│    argparse · scintillua · luarocks · lualogging                             │
-│    (the Lua layer ships with the binary)                                     │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─ User Space ────────────────────────────────────────────────────────────┐
+│  你的脚本 · REPL 会话 · CLI · app                                        │
+│  luna script.lua · luna build.lua · luna -e · luna --attach <pid>       │
+├─ Luna Runtime ──────────────────────────────────────────────────────────┤
+│  luna_modules/ 包(Node 式解析:相对 require · 逐级上溯 · 清单 main)      │
+│  LuaRocks 包装:luna install/search/list/update → .luna/rocks 树         │
+│  标准库(随二进制,require 即得,四类分法见标准库总览)                    │
+│    Core        json fs path util events stream net http crypto          │
+│    Data-Format csv ini toml yaml xml zlib                               │
+│    Dev tooling logging · repl/introspect/magic/complete/highlight       │
+│    Ecosystem   plugins · LuaRocks · luna_modules 的接入面               │
+│  插件 plugins/(项目 → 用户 → $LUNA_PLUGIN_PATH,失败隔离)                │
+│    扩展点:magic.register · complete.add_source · highlight.set · 模块注入│
+│  REPL 策略层(纯 Lua,编译期嵌进二进制)                                  │
+│    repl · complete · highlight · magic · introspect · serve(attach)    │
+├─ Native Runtime ────────────────────────────────────────────────────────┤
+│  C 内核(薄):信号 · 毫秒时钟 · isatty · 输出汇聚 · replxx 桥             │
+│    luna_main 入口/CLI · luna_kernel 状态/绑定注册 · luna_line           │
+│    luna_kernel 计数钩子 · luna_loop libuv 接线 · luna_toml tomlc17 桥     │
+│  vendor 一排:                                                            │
+│    Lua 5.5 · libuv · OpenSSL · replxx · luasocket                       │
+│    LPeg · lfs · lua-zlib · luaossl · tomlc17                            │
+│    libyaml + lyaml · expat + lua-expat · dkjson(纯 Lua)                 │
+│    argparse · scintillua · luarocks · lualogging(Lua 层随二进制)        │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why the layers:**
+**分层理由:**
 
-- **User Space is a shell, not the content**: scripts use only standard interfaces (require, CLI, REPL, attach) and have no idea how the inside of Luna Runtime is arranged — a policy-layer refactor does not break user code;
-- **Luna Runtime is the body**: modules / stdlib / plugins / package management and the REPL policy layer all live here, pure Lua plus wrapper layers, shipped in the binary, with source as documentation (`lua/` is directly readable), readable and replaceable by plugins;
-- **The C kernel is kept as thin as possible**: the Native Runtime does only what C is good at and must be in C — signals (SIGINT), a millisecond clock, isatty, the output sink, the replxx bridge. The behavior logic of the REPL is all Lua, because logic changes often, and keeping it in the Lua layer means changing it requires no C knowledge;
-- **Extension points are the boundary**: the four registration APIs (`magic.register`, `complete.add_source`, `highlight.set`, returning a `modules` table) are the plugins' only entrance. The internal structure of the policy layer is invisible to plugins, and a policy-layer refactor does not break plugins;
-- **Official Lua is the kernel**: luna contains no self-made interpreter; every "language-layer" capability comes from official Lua 5.5 plus LPeg, and upgrading Lua touches only `deps/`.
+- **User Space 是壳,不是内容**:脚本只用标准接口(require、CLI、REPL、attach),不知道 Luna Runtime 内部怎么排布——策略层重构不破坏用户代码;
+- **Luna Runtime 是本体**:模块/标准库/插件/包管理与 REPL 策略层都住这里,纯 Lua + 包装层,随二进制一体分发,源文件即文档(`lua/` 可直接阅读),插件能读懂也能替换;
+- **C 内核尽量薄**:Native Runtime 只做 C 擅长且必须进 C 的事——信号(SIGINT)、毫秒时钟、isatty、输出汇聚点(sink)、replxx 桥。REPL 的行为逻辑全是 Lua,因为逻辑变化频率高,放 Lua 层改起来不需要懂 C;
+- **扩展点即边界**:四组注册 API(`magic.register`、`complete.add_source`、`highlight.set`、返回 `modules` 表)是插件唯一入口。策略层内部结构对插件不可见,策略层重构不破坏插件;
+- **官方 Lua 是内核**:luna 不含自制解释器;所有"语言层"能力来自官方 Lua 5.5 + LPeg,升级 Lua 只动 `deps/`。
 
-## Relationship with Node.js: architectural reference, not identity
+## 与 Node.js 的关系:架构参考,不是身份
 
-luna's alignment target is to give Lua scripts an engineering experience close to Node's — module resolution, stdlib shape, CLI entry, these **habits** are copied verbatim, because they are the forms the Lua ecosystem has agreed work well. But this is not identity: the identity is a Lua runtime, and the Node comparison only answers "why the experience is designed this way"; wherever Lua semantics are stronger (require caching, chunks and `...`, the official searcher), official behavior is kept. The per-module capability comparison is on [node-parity](/node-parity).
+luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模块解析、标准库形状、CLI 入口这些**习惯**照搬,因为它们在 Lua 生态里是公认好用的形态。但这不是身份:身份是 Lua 运行时,Node 对照只回答"体验为什么这样设计";凡是 Lua 语义更强的地方(require 缓存、chunk 与 `...`、官方搜索器),一律保持官方行为。逐模块能力对照见 [node-parity](/node-parity)。
 
-| Concept | Node.js | luna |
+| 概念 | Node.js | luna |
 | --- | --- | --- |
-| Entry | `node` / `node script.js` / `node -e` | `luna` / `luna script.lua` / `luna -e` |
-| Dependency directory | `node_modules/` climbing up level by level | `luna_modules/` climbing up level by level |
-| Relative require | relative to the current file | relative to the current chunk (`@` source anchor) |
-| Package manifest | `package.json`'s `main` | the `main` of the same-named manifest, defaulting to `init.lua` |
-| Package management | `npm install` + `package-lock.json` | `luna install` (a LuaRocks wrapper) + `luna.lock` (version + source sha256, offline reproduction via `--from-lock`) |
-| Plugins | (n/a, rely on packages) | `plugins/` directory + `plugin.json`, shadowing in place |
-| Global injection | `process`/`Buffer` | `kernel` (the REPL additionally has `In`/`Out` globals) |
-| Stdlib | built-in | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` ships with the binary (`loop` is the async face); the per-module one-to-one comparison with Node is on [node-parity](/node-parity) |
+| 入口 | `node` / `node script.js` / `node -e` | `luna` / `luna script.lua` / `luna -e` |
+| 依赖目录 | `node_modules/` 逐级上溯 | `luna_modules/` 逐级上溯 |
+| 相对 require | 相对当前文件 | 相对当前 chunk(`@` 源锚定) |
+| 包清单 | `package.json` 的 `main` | 同名清单的 `main`,缺省 `init.lua` |
+| 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
+| 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
+| 全局注入 | `process`/`Buffer` | `kernel`(REPL 另有 `In`/`Out` 全局) |
+| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` 随二进制(`loop` 为异步面);与 Node 逐模块的一一对照见 [node-parity](/node-parity) |
 
-The differences are deliberate: Lua's require caching (`package.loaded`), chunks and `...`, and official searcher semantics all keep official behavior; luna only **inserts one link into the searcher sequence** and does not replace anything.
+差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。
 
-## Selection comparisons
+## 选型对比
 
-The convention: candidates, the reason for selection (maintenance activity / API surface / binding quality), and who was eliminated and why.
+口径:候选、入选理由(维护活跃度/API 面/绑定质量)、谁被淘汰与原因。
 
-### Line editing and history — replxx
+### 行编辑与历史 —— replxx
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **replxx**(`undoing/replxx`) | **selected**: actively maintained, Unicode/wide CJK characters handled correctly, colored prompts, hints, history persistence and incremental search, a concise C API (the project provides the `luna_line.c` bridge) |
-| linenoise (antirez) | the original plan, upgraded to replxx in batch 7: the single file is lovely, but wide/multibyte editing is weak and there are no colored prompts, with community fixes left unapplied for years |
-| readline | both the GPL/LGPL licensing and the global state (one state per process for each new readline) make it unsuitable for an embedding host |
-| lua-linenoise | wraps linenoise yet again, inheriting its weaknesses |
+| **replxx**(`undoing/replxx`) | **入选**:活跃维护、Unicode/中文宽字符正确、彩色提示、hints、history 持久化与增量检索、简洁 C API(项目提供 `luna_line.c` 桥) |
+| linenoise(antirez) | 原始计划人选,batch 7 升级为 replxx:单文件虽美,但宽字符与多字节编辑弱、无彩色提示,社区修复长期悬置 |
+| readline | GPL/LGPL 授权与全局状态(new readline 每进程一态)都不适合嵌入宿主 |
+| lua-linenoise | 又绑一层 linenoise,继承其短板 |
 
-### Lexical highlighting — scintillua + LPeg
+### 词法高亮 —— scintillua + LPeg
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **scintillua** (Mitchell / orbitalquark, Textadept ecosystem) | **selected**: a production-grade lexer set for dozens of languages, pure Lua + LPeg, embeddable standalone (`lexers/lua.lua` works as-is); swapping language = swapping a lexer file, naturally pluggable |
-| hand-written regex highlighting | rejected: regex cannot correctly handle nested long strings `[[ ]]`, escapes inside strings, ambiguities such as `--` and `---@`; the cautionary tale is the highlight-bug lists of every editor |
-| porting TextMate grammars by hand | rejected: an oniguruma dependency plus a JSON→Lua conversion layer buys complexity with no payoff |
+| **scintillua**(Mitchell / orbitalquark,Textadept 生态) | **入选**:几十种语言的生产级 lexer 集,纯 Lua + LPeg,可独立嵌入(`lexers/lua.lua` 直接可用);换语言=换 lexer 文件,天然可插件化 |
+| 自写正则高亮 | 淘汰:正则无法正确处理嵌套长字符串 `[[ ]]`、字符串内转义、`--` 与 `---@` 之类歧义;前车之鉴是各家编辑器的高亮 bug 清单 |
+| 动手移植 TextMate 语法 | 淘汰:oniguruma 依赖 + JSON→Lua 转换层,复杂度无收益 |
 
-### Command-line parsing — argparse (mpeterv)
+### 命令行解析 —— argparse(mpeterv)
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **argparse**(`mpeterv/argparse`) | **selected**: inspired by Python's argparse, declarative definition, automatic usage/help, subcommand support, pure Lua, thoroughly tested |
-| docopt.lua | rejected: docopt's "the document is the parser" style is hard to control when help wording and parsing conflict, and implementation maturity varies |
-| hand-written `arg[i]` branches | rejected: hand-writing the combination of `-i`/`--interactive`, optional positionals and `--no-*` switches is guaranteed to be wrong |
+| **argparse**(`mpeterv/argparse`) | **入选**:受 Python argparse 启发,声明式定义、自动 usage/help、子命令支持、纯 Lua、测试完备 |
+| docopt.lua | 淘汰:docopt 的"文档即解析器"风格在 help 文案与解析冲突时难控制,实现成熟度参差 |
+| 手写 `arg[i]` 分支 | 淘汰:`-i`/`--interactive`、可选位置参数、`--no-*` 开关的组合手写必错 |
 
-### JSON — dkjson
+### JSON —— dkjson
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **dkjson** (David Kolf, dkolf.de; LuaRocks account dhkolf) | **selected**: pure Lua, single file, zero dependencies, strict mode (rejects illegal input), correct big-integer handling, distributed stably on LuaRocks for years (no upstream git repo; published as src.rock, so provenance is recorded when vendoring) |
-| lua-cjson | rejected: the C binding is 3–5× faster, but throughput is irrelevant in REPL scenarios, and the distribution/OpenResty forks proliferate with API drift between them |
-| rxi/json.lua | rejected: a clean implementation but no strict mode, and its cyclic-reference behavior disagrees with dkjson's |
+| **dkjson**(David Kolf,dkolf.de;LuaRocks 账号 dhkolf) | **入选**:纯 Lua 单文件零依赖、严格模式(拒绝非法输入)、大整数处理正确、LuaRocks 长期稳定分发(无上游 git 仓库,以 src.rock 形式发布,vendor 时记录 provenance) |
+| lua-cjson | 淘汰:C 绑定快 3–5 倍,但 REPL 场景吞吐无关紧要,且发行版/OpenResty fork 版本林立、API 细节漂移 |
+| rxi/json.lua | 淘汰:实现清爽但无严格模式,循环引用行为与 dkjson 不一致 |
 
-### zlib — lua-zlib (brimworks)
+### zlib —— lua-zlib(brimworks)
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **lua-zlib**(`brimworks/lua-zlib`) | **selected**: the longest-maintained, a streaming closure API (`zlib.deflate(level)(data, "finish")`) that supports incremental work; a thin layer adds one-shot `compress`/`decompress` |
-| lua-lzlib | rejected: an API closer to zlib's prototypes but not following new Lua versions |
-| hand-written FFI binding | rejected: depends on LuaJIT FFI, while luna uses official PUC Lua |
+| **lua-zlib**(`brimworks/lua-zlib`) | **入选**:维护最久、API 为流式 closure(`zlib.deflate(level)(data, "finish")`),可做增量;薄层补一次性 `compress`/`decompress` |
+| lua-lzlib | 淘汰:API 更贴近 zlib 原型但久未跟进新版 Lua |
+| 自写 FFI 绑定 | 淘汰:依赖 LuaJIT FFI,luna 用官方 PUC Lua |
 
-### crypto/TLS — luaossl (wahern)
+### crypto/TLS —— luaossl(wahern)
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **luaossl**(`wahern/luaossl`) | **selected**: the most complete coverage (the full pkey/x509 family, ssl/store/rand/…, 26 submodules), tight to OpenSSL 1.1–3.x, registered per submodule (`_openssl.<sub>`), thoroughly documented |
-| lua-openssl (zhaozg, common in the OpenResty ecosystem) | rejected: the API is a literal translation of OpenSSL's prototypes, and **note the attribution — it is not an official OpenResty product**, it merely ships in OpenResty distributions; the maintenance cadence depends on a single author |
-| LuaSec | rejected: positioned as a socket-TLS wrapper, does not operate at the x509/pkey level |
+| **luaossl**(`wahern/luaossl`) | **入选**:覆盖面最完整(pkey/x509 全家族/ssl/store/rand/…,26 个子模块)、紧贴 OpenSSL 1.1–3.x、按子模块注册(`_openssl.<sub>`)、文档详尽 |
+| lua-openssl(zhaozg,OpenResty 生态常见) | 淘汰:API 偏 OpenSSL 原型直译,**注意归属——它不是 OpenResty 官方出品**,只是 OpenResty 发行版常带;维护节奏依赖单作者 |
+| LuaSec | 淘汰:定位是 socket TLS 封装,不做 x509/pkey 级操作 |
 
-### Package management — LuaRocks (thin wrapper)
+### 包管理 —— LuaRocks(薄包装)
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **wrapping LuaRocks v3.13.0** (source vendored into the binary, invoked in-process) | **selected**: the de facto standard for Lua packages listed in lua.org's official main repository, with thousands of rocks ready; luna writes only a thin wrapper over four subcommands plus the `.luna/rocks` tree plus `luna.lock` (rockspec sha required, `.src.rock` sha best-effort), with `--from-lock` reproducing offline with sha verification |
-| writing a registry client of our own | rejected: repository/upload/signing/index/dependency-resolution are all long-term burdens, and not a single existing package could be used — violating "find a mature library, do not write your own" |
-| porting the npm client | rejected: what you get is npm's shell (the format, the parserers), while the goods (the packages in the npm repository) are not Lua code; Lua packages still have to be published through LuaRocks, and two parallel package registries cost only |
+| **包装 LuaRocks v3.13.0**(源码 vendor 进二进制,进程内调用) | **入选**:lua.org 官方主仓库收录的 Lua 包事实标准,数千 rock 现成;luna 只写四个子命令的薄包装 + `.luna/rocks` 树 + `luna.lock`(rockspec sha 必有、`.src.rock` sha 尽力而为),`--from-lock` 离线优先复现并 sha 校验 |
+| 自己写 registry 客户端 | 淘汰:仓库/上传/签名/索引/依赖解析全是长期负担,现成包一个用不上——违背"找成熟库、不要自己写" |
+| 移植 npm 客户端 | 淘汰:拿到的是 npm 的壳(格式/解析器),货(npm 仓库里的包)不是 Lua 代码;Lua 包仍须经 LuaRocks 发布,两套仓库并存只有成本 |
 
-### Binding layer — hand-written C luaopen bindings (no sol2)
+### 绑定层 —— 手写 C luaopen 直绑(不引入 sol2)
 
-How are C libraries hooked into Lua? luna's answer has always been the same: hand-written `luaopen_*` (the official C API), registered through `register_c_modules` into `package.loaded` (luna_main.c, glob off), with the pure Lua convenience layer in `lua/modules/*/init.lua`. All five binding families — lfs / luasocket / lua-zlib / luaossl / loop — follow this pattern: 50–300 lines per module, explicit type mapping, stack operations visible at a glance, error paths reviewable line by line — which is exactly where the format modules' "errors carry line/column" convention lands. The already-landed xml/yaml/toml (see [node-parity](/node-parity)) continue it.
+C 库怎么接进 Lua?luna 的答案一直是同一个:手写 `luaopen_*`(官方 C API),经
+`register_c_modules` 进 `package.loaded`(luna_main.c,glob off),纯 Lua 便捷层放
+`lua/modules/*/init.lua`。lfs / luasocket / lua-zlib / luaossl / loop 五族绑定全是这
+个模式:单模块 50–300 行,类型映射显式、栈操作所见即所得、错误路径逐行可审——格式
+模块要求的「错误带行列」口径正落在这层。已落地的 xml/yaml/toml(见
+[Node 方向选型](/node-parity))沿用。
 
-| Candidate | Verdict |
+| 候选 | 结论 |
 | --- | --- |
-| **hand-written C luaopen bindings** | **selected**: official Lua is the kernel (see the layering rationale above), and the binding layer keeps the official shape; no intermediate abstraction can obscure stack semantics; each binding's error convention can be checked line by line |
-| sol2 (`ThePhD/sol2`) | rejected (evaluated 2026-09-30): the latest release v3.3.0 (2025-06) **does not support Lua 5.5** — 5.5 support is stuck on unmerged PR #1723 (since 2025-07), with zero response from the maintainer in the thread, downstream commentary reading "increasingly unmaintained", and projects such as osrm-backend each carrying their own patch set; integrating it means vendoring an unmerged patch set and internalizing upstream maintenance-stop risk into a single binary; and a header-only C++17 template library runs against the "C kernel as thin as possible" layering |
-| LuaBridge / lua-wrapper and other template bindings | rejected: the same bet as sol2 (C++ templates chasing official VM evolution), with a smaller ecosystem and smaller pool of pitfall knowledge; the "thinness" of hand-written bindings is exactly why the existing five binding families have had zero incidents |
+| **手写 C luaopen 绑定** | **入选**:官方 Lua 是内核(分层理由见上),绑定层保持官方形状;无中间抽象可遮蔽栈语义;每个绑定的错误口径可逐行核对 |
+| sol2(`ThePhD/sol2`) | 淘汰(2026-09-30 评估):最新发布 v3.3.0(2025-06)**不支持 Lua 5.5**——5.5 支持停在未合并的 PR #1723(2025-07 起),维护者在帖内零回应,下游评注 "increasingly unmaintained",osrm-backend 等项目各自手动携带补丁;接入等于 vendor 一个未合并补丁集,把上游停维风险内化进单二进制;header-only C++17 模板库也与「C 内核尽量薄」的分层相逆 |
+| LuaBridge / lua-wrapper 等模板绑定 | 淘汰:与 sol2 同类赌注(C++ 模板追官方 VM 演进),生态与踩坑资料面更小;手写绑定的"薄"正是既有五族绑定零事故的原因 |
 
-Also record the Lua version ledger: deps/lua pins **v5.5.1** — the newest 5.5 release tag upstream (master holds 6 more small fixes beyond the release tag, such as a GC parameter UB, none of which made it into a release; the version-lock discipline awaits 5.5.2 and does not chase master). "Integrate official Lua directly, without a binding framework" is therefore not a new decision but an already-confirmed status quo being reconfirmed.
+一并记录 Lua 版本账:deps/lua 钉 **v5.5.1**——上游最新的 5.5 发布 tag(master 比发布 tag 多
+6 个小修,GC 参数 UB 等,均未进发布;锁版本纪律等 5.5.2,不追 master)。「直接集成
+官方 Lua、不经绑定框架」因此不是新决定,是被再次确认的现状。
 
-### The rest
+### 其余
 
-- **Lua 5.5**: official source, no LuaJIT (5.5 semantics + maintenance first);
-- **LPeg**: a dependency of scintillua and the runtime of future lexer plugins;
-- **luafilesystem** (keplerproject) and **luasocket** (Diego Nehab): the de facto standards of their respective domains, not re-selected;
-- **libuv**: already in deps/ and wired as the `loop` module (1.53.0, statically linked) — see the next section.
+- **Lua 5.5**:官方源码,不用 LuaJIT(5.5 语义 + 维护优先);
+- **LPeg**:scintillua 的依赖,亦是将来 lexer 插件的运行时;
+- **luafilesystem**(keplerproject)、**luasocket**(Diego Nehab):各自领域的事实标准,不重新选;
+- **libuv**:deps/ 已入库并接线为 `loop` 模块(1.53.0,静态链接)——见下节。
 
-## Kernel/plugin boundary and loading order
+## 内核/插件边界与加载顺序
 
-**Boundary**: the loader (`luna.plugins`) only discovers, sorts in place order, executes the entry points under `pcall`, injects `modules`, and produces three reports (`loaded`/`failed`/`overridden`); plugins wire themselves up only through the extension-point APIs. Neither side sees inside the other.
+**边界**:加载器(`luna.plugins`)只负责发现、按就近顺序排序、`pcall` 执行入口、注入 `modules`、产出三份报告(`loaded`/`failed`/`overridden`);插件只通过扩展点 API 接线。互相不透视内部。
 
-**Loading order** (loaded for every startup mode; `--no-plugins` skips):
+**加载顺序**(每种启动模式都加载,`--no-plugins` 跳过):
 
-1. `./plugins` (project) → 2. `~/.luna/plugins` (user) → 3. each entry of `$LUNA_PLUGIN_PATH` in turn;
-2. within one directory, lexicographic order; manifest names **first come, first served**, the later arrival is recorded as overridden (project shadows user);
-3. entry points execute under `pcall` — **failure isolation**: one plugin throwing or a corrupt manifest is recorded into `plugins.failed` only, sibling plugins and luna itself keep starting; completion sources and highlight functions are equally pcall-protected.
+1. `./plugins`(项目)→ 2. `~/.luna/plugins`(用户)→ 3. `$LUNA_PLUGIN_PATH` 逐项;
+2. 同目录内按字典序;manifest 名**先到先得**,后到者记 overridden(项目遮蔽用户);
+3. 入口在 `pcall` 下执行——**失败隔离**:一个插件抛错或清单损坏,只记入 `plugins.failed`,兄弟插件与 luna 本体继续启动;补全源与高亮函数同样受 pcall 保护。
 
-**Why "first come, first served by name + no fallback on failure"**: shadowing semantics must be predictable — a user seeing in `%plugins` that the project version already holds the name is easier to diagnose than "quietly using the user version"; a fallback would bury a failure inside a success.
+**为何"名字先到先得 + 失败不回退"**:遮蔽语义要可预测——用户看到 `%plugins` 里项目版已占名,比"悄悄用了用户版"更好排查;回退会把失败藏进成功里。
 
-## Event loop: the first batch (an explicit choice, opted in by scripts)
+## 事件循环:第一批(显式选择,脚本 opt-in)
 
-Half of what makes Node "Node" is the event loop. luna now has its first piece: **`require "loop"`** — deps/libuv (1.53.0) wired as a Node-named API (setTimeout/setInterval/setImmediate/clear*/run/stop), statically linked into luna's single binary. The synchronous stdlib is unaffected and the REPL unchanged; whoever requires it enters the async world. The reasons for the earlier postponement still hold, and they define this batch's boundary:
+Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "loop"`**——deps/libuv(1.53.0)接线的 Node 命名 API(setTimeout/setInterval/setImmediate/clear*/run/stop),静态编进 luna 单一二进制。同步标准库不受影响,REPL 不变;谁 require 谁进异步世界。曾经推迟的理由仍在,也决定了这一批的边界:
 
-1. **The semantic conflict is undecided**: mixing the synchronous stdlib with callback-style async in one session, and the yield point (which call yields) remains a language-design problem — so the loop drives only user-registered callbacks and the stdlib is not touched one byte;
-2. **The REPL does not need it**: the interactive main loop is naturally synchronous; the loop is an explicit choice of script mode, with no global setTimeout to pollute synchronous code;
-3. **Two contracts ride along**: the loop's only own handle is a prepare hook (running while live handles exist, stopping when the last one closes, itself unref'd — it does not keep the loop alive; the keep-alive ledger counts only user handles), and each round it does two things — turn the `^C` that landed during the blocking `uv_run` into an `interrupted` error (the exit code 130 contract unchanged), and poll the attach socket. Processes inside the event loop remain observable through `--attach` as usual: the polling-point model holds as-is, and libuv's existence adds no second source of concurrency.
+1. **语义冲突未决**:同步 stdlib 与回调式异步在同一会话里混用,yield 点(哪个调用让出)仍是语言设计问题——所以循环只驱动用户注册的回调,标准库一个字节不改;
+2. **REPL 不需要**:交互主循环天然同步;循环是脚本模式的显式选择,没有全局 setTimeout 去污染同步代码;
+3. **两份契约搭一趟车**:循环唯一的自有句柄是一个 prepare 钩子(有活句柄时启动,最后一个关闭时停,自身 unref——不撑循环,keep-alive 的账本只记用户句柄),它每轮做两件事——把 uv_run 阻塞期间落下的 `^C` 转成 `interrupted` 错误(退出码 130 约定不变),和轮询 attach 套接字。事件循环里的进程因此照常可被 `--attach` 观测:轮询点模型原样成立,不因 libuv 的存在而多出第二个并发来源。
 
-The keep-alive semantics align with libuv: every callback handle is held by the registry until its `uv_close` completion callback lands (`uv_close` is asynchronous, and the handle's memory must outlive it); when the last handle closes, the hook stops and an idle `run("default")` returns — consistent with Node's "exit when the event loop drains". On the same batch came `loop.fs`: readFile/writeFile/stat running on the libuv thread pool, callbacks landing back on the loop thread, errors in the Node "callback first argument" style; the directory surface was later completed (appendFile/readdir/mkdir/rmdir/unlink/rename, the read side still the same contract); another batch added `loop.net`: client and server sockets for TCP and unix domain (connect/connectPipe/listen/listenPipe plus sock and server handles), EOF delivered as `(nil, nil)`, the same callback contract, with `sock:peer/sockname` and `server:address` providing the address surface (inet/inet6/unix families, TLS and UDP faces in the same style, the TLS end hand-rolled fd direct from the kernel); `loop.udp` added the datagram face (bind receives packets resident, send fires a per-packet callback, bind conflicts throw synchronously); `fs.watch` added the watching face — a resident event callback for directory changes (wired via inotify); `loop.signal` wired Unix signals into the same contract (SIGTERM graceful exit is the home turf; SIGINT/SIGUSR1 each have their owners and refuse registration); `loop.dns` factored the thread-pool resolver used internally by net.connect into its own face (lookup/reverse, a getaddrinfo straight-through); `net.connectTls` and `net.listenTls` stacked both TLS ends onto the net face — an OpenSSL state machine driven by uv_poll over a hand-rolled fd (handshake, WANT_READ/WRITE yielding, a pending write buffer, close_notify as EOF), certificate verification on by default, opts able to swap the CA or skip it, the server side handing only handshake-completed connections to onConn. `loop.http` is the first pure Lua face — an HTTP/1.1 client running on net.connect/connectTls, one aggregate callback per request, the body framed by content-length, chunked or EOF, and the redirect chain and whole-request timeout closed into state machines in Lua as well, without touching the C kernel one line; the server face is equally in Lua — `http.listen` takes over net's server, the handler fires only once the whole request has landed, res.send's three overloads write a complete response and then close, a handler throwing yields a 500; large responses need not enter memory whole — onHead/onData turn the body into streaming observation, with the content-length and unframed paths truly incremental and the framing decision unchanged. `loop.os` is the only synchronous face — host name, network interfaces, CPU, memory and such system information read and returned directly, not entering the loop, classified under loop only because it comes from the same libuv (later completed with the five Node os keys arch/release/EOL/userInfo/availableParallelism, arch mapping uname's `x86_64`/`aarch64` to Node's `x64`/`arm64`). The newest batch adds `loop.process`: aggregate execution of child processes (spawn without a shell, stdout/stderr capture, `proc:kill`), the delivery condition being "exit + both pipes at EOF", spawn failures throwing synchronously like listen; two sugars were stacked on later — `exec` is a literal straight-through of `run("sh", {"-c", cmd})` (shell semantics) and `execSync` is the popen synchronous face (read stdout to the end, a non-zero exit code raises); `process.spawn` then offers the streaming opposite — the three stdio streams handed over directly as ordinary `loop.net` socks, the exit callback aligned with Node's `'exit'` (not waiting for the streams to drain), and half-close via `sock:shutdown`. The whole handle family's `unref`/`ref` puts the keep-alive ledger in the user's hands — handles run as usual, they just can be "present but not keeping anyone around", and background periodic tasks and bystanders no longer tie the script's lifetime. There is also an automatic drain at the end of a script — once the main block of `luna script.lua`/`luna -e` ends normally, handles still holding up the loop are automatically run to empty and then exit (Node's "event loop runs to empty" contract); a main block erroring is not drained, the REPL is not drained, and a `^C` landing in the drain segment still yields 130.
+keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node,后来又补齐目录面(appendFile/readdir/mkdir/rmdir/unlink/rename,读法仍是同一张契约);再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约,`sock:peer/sockname` 与 `server:address` 给出地址面(inet/inet6/unix 三族,TLS 与 UDP 两面同款,TLS 端从手搓 fd 直读内核);`loop.udp` 再补上数据报一面(bind 常驻收包、send 按包一次性回调,bind 冲突同步抛错);`fs.watch` 又补上观察的一面——目录变化的常驻事件回调(inotify 接线);`loop.signal` 再把 Unix 信号接进同一张契约(SIGTERM 优雅退出是主场;SIGINT/SIGUSR1 各有主人,拒绝注册);`loop.dns` 把 net.connect 内部用的线程池解析器独立成面(lookup/reverse,getaddrinfo 直通车);`net.connectTls` 与 `net.listenTls` 在 net 面上叠出 TLS 两端——uv_poll 驱动手搓 fd 上的 OpenSSL 状态机(握手、WANT_READ/WRITE 让路、pending 写缓冲、close_notify 即 EOF),证书校验默认开启、opts 可换 CA 或跳过,服务端只把完成握手的连接交给 onConn。`loop.http` 则是第一个纯 Lua 面——HTTP/1.1 客户端跑在 net.connect/connectTls 之上,一个请求一次聚合回调,body 按 content-length、chunked 或 EOF 三路分帧,重定向链与整请求超时也都在 Lua 里闭包成状态机,不动 C 内核一行;服务端一面同在 Lua 里——`http.listen` 把 net 的 server 接过来,整个请求落地才调 handler,res.send 三种重载写完整响应即关,handler 抛错补 500;大响应不必整块进内存——onHead/onData 把 body 转成流式观察,content-length 与无帧两路真增量,分帧判定照旧。`loop.os` 是唯一的同步一面——主机名、网卡、CPU、内存这些系统信息直读直返,不进循环,归在 loop 名下只因它同出自 libuv(后来按 Node os 的键名补齐 arch/release/EOL/userInfo/availableParallelism 五件,arch 把 uname 的 `x86_64`/`aarch64` 换成 Node 的 `x64`/`arm64`)。最新一批补上 `loop.process`:子进程的聚合执行(无 shell spawn、stdout/stderr 捕获、`proc:kill`),交付条件是"退出 + 双管道 EOF",spawn 失败像 listen 一样同步抛错,后来又叠了两个糖——`exec` 是 `run("sh", {"-c", cmd})` 的逐字直通(shell 语义),`execSync` 是 popen 同步面(读尽 stdout,非零退出码 raise);`process.spawn` 再给出流式反面——三路 stdio 直接交成普通的 `loop.net` sock,退出回调对齐 Node 的 `'exit'`(不等流排空),半关闭用 `sock:shutdown`。全句柄族的 `unref`/`ref` 把 keep-alive 的账本交到用户手里——句柄照常运行,只是可以"在,但不留人",后台周期任务与旁观者不再绑住脚本的寿命。脚本尾部还有一道自动排水——`luna script.lua`/`luna -e` 的主块正常结束后,loop 里还撑着的句柄被自动跑到空再退出(Node 的"事件循环跑到空"契约),主块出错不排、REPL 不排,`^C` 落在排水段照旧 130。
 
-**The underlying backend selection** (IOCP free of charge, and why io_uring is not planned but gained for free on libuv upgrade) is discussed in its own document: [event loop backend design](/loop-backend-design).
+**底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/loop-backend-design)。
 
-Get modules, plugins, highlighting and introspection solid first — once the runtime's "bones" have grown properly, the event loop can grow in the right place.
+先把模块、插件、高亮、内省做扎实——运行时的"骨头"长好了,事件循环才能长在正确的位置。
 
-## attach: a polling point, not an event loop
+## attach:轮询点,而非事件循环
 
-`luna --attach` lets one process observe another process's live state, and it has to still answer while the target is busy with arbitrary Lua code (even an infinite loop) or blocked in the line editor — this is essentially a concurrency problem, and its implementation deliberately **does not introduce** an event loop:
+`luna --attach` 让一个进程观测另一个进程的实时状态,要在目标忙于任意 Lua 代码(甚至死循环)或阻塞在行编辑器时仍能应答——这本质是个并发问题,而它的实现刻意**不引入**事件循环:
 
-- **Two polling points**. The target process exposes a non-blocking `serve.step()` in `lua/luna/serve.lua` (accept → read a line → pcall-evaluate → frame a reply). Only two places call it: the idle gaps of the REPL's main loop, and one opportunistic call inside the C counting hook every 100,000 instructions during script execution (the hook is suspended during polling and restored afterwards, and a nested `pcall` guarantees that a polling failure does not hurt user code). No new thread enters Lua, no epoll, the semantics stay purely synchronous;
-- **The signal is the doorbell**. An idle target blocked in replxx's line editing — replxx swallows EINTR internally and the same-thread notify is deliberately ignored on top — so `luna_line.c` has a dedicated helper thread: the SIGUSR1 handler only writes one byte to a pipe (async-signal-safe), and the thread, on waking, synthesizes a `KEY_ENTER` into replxx (it must be a key code with the control modifier; a bare `\r` only rings a bell), the blocked `input()` returns an empty line, and the main loop returns to the polling point;
-- **The protocol is one line readable**: a request is one line of text, and a reply is the text frame `"OK\n"/"ERR\n"/"EXIT\n" + body + "\30\n"` (`EXIT` only detaches the client and does not kill the target), the newline after `\30` keeps the line reader from dangling; during command execution the kernel output is captured into the frame and mirrored to the target's terminal at the same time. `%` magic, the `?expr` help sugar, and the `\1complete` completion meta-line all reuse the target side's own modules (`luna.magic`, `luna.introspect`, `luna.complete`) — serve is only a bridge, not a second REPL implementation; client errors go to stderr, keeping stdout a clean result stream;
-- **The boundary of observability**: attach arrives only at **polling points**, so it sees the state of the target "in the gaps between its breaths", not the state at an arbitrary instruction boundary — which is exactly what distinguishes it from a debugger and from a future event loop.
+- **两个轮询点**。目标进程在 `lua/luna/serve.lua` 暴露一个非阻塞的 `serve.step()`(accept → 读一行 → pcall 求值 → 封帧应答)。调用它的只有两处:REPL 主循环的空闲间隙,和脚本执行期间 C 计数钩子里每 10 万条指令的一次顺带调用(钩子在轮询期间挂起、之后复原,嵌套 `pcall` 保证轮询失败不伤用户代码)。没有新线程进 Lua,没有 epoll,语义仍是纯同步的;
+- **信号即门铃**。空闲目标阻塞在 replxx 的行编辑上——replxx 内部吞掉 EINTR,同线程的 notify 又被刻意忽略,所以 `luna_line.c` 里有一个专用助手线程:SIGUSR1 处理器只往管道写一个字节(async-signal-safe),线程醒来对 replxx 合成一个 `KEY_ENTER`(必须是带 control 修饰的键码,裸 `\r` 只会响铃),被阻塞的 `input()` 返回空行,主循环回接到轮询点;
+- **协议一行可读**:请求就是一行文本,应答是 `"OK\n"/"ERR\n"/"EXIT\n" + 正文 + "\30\n"` 的文本帧(`EXIT` 只脱离客户端、不杀目标),`\30` 后的换行让行读取器不悬空;命令执行期间内核输出被捕获进帧并同时镜像到目标终端。`%` 魔法、`?expr` 帮助糖、以及 `\1complete` 补全元行全部复用目标端自己的模块(`luna.magic`、`luna.introspect`、`luna.complete`)——serve 只是桥,不是第二套 REPL 实现;客户端错误走 stderr,stdout 保持结果流干净;
+- **可观测性的边界**:attach 只在**轮询点**到达,所以它看到的是目标"呼吸的间隙"里的状态,而不是任意指令边界的状态——这正好把它和调试器、和未来的事件循环区分开。
 
-This is another instance of "mature pieces first": the counting hook (SIGINT already had one), replxx's synthetic key API, and luasocket's unix transport are all existing building blocks; the only new code is a few hundred lines of Lua bridging. The accompanying process policy: `SIGPIPE` is explicitly ignored (writes to a vanished peer surface as EPIPE errors, which `pcall` catches; the signal itself is what `pcall` cannot catch), and the attach socket is wrapped in umask plus bind and chmod double protection, readable and writable only by its creator.
+这是"成熟件优先"的又一次体现:计数钩子(SIGINT 已有)、replxx 的模拟按键 API、luasocket 的 unix 传输,全部是既有积木,新写的只有几百行 Lua 桥接。配套的进程策略:`SIGPIPE` 被显式忽略(对端消失的写操作浮出为 EPIPE 错误,`pcall` 接得住;信号本身是 `pcall` 接不住的),attach 套接字经 umask 包裹 bind + chmod 双保险做到仅创建者可读写。

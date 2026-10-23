@@ -1,77 +1,77 @@
 
-# Event loop backend design: libuv, io_uring, and where the boundaries of a self-built backend sit
+# 事件循环后端设计:libuv、io_uring 与自建后端的边界
 
-This is a **discussion-only document** (documentation before implementation, no code attached), answering one question: is stopping at libuv enough for luna's async IO foundation? Should io_uring be integrated now? Should Windows's IOCP be touched by hand?
+这是一篇**纯讨论文档**(先文档后实现,不附代码),回答一个问题:luna 的异步 IO 底座,停在 libuv 就够了吗?io_uring 要不要现在接?Windows 的 IOCP 要不要自己碰?
 
-**Conclusion up front**: neither platform mechanism has to be written by hand. Windows's IOCP — libuv already rides on it underneath, so it comes for free; io_uring likewise does not have to be written by hand: libuv upstream is integrating it incrementally, and luna's only obligation is to keep its libuv integration solid (pinned version, full regression on upgrade); once it matures, upgrading gets it for free. luna does not plan a liburing binding, does not build a second backend, and does not pre-build an abstraction layer for a hypothetical second backend. Every judgement below comes with its reasons.
+**结论先行**:两大平台机制都不必自己写——Windows 的 IOCP,libuv 底层走的就是它,这是"白送"的;io_uring 同样不用自己写,libuv 上游正在渐进集成它,luna 的义务只是把 libuv 的适配做稳(锁版本、升级时全量回归),等它成熟,升级即得。luna 不立项 liburing 绑定,不建第二后端,也不为假想的第二后端预建抽象层。下面每个判断给出理由。
 
-## 1. Current state: libuv as the single backend, all three platforms covered in one shot
+## 一、现状:libuv 单后端,三大平台一次拿全
 
-luna already has an opt-in event loop: the `loop` module exposes the Node-named timer/immediate APIs plus `run`/`stop`, and `loop.fs` then puts `readFile`/`writeFile`/`stat` onto the libuv thread pool, with callbacks landing back on the loop thread. The pinned libuv is 1.53.0 (`deps/libuv`, statically linked, single binary unchanged; the 2026-09 upgrade exercise from 1.44.2 — zero changes in product code, the single test assertion relaxed to a range because 1.53 moved timers' relative ordering after check, full regression green).
+luna 已有 opt-in 的事件循环:`loop` 模块提供 Node 命名的 timer/immediate 与 `run`/`stop`,随后 `loop.fs` 把 `readFile`/`writeFile`/`stat` 放上 libuv 线程池,回调落回循环线程。锁定的 libuv 是 1.53.0(`deps/libuv`,静态链接,单二进制不变;2026-09 从 1.44.2 升级演练——产品代码零改动,唯一一处测试断言因 1.53 把 timers 相移到 check 之后而放宽为区间,全量回归绿)。
 
-The decisive fact is libuv's backend mapping: **IOCP on Windows, epoll on Linux, kqueue on macOS/BSD**, the same API dispatching automatically. This means:
+关键事实是 libuv 的后端映射:**Windows 上是 IOCP,Linux 上是 epoll,macOS/BSD 上是 kqueue**,同一套 API 自动分发。这意味着:
 
-- luna's async file and socket IO on Windows is already running on IOCP underneath — **"IOCP need not be written by hand" is not a trade-off conclusion, it is a finished fact**;
-- a hand-written IOCP wrapper (registering overlapped IO, completion-port queuing, cancellation semantics, the zero-byte read trick of `WSARecv`) would re-step in every hole libuv has spent a decade and more filling, buying nothing but "one less abstraction" — and that abstraction is precisely what paying for libuv buys;
-- **behavioral consistency** across three platforms is libuv's job (for instance `uv_fs_*` follows thread-pool semantics uniformly on every platform), while a hand-written wrapper would have to prove equivalence per platform.
+- luna 今天在 Windows 上的异步文件与套接字 IO,底层已经走在 IOCP 上——**"IOCP 不用自己写"不是权衡结论,是既成事实**;
+- 自己写 IOCP 封装(注册重叠 IO、完成端口排队、取消语义、`WSARecv` 的零字节读技巧)要重新踩 libuv 踩过十几年的坑,换来的只有"少一层抽象"——而这一层抽象正是我们买 libuv 时想买的东西;
+- 三平台的**行为一致性**由 libuv 负责(比如 `uv_fs_*` 在各平台统一走线程池语义),自己写的封装则要逐平台证明等价。
 
-So the verdict of this section is a single sentence: **libuv as the single backend already covers the event mechanisms of all three kernels, so any proposal of "adding another backend" must first answer what libuv is missing.**
+所以现状这一节的判断只有一句:**libuv 单后端已经覆盖三大内核的事件机制,任何"再接一个后端"的提议都必须先回答 libuv 缺了什么。**
 
-## 2. io_uring: not integrated; wait for libuv to supply it
+## 二、io_uring:不接,等 libuv 供给
 
-io_uring is Linux's native async IO interface since 5.1: userland and kernel share a pair of ring buffers, submission and completion are batched, and both theoretical throughput and syscall overhead beat epoll. It deserves a serious evaluation, but the conclusion is not "when do we integrate it" but "**we simply do not integrate it**" — libuv upstream has already boarded this path, and following it gets it for free. The reasons fall into three layers.
+io_uring 是 Linux 5.1 起的原生异步 IO 接口:用户态与内核共享一对环形缓冲区,提交/收获批量化,理论吞吐与 syscall 开销都优于 epoll。它值得认真评估,但结论不是"我们什么时候接",而是"**我们根本不接**"——libuv 上游已经把这条路上车,跟着它走就能白得。理由分三层。
 
-### 2.1 Integration status on libuv's mainline: incremental, conservative, ongoing
+### 2.1 libuv 主线的集成状况:渐进、保守、持续
 
-libuv's mainline introduced io_uring **on file IO** from 1.45.0 (replacing parts of the thread-pool path), and went back and forth on its default toggle after a sandbox-environment compatibility incident; in the pinned version 1.53.0 at the time of writing, file IO goes through the `uv__iou` channel (turnable off with `UV_USE_IO_URING`, unsupported kernels/operations fall back to the thread pool item by item), epoll batching has also been merged in, while real network completion semantics are still progressing upstream — incremental, one domain first, degrading per environment, sandbox fallback logic all built in. This chain of facts yields exactly one judgement:
+libuv 主线从 1.45.0 起**在文件 IO 上**引入 io_uring(替代部分线程池路径),并因沙箱环境的兼容事故经历过"默认开关"的反复调整;本文撰写时的锁定版本 1.53.0 里,文件 IO 走 `uv__iou` 通道(`UV_USE_IO_URING` 可关停,不支持的内核/操作逐项回退线程池),epoll 批处理亦已并入,而真正的网络完成语义仍在上游推进——渐进、单领域先行、按环境降级,沙箱回退逻辑全部内置。这条事实链给出的判断恰恰是:
 
-- libuv's io_uring integration is **incremental and cautious** — one domain first, fallable, degrading per environment; precisely the engineering posture io_uring's reality (see 2.3) demands;
-- the completion timing is decided by libuv's roadmap: luna **need not and cannot** maintain a parallel path of its own — two io_uring integrations would only turn "following upstream" into "maintaining a fork";
-- hence luna's entire io_uring strategy collapses into one sentence: **keep the libuv integration solid, wait for the integration to mature, get it on upgrade.**
+- libuv 对 io_uring 的集成是**渐进且谨慎**的——单领域先行、可回退、按环境降级,这正是 io_uring 的现实(见 2.3)所需要的工程姿势;
+- 集成的完成时点由 libuv 的路线图决定,luna **不需要也不能**在旁边并行修一条自己的路:两套 io_uring 接入只会让"跟随上游"变成"维护分叉";
+- 因此 luna 对 io_uring 的全部策略浓缩成一句:**把 libuv 适配做稳,等集成成熟,升级即得。**
 
-### 2.2 Benefit side: luna's load shape never reaches the bottleneck in the first place
+### 2.2 收益侧:luna 的负载形状本就够不到瓶颈
 
-io_uring's gains concentrate in the **massively many concurrent connections + high-frequency small IO** scenario — proxies, storage engines, message queues serving hundreds of thousands of requests per second. luna's positioning is a REPL and scripting runtime:
+io_uring 的收益集中在**海量并发连接 + 高频小 IO**的场景——每秒数十万请求的代理、存储引擎、消息队列。luna 的定位是 REPL 与脚本运行时:
 
-- `loop.fs` already moves file IO to the thread pool, so the main thread is never waiting on disk anyway;
-- a typical script's concurrency is "a few dozen handles", where epoll's syscall overhead is microsecond-scale noise;
-- the REPL interaction path (attach, completion) goes over unix socket + a counting hook, unrelated to the IO backend.
+- `loop.fs` 已经把文件 IO 移到线程池,主线程本来就不在等磁盘;
+- 典型脚本的并发量级是"几十个句柄",epoll 在这个量级的 syscall 开销是微秒级噪音;
+- REPL 交互路径(attach、补全)走的是 unix socket + 计数钩子,与 IO 后端无关。
 
-**With no profile data proving epoll is the bottleneck, integrating io_uring has no benefit-side justification — and once libuv's integration matures, even this premise need not be verified by ourselves: upgrade, run the full regression, and the result speaks for itself.**
+**没有 profile 数据证明 epoll 是瓶颈,接 io_uring 就没有收益侧理由——而 libuv 集成成熟之后,连这个前提都不必我们自己验证:升级、跑全量回归,结果自己会说话。**
 
-### 2.3 Cost side: io_uring's entire complexity is left to libuv
+### 2.3 成本侧:io_uring 的复杂性全部留给 libuv
 
-- **Kernel barrier**: io_uring's capability drifts with kernel version (basic usability from 5.1; buffer registration, multishot, `IORING_OP_*` extensions scattered across 5.19/6.x) — feature detection and the degradation matrix are maintained by libuv, untouched by luna;
-- **Sandbox prohibition**: many container environments disable io_uring via seccomp, and each failing call must fall back per API to epoll — that fallback logic also lives inside libuv, while luna's regression tests only verify "behavior unchanged after upgrade";
-- **Implementation discipline**: if self-integrating io_uring were to happen, only liburing would be permitted and hand-written syscall wrappers forbidden — but the correct answer is that it never happens: io_uring's ABI evolves fast and its semantics are fine-grained; racing the kernel ABI is the libuv team's profession, not luna's.
+- **内核门槛**:io_uring 的能力随内核版本漂移(5.1 基础可用,缓冲注册、multishot、`IORING_OP_*` 扩展散布在 5.19/6.x)——特性检测与降级矩阵由 libuv 维护,luna 不碰;
+- **沙箱封禁**:大量容器环境以 seccomp 禁用 io_uring,调用失败要逐 API 回退 epoll——回退逻辑同样活在 libuv 里,luna 的回归测试只验证"升级后行为不变";
+- **实现纪律**:自接 io_uring 若发生,只许用 liburing、禁止手写 syscall 封装——但正确的答案是不发生:io_uring 的 ABI 演进快、语义细,与内核 ABI 赛跑是 libuv 团队的专业,不是 luna 的。
 
-## 3. Layered abstraction: the second backend is not planned, and the abstraction layer is withdrawn with it
+## 三、分层抽象:第二后端不立项,抽象层随之撤下
 
-The nine faces of `loop` facing Lua — **timer** (setTimeout/setInterval), **fs** (the full async file surface plus watch), **net** (TCP/unix plus both TLS ends), **process** (run/spawn/exec), **udp**, **dns**, **os** (synchronous host information), **signal** (^C already handled by the prepare hook), plus the pure Lua **http** face — continue to evolve as luna's own API, independent of backend choice: except for http, which sits on the net face, all sit on libuv.
+`loop` 面向 Lua 的九个面——**timer**(setTimeout/setInterval)、**fs**(全量异步文件面 + watch)、**net**(TCP/unix + TLS 两端)、**process**(run/spawn/exec)、**udp**、**dns**、**os**(同步主机信息)、**signal**(^C 已由 prepare 钩子承接),外加纯 Lua 的 **http** 面——继续作为 luna 自己的 API 演进,这与后端选择无关:除 http 架在 net 面上外,全部架在 libuv 上。
 
-The once-imagined "backend interface layer" (splitting the inside of `luna_loop.c` into a replaceable backend) had exactly one realistic motive: self-integrating io_uring. Since io_uring belongs to libuv, **this abstraction layer loses its justification and is not scheduled**. Paying abstraction cost for a nonexistent second backend is the same mistake as self-integrating io_uring, just with a smaller bill.
+曾经设想的"后端接口层"(把 `luna_loop.c` 内部拆成可替换后端)唯一现实的动机是自接 io_uring;既然 io_uring 归属 libuv,**这层抽象失去论据,不排期**。为不存在的第二后端预付抽象成本,和自接 io_uring 是同一种错误,只是金额小一些。
 
-luna's "integration obligation" toward libuv therefore converges to three items, all already in existing practice:
+luna 对 libuv 的"适配义务"因此收敛为三条,都已落在现有流程里:
 
-1. **Pin the version**: the `deps/libuv` submodule pins a specific version (currently 1.53.0), so behavior changes are traceable;
-2. **Regression on upgrade**: raising libuv goes through the ordinary dependency upgrade flow — the full ctest (including the loop/fs/net behavior nails) must be all green before landing;
-3. **Use the public API only**: luna does not touch libuv internals, so upstream refactors do not hurt luna.
+1. **锁版本**:`deps/libuv` 子模块钉住具体版本(现 1.53.0),行为变化可追溯;
+2. **升级即回归**:升 libuv 走普通依赖升级流程——全量 ctest(含 loop/fs/net 的行为钉子)必须全绿才落;
+3. **只用公开 API**:luna 不碰 libuv 内部结构,上游重构不伤及 luna。
 
-## 4. Three-backend comparison
+## 四、三后端对比
 
-| Dimension | epoll (via libuv) | IOCP (via libuv) | io_uring (via libuv) |
+| 维度 | epoll(经 libuv) | IOCP(经 libuv) | io_uring(经 libuv) |
 | --- | --- | --- | --- |
-| Readiness/completion model | readiness notification, read once the fd is ready | completion notification, overlapped IO | completion notification, shared ring queue |
-| luna's current state | in use on Linux, 1.53.0 | already in use on Windows (free) | file IO arrived with 1.53.0; the network face is still on upstream's road |
-| Code to write | no | **no** | **no** — follow the libuv upgrade |
-| Beneficiary scenario | ordinary concurrency, sufficient | same | massively many concurrency / high-frequency small IO (luna has no such shape yet) |
-| Kernel/system barrier | all Linux versions | all Windows versions | degradation matrix maintained by libuv |
-| Sandbox compatibility | unimpeded | unimpeded | fallback logic maintained by libuv |
-| Maintained by | libuv upstream | libuv upstream | libuv upstream |
-| Verdict | **keep** | **keep, zero action** | **not planned, free on upgrade** |
+| 就绪/完成模型 | 就绪通知,fd 就绪后读 | 完成通知,重叠 IO | 完成通知,共享环形队列 |
+| luna 现状 | Linux 在用,1.53.0 | Windows 已在用(白送) | 文件 IO 已随 1.53.0 到货;网络面仍在上游路上 |
+| 需要写代码吗 | 否 | **否** | **否**——跟随 libuv 升级 |
+| 收益场景 | 常规并发,足够 | 同左 | 海量并发/高频小 IO(luna 尚无此形状) |
+| 内核/系统门槛 | 全版本 Linux | Windows 全版本 | 降级矩阵由 libuv 维护 |
+| 沙箱兼容 | 无障碍 | 无障碍 | 回退逻辑由 libuv 维护 |
+| 维护方 | libuv 上游 | libuv 上游 | libuv 上游 |
+| 结论 | **保持** | **保持,零动作** | **不立项,升级白得** |
 
-## 5. Conclusion and roadmap
+## 五、结论与路线
 
-1. **Phase one (now)**: make libuv as the single backend solid — the four faces of `loop` (timer/fs/net/signal) keep growing on libuv as the only foundation, semantics nailed by tests.
-2. **io_uring: not planned.** No liburing binding, no second backend, no pre-built abstraction layer for it. How far libuv's integration has progressed, luna reaches by the same distance through **upgrading libuv + running the full regression** — the only strategy, and a zero-cost one.
-3. **IOCP**: not on the list. It is already inside libuv; that is the conclusion.
+1. **阶段一(现在)**:libuv 单后端做稳——`loop` 的四面(timer/fs/net/signal)继续以 libuv 为唯一底座生长,语义由测试钉死。
+2. **io_uring:不立项。**不建 liburing 绑定,不建第二后端,不为它预建抽象层。libuv 的集成成熟到哪一步,luna 通过**升级 libuv + 全量回归**吃到哪一步——这是唯一策略,也是零成本策略。
+3. **IOCP**:不设事项。它已经在 libuv 里,这就是结论。

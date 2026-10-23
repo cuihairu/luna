@@ -227,7 +227,7 @@ jobs:
   collect:
     name: Collect & publish nightly
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: write # 滚动 nightly Release（建/移 tag/清旧传新）需要

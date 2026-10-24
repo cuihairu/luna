@@ -9,10 +9,7 @@
 <p align="center">A batteries-included Lua runtime for scripting, tooling, and lightweight services</p>
 
 <p align="center">
-  <a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a>
-  <a href="https://github.com/cuihairu/luna/actions/workflows/daily-build.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily-build.yml?label=nightly&style=flat-square"></a>
-  <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua">
-  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+<a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a> <a href="https://github.com/cuihairu/luna/actions/workflows/daily-build.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily-build.yml?label=nightly&style=flat-square"></a> <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua"> <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
 </p>
 
 <p align="center">

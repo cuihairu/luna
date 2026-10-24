@@ -34,7 +34,7 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-**Windows 源码构建同面支持**:交付面与验证面都在 `windows-latest` 上构建与跑全量 ctest,依赖装配走 vcpkg 静态三元组(`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`,zlib 与 openssl),无 brew;安装走 `install.ps1`。此前记的「Windows 不在支持面」(replxx 桥、unix 域 socket 路径)已随编译期阻碍消化清掉,现况见 [FAQ](/other/faq)。
+**Windows 源码构建同面支持**:交付面与验证面都在 `windows-latest` 上构建与跑全量 ctest,依赖装配走 vcpkg 静态三元组(`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`,zlib 与 openssl),无 brew;安装走 `install.ps1`。此前记的「Windows 不在支持面」(replxx 桥、unix 域 socket 路径)已随编译期阻碍消化清掉,现况见 [FAQ](/zh/other/faq)。
 
 ### 可选:启用 crypto 模块
 

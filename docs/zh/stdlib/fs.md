@@ -1,6 +1,6 @@
 # stdlib · fs
 
-文件系统。后端 [luafilesystem](https://lunarmage.co.uk/projects/luafilesystem/)(lfs):**lfs 的完整 API 原样可达**(`attributes`/`dir`/`mkdir` 等,经 `__index` 透传),上面再铺一层 Node 风格的同步便利。异步文件操作(读写/目录/静态)在 [loop](/guide/loop) 的 `loop.fs`,不在本页。
+文件系统。后端 [luafilesystem](https://lunarmage.co.uk/projects/luafilesystem/)(lfs):**lfs 的完整 API 原样可达**(`attributes`/`dir`/`mkdir` 等,经 `__index` 透传),上面再铺一层 Node 风格的同步便利。异步文件操作(读写/目录/静态)在 [loop](/zh/guide/loop) 的 `loop.fs`,不在本页。
 
 ## API
 

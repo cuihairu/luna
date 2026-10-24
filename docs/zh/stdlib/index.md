@@ -6,37 +6,37 @@
 
 | 模块 | 一句话 | 后端 | 页面 |
 | --- | --- | --- | --- |
-| json | JSON 编解码(附 Node 式 `parse`/`stringify` 别名) | dkjson | [json](/stdlib/json) |
-| fs | 文件系统:Node 式同步便利 + 完整 lfs 面 | luafilesystem | [fs](/stdlib/fs) |
-| path | 路径处理,Node `path` 同款 API | 纯 Lua | [path](/stdlib/path) |
-| util | `format`/`inspect`/`parseArgs`/`parseEnv`/`styleText`/`debuglog`,Node v24 语义 | 纯 Lua | [stdlib/util](/stdlib/util) |
-| events | EventEmitter:on/once/emit/错误契约 | 纯 Lua | [events](/stdlib/events) |
-| stream | Readable/Writable/Transform/pipe/背压 | 纯 Lua | [stream](/stdlib/stream) |
-| net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/stdlib/net) |
-| http | 一行起服 `serve()` + luasocket 客户端面 | luasocket + 纯 Lua | [http](/stdlib/http) |
-| crypto | sha1/256/384/512、HMAC、随机字节(需 OpenSSL) | luaossl | [crypto](/stdlib/crypto) |
-| console | Node console 面:log/table/time/count/group 族 | 纯 Lua | (见 [Node 对照](/node-parity)) |
-| process | Node process 同步子集:argv/env/cwd/exit/stdio | 纯 Lua | (见 [Node 对照](/node-parity)) |
-| querystring | URL 查询串编解码(Node 语义) | 纯 Lua | (见 [Node 对照](/node-parity)) |
-| url | URL 拆解/重组/解析(legacy 面) | 纯 Lua | (见 [Node 对照](/node-parity)) |
-| assert | Node assert 面:assert/equal/strictEqual/deepEqual/deepStrictEqual/throws 族 | 纯 Lua | (见 [Node 对照](/node-parity)) |
+| json | JSON 编解码(附 Node 式 `parse`/`stringify` 别名) | dkjson | [json](/zh/stdlib/json) |
+| fs | 文件系统:Node 式同步便利 + 完整 lfs 面 | luafilesystem | [fs](/zh/stdlib/fs) |
+| path | 路径处理,Node `path` 同款 API | 纯 Lua | [path](/zh/stdlib/path) |
+| util | `format`/`inspect`/`parseArgs`/`parseEnv`/`styleText`/`debuglog`,Node v24 语义 | 纯 Lua | [stdlib/util](/zh/stdlib/util) |
+| events | EventEmitter:on/once/emit/错误契约 | 纯 Lua | [events](/zh/stdlib/events) |
+| stream | Readable/Writable/Transform/pipe/背压 | 纯 Lua | [stream](/zh/stdlib/stream) |
+| net | TCP/UDP 同步 socket 与一行起服 `serve()` | luasocket | [net](/zh/stdlib/net) |
+| http | 一行起服 `serve()` + luasocket 客户端面 | luasocket + 纯 Lua | [http](/zh/stdlib/http) |
+| crypto | sha1/256/384/512、HMAC、随机字节(需 OpenSSL) | luaossl | [crypto](/zh/stdlib/crypto) |
+| console | Node console 面:log/table/time/count/group 族 | 纯 Lua | (见 [Node 对照](/zh/node-parity)) |
+| process | Node process 同步子集:argv/env/cwd/exit/stdio | 纯 Lua | (见 [Node 对照](/zh/node-parity)) |
+| querystring | URL 查询串编解码(Node 语义) | 纯 Lua | (见 [Node 对照](/zh/node-parity)) |
+| url | URL 拆解/重组/解析(legacy 面) | 纯 Lua | (见 [Node 对照](/zh/node-parity)) |
+| assert | Node assert 面:assert/equal/strictEqual/deepEqual/deepStrictEqual/throws 族 | 纯 Lua | (见 [Node 对照](/zh/node-parity)) |
 
 ## Data-Format — 数据格式编解码
 
 | 模块 | 一句话 | 后端 | 页面 |
 | --- | --- | --- | --- |
-| csv | RFC 4180 CSV 编解码与逐行迭代 | LPeg | [csv](/stdlib/csv) |
-| ini | 经典 .ini 编解码 | LPeg | [ini](/stdlib/ini) |
-| toml | TOML v1.1 编解码,datetime 组件表 | tomlc17 (C) | [toml](/stdlib/toml) |
-| yaml | YAML 1.1 编解码、多文档 | lyaml | [yaml](/stdlib/yaml) |
-| xml | DOM 编解码 + SAX 透传 | expat (lxp) | [xml](/stdlib/xml) |
-| zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |
+| csv | RFC 4180 CSV 编解码与逐行迭代 | LPeg | [csv](/zh/stdlib/csv) |
+| ini | 经典 .ini 编解码 | LPeg | [ini](/zh/stdlib/ini) |
+| toml | TOML v1.1 编解码,datetime 组件表 | tomlc17 (C) | [toml](/zh/stdlib/toml) |
+| yaml | YAML 1.1 编解码、多文档 | lyaml | [yaml](/zh/stdlib/yaml) |
+| xml | DOM 编解码 + SAX 透传 | expat (lxp) | [xml](/zh/stdlib/xml) |
+| zlib | compress/decompress 一发式 + 流式 deflate/inflate | lua-zlib | [zlib](/zh/stdlib/zlib) |
 
 ## Dev tooling — 开发工具面
 
 | 模块 | 一句话 | 后端 | 页面 |
 | --- | --- | --- | --- |
-| logging | 级别化日志,console/文件/滚动文件/socket appender(上游原样透出) | lualogging | [logging](/stdlib/logging) |
+| logging | 级别化日志,console/文件/滚动文件/socket appender(上游原样透出) | lualogging | [logging](/zh/stdlib/logging) |
 
 REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策略模块)同属这一类,通过 REPL 与[CLI 与 REPL](/guide/cli-repl) 使用,不占 require 名。
 
@@ -44,7 +44,7 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 
 不设独立 stdlib 页,入口在指南:[LuaRocks 包装](/guide/rocks)(`luna install` 等,包管理)、[目录插件](/guide/plugins)(扩展点接入)、[模块系统](/guide/modules)(`luna_modules/` 解析)。这一类的职责是"把外面的代码接进来",不是"再造外面的东西"——LuaRocks 只包装不自建 registry 即此口径。
 
-异步面(TCP/TLS/异步 fs/子进程/定时器,`require "loop"` 显式进入)单列在[事件循环](/guide/loop),其上的 coroutine 任务模型(`require "task"`,run/await/sleep/cancel)在[异步任务](/guide/tasks)——两处都是 opt-in 的第二世界,不并入四类,见架构页 rationale。
+异步面(TCP/TLS/异步 fs/子进程/定时器,`require "loop"` 显式进入)单列在[事件循环](/zh/guide/loop),其上的 coroutine 任务模型(`require "task"`,run/await/sleep/cancel)在[异步任务](/zh/guide/tasks)——两处都是 opt-in 的第二世界,不并入四类,见架构页 rationale。
 
 两个贯穿契约:
 

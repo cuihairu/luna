@@ -28,7 +28,7 @@ luna_modules/hello/
 - 没有 `main` 时用 `init.lua` 约定;
 - 清单经 dkjson 解析;结果照常进入 `package.loaded`,二次 `require` 直接命中缓存。
 
-清单骨架同样不必手敲:`luna new package mylib` 直接生成(package.json + init.lua,见[示例与脚手架](/guide/examples)),挪进 `luna_modules/` 即被解析。
+清单骨架同样不必手敲:`luna new package mylib` 直接生成(package.json + init.lua,见[示例与脚手架](/zh/guide/examples)),挪进 `luna_modules/` 即被解析。
 
 ## 内置模块
 
@@ -55,13 +55,13 @@ luna_modules/hello/
 | `stream` | 纯 Lua | 基于 events 的 Node 流 v1 面:`readable`/`writable`/`duplex`/`transform`(`_read`→`push`、`_write`/`_transform`+`_flush`、`write`/`end_`)、`pipe` 背压(write false 停推等 `drain` 续推、`unpipe`)、`highWaterMark` 记账(缺省 16 KiB);适配器 `duplexFromSock`(loop.net sock)、`readableFromChunks`(内存块)、`pushReadable`(onData 推式) |
 | `zlib` | lua-zlib | 流式 `deflate`/`inflate` + 一次性 `compress`/`decompress` 便捷层 |
 | `crypto` | luaossl | `sha256` 系列、`hmac`、`randombytes`(需构建期 OpenSSL) |
-| `loop` | libuv(C)+ 纯 Lua http | 异步面:timer/fs/net/process/udp/dns/os/signal/http,详见 [loop](/guide/loop) |
-| `task` | 纯 Lua | 结构化异步任务:`run`/`await`/`sleep`/`promise`/`promisify`,详见 [tasks](/guide/tasks) |
-| `logging` | lualogging(vendored) | 六级阈值 + log4j 式 appender,详见 [logging](/stdlib/logging) |
+| `loop` | libuv(C)+ 纯 Lua http | 异步面:timer/fs/net/process/udp/dns/os/signal/http,详见 [loop](/zh/guide/loop) |
+| `task` | 纯 Lua | 结构化异步任务:`run`/`await`/`sleep`/`promise`/`promisify`,详见 [tasks](/zh/guide/tasks) |
+| `logging` | lualogging(vendored) | 六级阈值 + log4j 式 appender,详见 [logging](/zh/stdlib/logging) |
 
-**格式模块的错误口径**(csv/ini/toml/yaml/xml 与 json 一致,详见[Node 方向选型](/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
+**格式模块的错误口径**(csv/ini/toml/yaml/xml 与 json 一致,详见[Node 方向选型](/zh/node-parity)):`decode`/`encode` 对坏数据**返回 `nil, err` 而不抛错**,错误消息带行列(`<fmt>: <原因> at line N, column M`,列按 UTF-8 字符计);参数类型错才 raise。toml 是例外中的例外:tomlc17 只报行号,消息是 `<原因> at line N`,没有列子句(数字实参照 `string.format` 的 `%s` 先转字符串,再按坏数据走 `nil, err`)。yaml 的行列也有分叉:坐标是**最后一个成功解析事件的起点**(lyaml 丢弃了 libyaml 自己的 problem_mark),常常不在出错那一行——实现语义如此,已用例钉住。`csv.lines` 是迭代器(nil 表示读完),坏输入只能 raise,喂不可信数据时自行 `pcall`。
 
-**path/querystring/url/process/console/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动、querystring 的确定性键序、process 的毫秒分辨率 hrtime、console 的毫秒计时与 Lua 形态单元等)在 [Node 方向选型](/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
+**path/querystring/url/process/console/util/events/stream 是 Node 语义模块**(非格式模块,不属上面的 `nil, err` 口径):没有"坏数据"可言,只有参数类型错——一律 raise;行为按 **Node v24 机器实证**逐函数钉版,与 Node 的有意分叉(`util.format` 的 `%x`/`%X` 扩展、inspect 的 Lua 语法形态与确定性键序、`pipe` 的错误联动、querystring 的确定性键序、process 的毫秒分辨率 hrtime、console 的毫秒计时与 Lua 形态单元等)在 [Node 方向选型](/zh/node-parity) 逐条勘定。stream 的 `end` 因关键字冲突拼作 `s:end_(...)`(`s["end"]` 同效,sock 同款先例)。
 
 ```lua
 local fs = require("fs")

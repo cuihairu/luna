@@ -75,11 +75,11 @@ watching /tmp/watchme — touch files there; ^C stops (exit 130)
 examples/automation/main.lua:30: interrupted
 ```
 
-web-scraper 只有 http://(luasocket 客户端面无 TLS,TLS 客户端走 [`loop.http` 的 connectTls](/guide/loop#loopnettlsconnecttls-listentls));离线走查配 `luna serve <目录>` 即可——对 JSON API 抓取时 `title` 是 `(none)`、`links` 计零,页面失败连接被拒时退出码 1。
+web-scraper 只有 http://(luasocket 客户端面无 TLS,TLS 客户端走 [`loop.http` 的 connectTls](/zh/guide/loop#loopnettlsconnecttls-listentls));离线走查配 `luna serve <目录>` 即可——对 JSON API 抓取时 `title` 是 `(none)`、`links` 计零,页面失败连接被拒时退出码 1。
 
 ### 常驻三例的 ^C 契约
 
-http-server / tcp-server / automation 都是"起服后等 ^C"的形状,背后是同一条循环契约:静默循环阻塞在 epoll 里时,libuv 内部重试 EINTR 不结束迭代,prepare 钩子看不到中断旗标([loop 页的 `^C` 条目](/guide/loop))——循环得自己转。三例各取一种口径:http-server 用 `http.serve` 内置的 100ms 心跳;tcp-server 的 `net.serve` 给 accept 挂 250ms 期限;automation 自己挂 100ms 心跳。示例即范本,照抄即可。
+http-server / tcp-server / automation 都是"起服后等 ^C"的形状,背后是同一条循环契约:静默循环阻塞在 epoll 里时,libuv 内部重试 EINTR 不结束迭代,prepare 钩子看不到中断旗标([loop 页的 `^C` 条目](/zh/guide/loop))——循环得自己转。三例各取一种口径:http-server 用 `http.serve` 内置的 100ms 心跳;tcp-server 的 `net.serve` 给 accept 挂 250ms 期限;automation 自己挂 100ms 心跳。示例即范本,照抄即可。
 
 ## luna new:内置脚手架
 

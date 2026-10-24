@@ -1,6 +1,6 @@
 # 异步任务
 
-`require "task"` 在 loop 之上铺一层 coroutine 任务模型:`task.run` 起协程,`task.await` 挂起等 promise,timer 复用 `loop.setTimeout`——不新增 loop API,本批对 C 的唯一改动是修一处既有崩溃(loop 回调原本落在创建句柄的线程上,协程里 setTimeout 会 pcall 到挂起线程,见[契约与边界](#契约与边界))。脚本尾自动排水([事件循环](/guide/loop)的 maybeDrain 契约)让睡着的任务活着;REPL 不排水,sleep 流属于 script / `-e` 用法。
+`require "task"` 在 loop 之上铺一层 coroutine 任务模型:`task.run` 起协程,`task.await` 挂起等 promise,timer 复用 `loop.setTimeout`——不新增 loop API,本批对 C 的唯一改动是修一处既有崩溃(loop 回调原本落在创建句柄的线程上,协程里 setTimeout 会 pcall 到挂起线程,见[契约与边界](#契约与边界))。脚本尾自动排水([事件循环](/zh/guide/loop)的 maybeDrain 契约)让睡着的任务活着;REPL 不排水,sleep 流属于 script / `-e` 用法。
 
 ## API
 

@@ -45,7 +45,7 @@ luna 的形态用三层模型讲清楚——**User Space(用户空间)/ Luna Run
 
 ## 与 Node.js 的关系:架构参考,不是身份
 
-luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模块解析、标准库形状、CLI 入口这些**习惯**照搬,因为它们在 Lua 生态里是公认好用的形态。但这不是身份:身份是 Lua 运行时,Node 对照只回答"体验为什么这样设计";凡是 Lua 语义更强的地方(require 缓存、chunk 与 `...`、官方搜索器),一律保持官方行为。逐模块能力对照见 [node-parity](/node-parity)。
+luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模块解析、标准库形状、CLI 入口这些**习惯**照搬,因为它们在 Lua 生态里是公认好用的形态。但这不是身份:身份是 Lua 运行时,Node 对照只回答"体验为什么这样设计";凡是 Lua 语义更强的地方(require 缓存、chunk 与 `...`、官方搜索器),一律保持官方行为。逐模块能力对照见 [node-parity](/zh/node-parity)。
 
 | 概念 | Node.js | luna |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ luna 的对齐目标是让 Lua 脚本获得接近 Node 的工程体验——模�
 | 包管理 | `npm install` + `package-lock.json` | `luna install`(包装 LuaRocks)+ `luna.lock`(版本 + 源 sha256,`--from-lock` 离线复现) |
 | 插件 | (n/a,靠包) | `plugins/` 目录 + `plugin.json`,就近遮蔽 |
 | 全局注入 | `process`/`Buffer` | `kernel`(REPL 另有 `In`/`Out` 全局) |
-| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` 随二进制(`loop` 为异步面);与 Node 逐模块的一一对照见 [node-parity](/node-parity) |
+| 标准库 | 内建 | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` 随二进制(`loop` 为异步面);与 Node 逐模块的一一对照见 [node-parity](/zh/node-parity) |
 
 差异是刻意的:Lua 的 require 缓存(`package.loaded`)、chunk 与 `...`、官方搜索器语义全部保持官方行为,luna 只在**搜索器序列中插入一环**,不做替换。
 
@@ -128,7 +128,7 @@ C 库怎么接进 Lua?luna 的答案一直是同一个:手写 `luaopen_*`(官方
 `lua/modules/*/init.lua`。lfs / luasocket / lua-zlib / luaossl / loop 五族绑定全是这
 个模式:单模块 50–300 行,类型映射显式、栈操作所见即所得、错误路径逐行可审——格式
 模块要求的「错误带行列」口径正落在这层。已落地的 xml/yaml/toml(见
-[Node 方向选型](/node-parity))沿用。
+[Node 方向选型](/zh/node-parity))沿用。
 
 | 候选 | 结论 |
 | --- | --- |

@@ -1,6 +1,6 @@
 # stdlib · stream
 
-Node 流的 v1 收窄面,纯 Lua,地基是 [events](/stdlib/events)。语义按 Node v24 钉版,勘定记录见[Node 方向选型](/node-parity)。与 socket 的对接(`duplexFromSock`)在 [loop](/guide/loop) 有完整的回显服务示例。
+Node 流的 v1 收窄面,纯 Lua,地基是 [events](/zh/stdlib/events)。语义按 Node v24 钉版,勘定记录见[Node 方向选型](/zh/node-parity)。与 socket 的对接(`duplexFromSock`)在 [loop](/zh/guide/loop) 有完整的回显服务示例。
 
 ## API
 
@@ -94,5 +94,5 @@ item1;item2;item3;
 ## 契约与边界
 
 - 记账:字符串按字节、其余值按 1 计(objectMode 恒开的简化);`highWaterMark` 缺省 16384,只做阈值不做字节精确;
-- 错误联动与 Node 裸 pipe 的差异是**勘定过的**:源 `error` 会 destroy 目标并 unpipe,目标 `error` 只 unpipe——详见 [Node 方向选型](/node-parity)的 stream 节;
+- 错误联动与 Node 裸 pipe 的差异是**勘定过的**:源 `error` 会 destroy 目标并 unpipe,目标 `error` 只 unpipe——详见 [Node 方向选型](/zh/node-parity)的 stream 节;
 - `end`/`finish` 后自动 destroy(autoDestroy 口径),`destroy(err)` 先 `error` 后 `close`,幂等。

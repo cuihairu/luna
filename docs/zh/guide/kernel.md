@@ -60,7 +60,7 @@
 - **`kernel.fuel(strikes?)`**:指令预算,以计数钩子的 strike 为单位(一次 strike ≈ 10 万条指令);钩子每次先查 `^C` 标志、再扣预算,扣到零即 `error("sandbox: instruction budget exhausted")`。设 0 等于不设;无参调用读当前值。
 - **`kernel.memcap(bytes?)`**:分配器字节上限,超限的分配返回失败(Lua 报 `not enough memory`);上限是运行中的值,不设(或 0)时 allocator 逐字节等价默认行为,设上才开始记账(收缩回收,双向记账)。
 
-两者是[沙箱](/guide/sandbox)资源限额层的底层旋钮:`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 翻译成这两个调用,设完后旋钮从 `kernel` 表摘除——信任模式下它们是普通可调 API,可用性不受影响。
+两者是[沙箱](/zh/guide/sandbox)资源限额层的底层旋钮:`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 翻译成这两个调用,设完后旋钮从 `kernel` 表摘除——信任模式下它们是普通可调 API,可用性不受影响。
 
 ## 内部面
 

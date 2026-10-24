@@ -1,6 +1,6 @@
 # stdlib · events
 
-Node `EventEmitter` 语义。`events.new()` 构造,方法挂在实例上。语义按 Node v24 实证钉版,选型记录见[Node 方向选型](/node-parity)。事件循环([loop](/guide/loop))与流([stream](/stdlib/stream))都架在它上面。
+Node `EventEmitter` 语义。`events.new()` 构造,方法挂在实例上。语义按 Node v24 实证钉版,选型记录见[Node 方向选型](/zh/node-parity)。事件循环([loop](/zh/guide/loop))与流([stream](/zh/stdlib/stream))都架在它上面。
 
 ## API
 

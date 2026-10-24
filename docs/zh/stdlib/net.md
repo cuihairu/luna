@@ -1,6 +1,6 @@
 # stdlib · net
 
-TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):**同步阻塞**模型,完整 `socket` 命名空间经 `require "socket"` 仍可达,本模块把常用工厂提到一层。事件循环一侧的异步面(`connect`/`listen`/`connectTls`/`listenTls`、Unix socket)在 [loop](/guide/loop) 的 `loop.net`,异步服务端与 TLS 都在那里;本页是同步阻塞面——一次性客户端,外加一行起的阻塞 TCP 服务 `net.serve`。
+TCP/UDP socket。后端 [luasocket](https://github.com/lunarmodules/luasocket):**同步阻塞**模型,完整 `socket` 命名空间经 `require "socket"` 仍可达,本模块把常用工厂提到一层。事件循环一侧的异步面(`connect`/`listen`/`connectTls`/`listenTls`、Unix socket)在 [loop](/zh/guide/loop) 的 `loop.net`,异步服务端与 TLS 都在那里;本页是同步阻塞面——一次性客户端,外加一行起的阻塞 TCP 服务 `net.serve`。
 
 ## API
 
@@ -45,7 +45,7 @@ ping	127.0.0.1	42618
 
 ## 用法
 
-回环一发:连接本机 [http](/stdlib/http) 服务取个响应头,也是脚本里最常见的姿势——
+回环一发:连接本机 [http](/zh/stdlib/http) 服务取个响应头,也是脚本里最常见的姿势——
 
 ```lua
 local net = require "net"
@@ -89,7 +89,7 @@ c:close()
 echo: hello
 ```
 
-handler 拿到的是 luasocket 原生 client(上表方法全可用),关不关由 handler 自己定;handler 里出错只打 stderr、服务照常接客;返回 `false` 干净收摊。要异步并发或 TLS 的服务端,去 [loop](/guide/loop) 的 `net.listen`/`net.listenTls`;要 HTTP 直接 [http.serve](/stdlib/http)。
+handler 拿到的是 luasocket 原生 client(上表方法全可用),关不关由 handler 自己定;handler 里出错只打 stderr、服务照常接客;返回 `false` 干净收摊。要异步并发或 TLS 的服务端,去 [loop](/zh/guide/loop) 的 `net.listen`/`net.listenTls`;要 HTTP 直接 [http.serve](/zh/stdlib/http)。
 
 DNS 解析:
 

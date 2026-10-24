@@ -31,7 +31,7 @@ luna 没有配置文件:全部行为开关经**环境变量**与**命令行开�
 | `--attach <pid>` | 接入另一个运行中的 luna 进程,见 [CLI 与 REPL](/guide/cli-repl) 的 attach 节 |
 | `--help` | 用法与示例 |
 
-子命令另有自己的参数面,不经此表:`luna serve [dir] [port]`(目录/端口不限顺序)见[标准库 · http](/stdlib/http);`luna ps` 是只读进程视图;`luna install/search/list/update` 透传内嵌 LuaRocks 自己的旗标(`--tree`、`--from-lock`…)见[包管理](/guide/rocks)。启动模式的完整清单见 [CLI 与 REPL](/guide/cli-repl)。
+子命令另有自己的参数面,不经此表:`luna serve [dir] [port]`(目录/端口不限顺序)见[标准库 · http](/zh/stdlib/http);`luna ps` 是只读进程视图;`luna install/search/list/update` 透传内嵌 LuaRocks 自己的旗标(`--tree`、`--from-lock`…)见[包管理](/guide/rocks)。启动模式的完整清单见 [CLI 与 REPL](/guide/cli-repl)。
 
 ## 落盘文件
 

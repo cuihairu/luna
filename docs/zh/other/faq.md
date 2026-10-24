@@ -13,7 +13,7 @@
 ## 与 Node.js / Bun / Deno 的关系
 
 - **不是 JS 运行时**,不跑 JavaScript/TypeScript
-- 模块解析、标准库 API、事件循环**刻意对齐 Node v24 语义**(见[Node 方向选型](/node-parity))
+- 模块解析、标准库 API、事件循环**刻意对齐 Node v24 语义**(见[Node 方向选型](/zh/node-parity))
 - `http.serve`/`stream`/`events`/`path`/`util` 等按 Node 实证钉版,但底层是纯 Lua + 成熟 C 库(luasocket、libuv 等),不是 V8
 
 ## 为什么不用 LuaRocks?
@@ -68,7 +68,7 @@ brew install openssl
 
 ## 为什么 `stream` 里的 `end` 事件要写成 `s:end_(...)` 或 `s["end"](...)`?
 
-`end` 是 Lua 关键字,不能作方法名直接调用。`stream` 统一约定:关键字冲突的方法拼下划线(`end_`),`s["end"](...)` 同效——loop 的 sock 撞过同一条限制,Node 的 `end` 在那里直接改名 `shutdown`(见[事件循环](/guide/loop)的半关闭节)。这是 Lua 语言层面的限制,不是 bug。
+`end` 是 Lua 关键字,不能作方法名直接调用。`stream` 统一约定:关键字冲突的方法拼下划线(`end_`),`s["end"](...)` 同效——loop 的 sock 撞过同一条限制,Node 的 `end` 在那里直接改名 `shutdown`(见[事件循环](/zh/guide/loop)的半关闭节)。这是 Lua 语言层面的限制,不是 bug。
 
 ## `csv.lines` 迭代器遇到坏输入直接 raise,怎么安全用?
 
@@ -127,7 +127,7 @@ p:parse()        -- 收尾,必须调用一次无参 parse
 ## `util.inspect` 与 `util.format` 的 `%j` 行为
 
 - `util.inspect`:Lua 语法形态输出(字符串加引号与转义、循环引用标 `[Circular *N]`、`depth` 截断);**键排序保确定性**——序列段在前,其余数字升序、字符串按字节序,连跑几次结果一致
-- `util.format("%j", v)`:JSON 序列化。dkjson 比浏览器 `JSON.stringify` 严(后者省略函数字段),函数/NaN/循环引用这类它拒绝的值,**回退 `util.inspect` 渲染而不抛**——`format("%j", {f = f})` 给 `{ f = <function ...> }`,环给 `{ self = [Circular *1] }`。这是勘定过的分叉,见 [Node 方向选型](/node-parity)
+- `util.format("%j", v)`:JSON 序列化。dkjson 比浏览器 `JSON.stringify` 严(后者省略函数字段),函数/NaN/循环引用这类它拒绝的值,**回退 `util.inspect` 渲染而不抛**——`format("%j", {f = f})` 给 `{ f = <function ...> }`,环给 `{ self = [Circular *1] }`。这是勘定过的分叉,见 [Node 方向选型](/zh/node-parity)
 
 ## 如何把 luna 嵌入到自己的 C/C++ 项目?
 

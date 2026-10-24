@@ -1,6 +1,6 @@
 # stdlib · http
 
-HTTP 的"一行起服"面:`http.serve()` 把起一个服务压到一次调用——静态目录或可编程 handler,两种模式同一入口。客户端面是 luasocket 的 `socket.http` 原样再导出(`request()` 等);事件循环一侧的异步客户端(重定向、超时、流式、TLS)在 `loop.http`,见 [loop](/guide/loop)。
+HTTP 的"一行起服"面:`http.serve()` 把起一个服务压到一次调用——静态目录或可编程 handler,两种模式同一入口。客户端面是 luasocket 的 `socket.http` 原样再导出(`request()` 等);事件循环一侧的异步客户端(重定向、超时、流式、TLS)在 `loop.http`,见 [loop](/zh/guide/loop)。
 
 ## serve:两种模式,一次调用
 
@@ -128,7 +128,7 @@ Content-Length: 0
 
 ## 起服与退出契约
 
-- 服务是**活句柄**:监听与一个内部心跳一起把事件循环撑住,脚本尾部自动排水([loop](/guide/loop) 的 maybeDrain 契约)不会在服务活着时结束进程——服务器就该一直跑;
+- 服务是**活句柄**:监听与一个内部心跳一起把事件循环撑住,脚本尾部自动排水([loop](/zh/guide/loop) 的 maybeDrain 契约)不会在服务活着时结束进程——服务器就该一直跑;
 - `^C` 落到 `loop.run()` 的 `interrupted` 错误:`luna serve` 与 `luna -e` 起服都即应,退出码 **130**;
 - `srv:close()` 之后心跳清掉,循环排空、进程正常收尾——测试与后台收尾用这个,不是 `^C`。
 

@@ -1,6 +1,6 @@
 # stdlib · util
 
-Node `util` 的 `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharacters`/`styleText`/`debuglog` 面(promisify/types 无 Lua 契约锚,明确不做)。语义按 Node v24.21.0 实证钉版,选型记录见[Node 方向选型](/node-parity)。
+Node `util` 的 `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharacters`/`styleText`/`debuglog` 面(promisify/types 无 Lua 契约锚,明确不做)。语义按 Node v24.21.0 实证钉版,选型记录见[Node 方向选型](/zh/node-parity)。
 
 ## API
 
@@ -14,9 +14,9 @@ Node `util` 的 `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharact
 | `util.styleText(fmt, text, opts?)` | 色名/`#RGB`/`#RRGGBB`/数组 → SGR 码包裹;默认非 TTY 原样返回 |
 | `util.debuglog(section)` | 返回函数;`NODE_DEBUG` 门控,命中时向 stderr 写 `SECTION PID: msg` |
 
-`format` 细节(与 Node v24 实测对齐):`%d`/`%f` 不截断,`%i` 向零截断;无格式符时参数以空格尾接;未知转换符原样保留;`%j` 走 [json](/stdlib/json) 编码。
+`format` 细节(与 Node v24 实测对齐):`%d`/`%f` 不截断,`%i` 向零截断;无格式符时参数以空格尾接;未知转换符原样保留;`%j` 走 [json](/zh/stdlib/json) 编码。
 
-`parseArgs`/`parseEnv`/`styleText`/`debuglog` 的逐项勘定与偏差账见[Node 方向选型](/node-parity)的 util 节。
+`parseArgs`/`parseEnv`/`styleText`/`debuglog` 的逐项勘定与偏差账见[Node 方向选型](/zh/node-parity)的 util 节。
 
 ## 用法
 

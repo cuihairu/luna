@@ -37,11 +37,11 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-macOS 另需 `brew install pkg-config autoconf cmake`。测试组清单与覆盖率插桩树的用法见[构建与自测](/other/build)。
+macOS 另需 `brew install pkg-config autoconf cmake`。测试组清单与覆盖率插桩树的用法见[构建与自测](/zh/other/build)。
 
 可选:安装 OpenSSL 开发头文件(`libssl-dev`)后重新 configure,zlib 之外的 crypto 模块(`sha256`、`hmac`、随机字节等)随之启用;未安装时构建照常成功,`require("crypto")` 会给出指引性错误。
 
-**Windows 原生可用**:四腿全矩阵转正(2026-10-08),nightly 四平台资产齐发,`install.ps1` 一键安装——见 [FAQ](/other/faq)。
+**Windows 原生可用**:四腿全矩阵转正(2026-10-08),nightly 四平台资产齐发,`install.ps1` 一键安装——见 [FAQ](/zh/other/faq)。
 
 ## 三十秒上手
 
@@ -71,7 +71,7 @@ luna -e 'require("net").serve("*", 9000, function(c)
   c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
 ```
 
-细节见[标准库 · http](/stdlib/http)与[标准库 · net](/stdlib/net)。
+细节见[标准库 · http](/zh/stdlib/http)与[标准库 · net](/zh/stdlib/net)。
 
 ## 启动方式
 
@@ -92,7 +92,7 @@ luna serve [dir] [port]  # 静态文件服务,^C 停止(见上「三十秒上手
 | `--no-serve` | 不建 attach 监听 socket |
 | `--help` | 用法与示例 |
 
-全部开关与环境变量见[配置与环境变量](/other/config)。
+全部开关与环境变量见[配置与环境变量](/zh/other/config)。
 
 着色策略:TTY 且非 `dumb` 终端时自动开启;`NO_COLOR` 环境变量强制关闭,`LUNA_COLOR=1` 强制开启;管道下自动降级为纯文本——脚本输出永远不会被污染。
 

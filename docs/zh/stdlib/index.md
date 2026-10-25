@@ -38,11 +38,11 @@
 | --- | --- | --- | --- |
 | logging | 级别化日志,console/文件/滚动文件/socket appender(上游原样透出) | lualogging | [logging](/zh/stdlib/logging) |
 
-REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策略模块)同属这一类,通过 REPL 与[CLI 与 REPL](/guide/cli-repl) 使用,不占 require 名。
+REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策略模块)同属这一类,通过 REPL 与[CLI 与 REPL](/zh/guide/cli-repl) 使用,不占 require 名。
 
 ## Ecosystem — 生态接入面
 
-不设独立 stdlib 页,入口在指南:[LuaRocks 包装](/guide/rocks)(`luna install` 等,包管理)、[目录插件](/guide/plugins)(扩展点接入)、[模块系统](/guide/modules)(`luna_modules/` 解析)。这一类的职责是"把外面的代码接进来",不是"再造外面的东西"——LuaRocks 只包装不自建 registry 即此口径。
+不设独立 stdlib 页,入口在指南:[LuaRocks 包装](/zh/guide/rocks)(`luna install` 等,包管理)、[目录插件](/zh/guide/plugins)(扩展点接入)、[模块系统](/zh/guide/modules)(`luna_modules/` 解析)。这一类的职责是"把外面的代码接进来",不是"再造外面的东西"——LuaRocks 只包装不自建 registry 即此口径。
 
 异步面(TCP/TLS/异步 fs/子进程/定时器,`require "loop"` 显式进入)单列在[事件循环](/zh/guide/loop),其上的 coroutine 任务模型(`require "task"`,run/await/sleep/cancel)在[异步任务](/zh/guide/tasks)——两处都是 opt-in 的第二世界,不并入四类,见架构页 rationale。
 

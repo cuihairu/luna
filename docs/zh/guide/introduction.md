@@ -39,7 +39,7 @@ Wall time: 6.000 ms
 
 ## 下一步
 
-- [快速上手](/guide/getting-started):构建与三种启动方式;
-- [CLI 与 REPL](/guide/cli-repl):魔法命令与会话模型;
-- [模块系统](/guide/modules):require 解析与清单;
-- [插件开发](/guide/plugins):四个扩展点与失败隔离。
+- [快速上手](/zh/guide/getting-started):构建与三种启动方式;
+- [CLI 与 REPL](/zh/guide/cli-repl):魔法命令与会话模型;
+- [模块系统](/zh/guide/modules):require 解析与清单;
+- [插件开发](/zh/guide/plugins):四个扩展点与失败隔离。

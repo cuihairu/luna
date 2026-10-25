@@ -112,7 +112,7 @@ luna 有两条依赖通道,管的事不同:
 | --- | --- | --- |
 | 装什么 | 自己(或团队)手写的目录包 | luarocks.org 的生态包 |
 | 版本管理 | 目录即版本(git 管) | `luna.lock` 管 |
-| 解析规则 | Node 式裸名上溯,见[模块系统](/guide/modules) | `package.path` 前置注入 |
+| 解析规则 | Node 式裸名上溯,见[模块系统](/zh/guide/modules) | `package.path` 前置注入 |
 | 典型内容 | 项目内部的业务模块 | inspect、lpeg 这类第三方库 |
 
 两者可共存,`require` 先看到谁由注入顺序决定(rocks 树前置在默认 path 之前)——重名时生态包赢,别给两者起同一个名。

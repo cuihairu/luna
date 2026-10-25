@@ -128,4 +128,4 @@ myapp/
 luna app/main.lua        # 裸名 hello 沿目录逐级上溯找到 luna_modules/
 ```
 
-细节见[模块系统](/guide/modules);给项目加插件(如自定义魔法命令)见[插件开发](/guide/plugins)。
+细节见[模块系统](/zh/guide/modules);给项目加插件(如自定义魔法命令)见[插件开发](/zh/guide/plugins)。

@@ -184,7 +184,7 @@ return {}
 
 > 也可用 `hl.set(fn)` 完全替换高亮器:`fn(text)` 返回**着色后的新文本**——返回非字符串或抛错,渲染就自动退回默认。想整套换着色逻辑时用它,只想换色板则 `set_style` 足够,`hl.reset()` 恢复默认高亮器。
 >
-> 作用面是**回显**:`Out[n]` 的值走 `highlight.render` 着色(上面的 `set_style` 就作用在这条链);输入行的实时着色是另一条链(replxx 的 16 色表 `color_map`,见 [CLI 与 REPL](/guide/cli-repl) 的高亮节),与这套 ANSI 样式表分开,`set_style` 改不到它。
+> 作用面是**回显**:`Out[n]` 的值走 `highlight.render` 着色(上面的 `set_style` 就作用在这条链);输入行的实时着色是另一条链(replxx 的 16 色表 `color_map`,见 [CLI 与 REPL](/zh/guide/cli-repl) 的高亮节),与这套 ANSI 样式表分开,`set_style` 改不到它。
 
 ### 4) 模块注入 — 注入一个带版本号的常量模块
 
@@ -226,7 +226,7 @@ In [1]: (require("app.version"))
 Out[1]: '1.2.3'
 ```
 
-外层括号把 `require` 截成单值——**新加载**的 `require` 会额外返回搜索器的 loader 数据,两值语义见[模块系统](/guide/modules)。
+外层括号把 `require` 截成单值——**新加载**的 `require` 会额外返回搜索器的 loader 数据,两值语义见[模块系统](/zh/guide/modules)。
 
 > 注入的值若是函数则作为 loader 使用(每次 `require` 都调用),若是普通值则包成恒返该值的 loader——行为与 `package.preload` 一致。
 

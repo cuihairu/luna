@@ -52,4 +52,4 @@ end)
 
 ## attach 通道上的错误
 
-`luna --attach` 的应答以 `\30` 封帧:`OK` 帧走 stdout、`ERR` 帧(完整 traceback)走 stderr——管道里拿到的是干净的结果流;目标崩溃时客户端得到 `attach: target went away`。见 [CLI 与 REPL](/guide/cli-repl#attach-接入一个运行中的-luna)。
+`luna --attach` 的应答以 `\30` 封帧:`OK` 帧走 stdout、`ERR` 帧(完整 traceback)走 stderr——管道里拿到的是干净的结果流;目标崩溃时客户端得到 `attach: target went away`。见 [CLI 与 REPL](/zh/guide/cli-repl#attach-接入一个运行中的-luna)。

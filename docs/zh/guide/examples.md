@@ -113,4 +113,4 @@ In [2]: %hello
 hello from the hello plugin
 ```
 
-package 模板落到 `luna_modules/` 后,解析规则见[模块系统](/guide/modules);plugin 模板的四个扩展点与失败隔离见[插件开发](/guide/plugins)。模板只是起步代码——生成之后,内容的所有权是你的。
+package 模板落到 `luna_modules/` 后,解析规则见[模块系统](/zh/guide/modules);plugin 模板的四个扩展点与失败隔离见[插件开发](/zh/guide/plugins)。模板只是起步代码——生成之后,内容的所有权是你的。

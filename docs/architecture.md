@@ -52,7 +52,7 @@ luna's shape is told by three layers — **User Space / Luna Runtime / Native Ru
 
 ## Relationship with Node.js: architectural reference, not identity
 
-luna's alignment target is to give Lua scripts an engineering experience close to Node's — module resolution, stdlib shape, CLI entry, these **habits** are copied verbatim, because they are the forms the Lua ecosystem has agreed work well. But this is not identity: the identity is a Lua runtime, and the Node comparison only answers "why the experience is designed this way"; wherever Lua semantics are stronger (require caching, chunks and `...`, the official searcher), official behavior is kept. The per-module capability comparison is on [node-parity](/node-parity).
+luna's alignment target is to give Lua scripts an engineering experience close to Node's — module resolution, stdlib shape, CLI entry, these **habits** are copied verbatim, because they are the forms the Lua ecosystem has agreed work well. But this is not identity: the identity is a Lua runtime, and the Node comparison only answers "why the experience is designed this way"; wherever Lua semantics are stronger (require caching, chunks and `...`, the official searcher), official behavior is kept. The per-module capability comparison is on [node-parity](/zh/node-parity).
 
 | Concept | Node.js | luna |
 | --- | --- | --- |
@@ -63,7 +63,7 @@ luna's alignment target is to give Lua scripts an engineering experience close t
 | Package management | `npm install` + `package-lock.json` | `luna install` (a LuaRocks wrapper) + `luna.lock` (version + source sha256, offline reproduction via `--from-lock`) |
 | Plugins | (n/a, rely on packages) | `plugins/` directory + `plugin.json`, shadowing in place |
 | Global injection | `process`/`Buffer` | `kernel` (the REPL additionally has `In`/`Out` globals) |
-| Stdlib | built-in | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` ships with the binary (`loop` is the async face); the per-module one-to-one comparison with Node is on [node-parity](/node-parity) |
+| Stdlib | built-in | `json`/`fs`/`net`/`http`/`csv`/`ini`/`toml`/`yaml`/`xml`/`zlib`/`crypto`/`path`/`util`/`events`/`stream` ships with the binary (`loop` is the async face); the per-module one-to-one comparison with Node is on [node-parity](/zh/node-parity) |
 
 The differences are deliberate: Lua's require caching (`package.loaded`), chunks and `...`, and official searcher semantics all keep official behavior; luna only **inserts one link into the searcher sequence** and does not replace anything.
 
@@ -130,7 +130,7 @@ The convention: candidates, the reason for selection (maintenance activity / API
 
 ### Binding layer — hand-written C luaopen bindings (no sol2)
 
-How are C libraries hooked into Lua? luna's answer has always been the same: hand-written `luaopen_*` (the official C API), registered through `register_c_modules` into `package.loaded` (luna_main.c, glob off), with the pure Lua convenience layer in `lua/modules/*/init.lua`. All five binding families — lfs / luasocket / lua-zlib / luaossl / loop — follow this pattern: 50–300 lines per module, explicit type mapping, stack operations visible at a glance, error paths reviewable line by line — which is exactly where the format modules' "errors carry line/column" convention lands. The already-landed xml/yaml/toml (see [node-parity](/node-parity)) continue it.
+How are C libraries hooked into Lua? luna's answer has always been the same: hand-written `luaopen_*` (the official C API), registered through `register_c_modules` into `package.loaded` (luna_main.c, glob off), with the pure Lua convenience layer in `lua/modules/*/init.lua`. All five binding families — lfs / luasocket / lua-zlib / luaossl / loop — follow this pattern: 50–300 lines per module, explicit type mapping, stack operations visible at a glance, error paths reviewable line by line — which is exactly where the format modules' "errors carry line/column" convention lands. The already-landed xml/yaml/toml (see [node-parity](/zh/node-parity)) continue it.
 
 | Candidate | Verdict |
 | --- | --- |

@@ -1,8 +1,6 @@
 [English](README.md) | [中文](README.zh.md)
 
-<p align="center">
-  <img src="assets/logo.svg" alt="luna logo" width="64"/>
-</p>
+<p align="center"><img src="assets/logo.svg" alt="luna logo" width="64"/> <a href="https://cuihairu.github.io/luna/zh/"><img src="https://img.shields.io/badge/docs-文档-blue" alt="docs"></a></p>
 
 <h1 align="center">luna</h1>
 

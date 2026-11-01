@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1080" viewBox="0 0 1280 1080" role="img" aria-labelledby="title desc" xml:lang="zh-CN">
+<title id="title">luna · 三层架构</title>
+<desc id="desc">User Space 为用户入口;Luna Runtime 为纯 Lua 层(模块、标准库、插件、REPL 策略),随二进制分发;Native Runtime 为薄 C 内核加 vendored 库。实线为标准接口/绑定,虚线为扩展点注册。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:Arial,'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b4d}.title{font-size:30px;font-weight:700}.name{font-size:22px;font-weight:700}.body{font-size:16px;fill:#435570}.small{font-size:14px;fill:#52647b}.layer{font-size:18px;font-weight:700;fill:#334155}.label{font-size:15px;fill:#435570;paint-order:stroke;stroke:#f8fafc;stroke-width:5px;stroke-linejoin:round}.edge{fill:none;stroke-linejoin:round}</style>
+<rect width="1280" height="1080" rx="20" fill="#f8fafc"/>
+<text x="40" y="48" class="title" text-anchor="start">luna · 三层架构</text>
+<text x="40" y="80" class="body" text-anchor="start">用户空间 / Luna 运行时 / 原生运行时 · Node.js 仅为架构参考,身份与内核仍是 Lua</text>
+
+<!-- ============ Layer 1: User Space ============ -->
+<g id="user-space" data-node="user-space">
+<rect x="40" y="120" width="1200" height="170" rx="14" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="64" y="150" class="layer" text-anchor="start">User Space · 用户空间</text>
+<rect x="70" y="180" width="262" height="88" rx="10" fill="#fff" stroke="#fdba74"/>
+<text x="90" y="212" class="name" text-anchor="start">你的脚本</text>
+<text x="90" y="238" class="body" text-anchor="start">luna script.lua · 构建 / 自动化</text>
+<rect x="352" y="180" width="262" height="88" rx="10" fill="#fff" stroke="#fdba74"/>
+<text x="372" y="212" class="name" text-anchor="start">REPL 会话</text>
+<text x="372" y="238" class="body" text-anchor="start">luna · 多行续行 · 魔法命令</text>
+<rect x="634" y="180" width="262" height="88" rx="10" fill="#fff" stroke="#fdba74"/>
+<text x="654" y="212" class="name" text-anchor="start">CLI</text>
+<text x="654" y="238" class="body" text-anchor="start">luna -e · luna --attach &lt;pid&gt;</text>
+<rect x="916" y="180" width="262" height="88" rx="10" fill="#fff" stroke="#fdba74"/>
+<text x="936" y="212" class="name" text-anchor="start">应用 / 轻量服务</text>
+<text x="936" y="238" class="body" text-anchor="start">http · net · 一行起服务</text>
+</g>
+
+<!-- ============ Layer 2: Luna Runtime ============ -->
+<g id="luna-runtime" data-node="luna-runtime">
+<rect x="40" y="370" width="1200" height="330" rx="14" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+<text x="64" y="400" class="layer" text-anchor="start">Luna Runtime · 纯 Lua,随二进制分发(lua/ 源码即文档)</text>
+<rect x="70" y="425" width="560" height="150" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="90" y="455" class="name" text-anchor="start">模块与包</text>
+<text x="90" y="482" class="body" text-anchor="start">luna_modules/ · Node 式解析(相对 require,逐级上溯)</text>
+<text x="90" y="508" class="body" text-anchor="start">manifest main · package.loaded 缓存语义</text>
+<text x="90" y="534" class="body" text-anchor="start">LuaRocks 包装 → .luna/rocks 树 · luna.lock 复现</text>
+<text x="90" y="560" class="small" text-anchor="start">只向 searcher 序列插入一环,不替换官方语义</text>
+<rect x="650" y="425" width="560" height="150" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="670" y="455" class="name" text-anchor="start">标准库 · 四类分法</text>
+<text x="670" y="482" class="body" text-anchor="start">Core:json fs path util events stream net http crypto</text>
+<text x="670" y="508" class="body" text-anchor="start">Data-Format:csv ini toml yaml xml zlib</text>
+<text x="670" y="534" class="body" text-anchor="start">Dev tooling:logging · repl/introspect/magic/complete/highlight</text>
+<text x="670" y="560" class="small" text-anchor="start">Ecosystem:plugins · LuaRocks · lua_modules 集成面</text>
+<rect x="70" y="590" width="560" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="90" y="620" class="name" text-anchor="start">插件</text>
+<text x="90" y="647" class="body" text-anchor="start">plugins/ · 三级查找(project → user → $LUNA_PLUGIN_PATH)</text>
+<text x="90" y="673" class="body" text-anchor="start">四个扩展点:magic.register · complete.add_source · highlight.set · 模块注入</text>
+<rect x="650" y="590" width="560" height="110" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="670" y="620" class="name" text-anchor="start">REPL 策略层</text>
+<text x="670" y="647" class="body" text-anchor="start">repl · complete · highlight · magic · introspect</text>
+<text x="670" y="673" class="body" text-anchor="start">serve(attach)· 失败隔离,不致命</text>
+</g>
+
+<!-- ============ Layer 3: Native Runtime ============ -->
+<g id="native-runtime" data-node="native-runtime">
+<rect x="40" y="780" width="1200" height="250" rx="14" fill="#edf5ff" stroke="#93b9e3" stroke-width="1.5"/>
+<text x="64" y="810" class="layer" text-anchor="start">Native Runtime · C 内核保持薄,只做 C 擅长且必须在 C 做的事</text>
+<rect x="70" y="835" width="560" height="170" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="90" y="865" class="name" text-anchor="start">C 内核(薄)</text>
+<text x="90" y="892" class="body" text-anchor="start">luna_main(CLI 入口)· luna_kernel(状态/绑定注册)</text>
+<text x="90" y="918" class="body" text-anchor="start">luna_line(replxx 桥)· luna_loop(libuv 布线)</text>
+<text x="90" y="944" class="body" text-anchor="start">luna_toml(tomlc17 桥)· luna_kernel 计数 hook</text>
+<text x="90" y="976" class="small" text-anchor="start">职责:signals · ms clock · isatty · output sink · replxx bridge</text>
+<rect x="650" y="835" width="560" height="170" rx="12" fill="#fff" stroke="#cbd5e1"/>
+<text x="670" y="865" class="name" text-anchor="start">vendored 库</text>
+<text x="670" y="892" class="body" text-anchor="start">Lua 5.5 · libuv · OpenSSL · replxx · luasocket</text>
+<text x="670" y="918" class="body" text-anchor="start">LPeg · lfs · lua-zlib · luaossl · tomlc17 · lyaml · expat</text>
+<text x="670" y="944" class="body" text-anchor="start">dkjson · argparse · scintillua · luarocks · lualogging</text>
+<text x="670" y="976" class="small" text-anchor="start">官方 Lua 为内核,升级 Lua 只触 deps/</text>
+</g>
+
+<!-- edges -->
+<path d="M640 290 V370" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="user-to-runtime" data-from="user-space" data-to="luna-runtime" d="M640 290 V370" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<path d="M640 700 V780" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="runtime-to-native" data-from="luna-runtime" data-to="native-runtime" d="M640 700 V780" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+<text x="655" y="342" class="label" text-anchor="start">标准接口(require · CLI · REPL · attach)</text>
+<text x="655" y="742" class="label" text-anchor="start">C 绑定(kernel 桥)</text>
+<text x="60" y="1055" class="small" text-anchor="start">实线:标准接口 / 绑定 · 图示为架构分层,模块细节见标准库总览与 node-parity 对照表</text>
+</svg>

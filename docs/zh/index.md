@@ -33,6 +33,13 @@ features:
 ---
 
 
+## 架构
+
+<p align="center">
+  <img src="/images/architecture-zh.svg" alt="luna 三层架构:用户空间 / Luna 运行时 / 原生运行时" width="960"/>
+</p>
+
+
 ## 在终端里
 
 一次真实会话的原样截取(pty 抓取,In/Out 寄存器、语法高亮与魔法命令输出均未加工):

@@ -1,18 +1,17 @@
 # todo
 
-需求清单。一条一句,完成项保留一行证据(commit 加测试数)。
+需求清单。一条一句，完成项保留一行证据（commit 加测试数）。
 
 ## 待办
+
+- [ ] en 文档补齐:27 个 zh 页面缺 en 版(guide/loop、tasks、examples、sandbox、kernel、stdlib/\*、other/\*、node-parity),待翻译后 README/sidebar 链接自然可达(审计表 A1)。
 
 ## 已完成
 
 - [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
-
-- [x] 双每日管线重评(2026-10-14):裁定为互补保留不退役(daily=验证门禁,daily-build=交付面),记录见 docs/other/build.md。触发条件之三成立——Windows 腿 2026-10-08 转正后交付面文案/文档未同步,漂移造成发布文案失实(build.md/faq/getting-started 仍称 Windows 尚无产物/不在支持面,而 windows 资产 2026-10-13 实核在传)。修复:Windows 状态四份文档与 daily-build.yml 三处回显串同步到实态,顺带修 build.md 的 artifact 保留天数错记(daily-build 实为 14 天)。门禁:docs build 绿,ctest 16/16。
-
+- [x] 双每日管线重评(2026-10-14):裁定互补保留(daily=验证门禁,daily-build=交付面),Windows 状态四份文档与 daily-build.yml 回显串同步到实态。docs build 绿,ctest 16/16
 - [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,8a63b97
 - [x] util 四件套:parseEnv/stripVTControlCharacters/styleText/debuglog(Node v24.21.0 差分对拍,NODE_DEBUG 条目不 trim/OSC 未闭合落 CSI/参数 4 位上限/#RGB ×17)。modules 110
-
 - [x] REPL 寄存器与时间魔法:In 记录、%time 与 %timeit 支持语句、%plugins 报遮蔽。ce21660,repl 4 例,magic 2 例
 - [x] 错误提示与补全:did-you-mean 建议、require 目标 Tab 补全、luna_modules 包内子模块。8527d80,complete 6 例,modules 3 例
 - [x] 标准库打磨批:fs 便捷层、%hist 范围、文档站同步、覆盖率接线。repl 21,magic 14,complete 21,modules 18,C 侧行 75.8%

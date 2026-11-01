@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README.zh.md)
 
 <p align="center">
-  <img src="assets/logo.svg" alt="luna logo" width="64"/> <a href="https://cuihairu.github.io/luna//"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
+  <img src="assets/logo.svg" alt="luna logo" width="64"/> <a href="https://cuihairu.github.io/luna/"><img src="https://img.shields.io/badge/docs-blue" alt="docs"></a>
 </p>
 
 <h1 align="center">luna</h1>
@@ -9,7 +9,7 @@
 <p align="center">A batteries-included Lua runtime for scripting, tooling, and lightweight services</p>
 
 <p align="center">
-<a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a> <a href="https://github.com/cuihairu/luna/actions/workflows/daily-build.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily-build.yml?label=nightly&style=flat-square"></a> <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua"> <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+<a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a> <a href="https://github.com/cuihairu/luna/actions/workflows/nightly.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/nightly.yml?label=nightly&style=flat-square"></a> <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua"> <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 Artifacts ship as a **rolling nightly Release** (fixed tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly): every green run clears the old assets, uploads fresh ones, and re-publishes, with `.sha256` sidecars for verification). Assets on a public repository are public and pull anonymously, no credentials of any kind; the installer self-verifies with `luna --version`. Actions artifacts are per-run local copies, not a delivery channel. Current artifact matrix: `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `windows-x86_64`.
 
-- **Daily build**: the [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) workflow runs on a schedule (UTC 01:23): Release-type build plus smoke checks, publishing the rolling nightly Release. It is a pure artifact pipeline; full test coverage is the job of the CI on every push, and the nightly window does not carry the network-dependent rocks suite. The platform zips `luna-nightly-<os>-<arch>` (the binary plus the `luna_modules/` module sidecar; the binary resolves the Lua strategy layer from its own directory first) and their `.sha256` sidecars are cleared and re-uploaded each run; run-page artifacts (`pkg-<os>-<arch>` for 3 days, aggregate `daily-build` for 14 days) are reference copies only. All four legs are promoted out of the canary phase (Windows 2026-10-08, macOS 2026-10-09): the nightly test matrix (`daily.yml`, UTC 21:13 + manual) reruns the full suite per platform, and a red build or red test fails the run outright — no exemption legs. The nightly Release is the lifeline; the artifact page and the Release page corroborate each other.
+- **Daily build**: the [Daily Build](https://github.com/cuihairu/luna/actions/workflows/nightly.yml) workflow runs on a schedule (UTC 01:23): Release-type build plus smoke checks, publishing the rolling nightly Release. It is a pure artifact pipeline; full test coverage is the job of the CI on every push, and the nightly window does not carry the network-dependent rocks suite. The platform zips `luna-nightly-<os>-<arch>` (the binary plus the `luna_modules/` module sidecar; the binary resolves the Lua strategy layer from its own directory first) and their `.sha256` sidecars are cleared and re-uploaded each run; run-page artifacts (`pkg-<os>-<arch>` for 3 days, aggregate `daily-build` for 14 days) are reference copies only. All four legs are promoted out of the canary phase (Windows 2026-10-08, macOS 2026-10-09): the nightly test matrix (`daily.yml`, UTC 21:13 + manual) reruns the full suite per platform, and a red build or red test fails the run outright — no exemption legs. The nightly Release is the lifeline; the artifact page and the Release page corroborate each other.
 - **From source**: the only dependencies are CMake ≥ 3.14 and a C compiler; everything else lives in `deps/`:
 
 ```bash
@@ -91,8 +91,8 @@ On macOS, `brew install pkg-config autoconf cmake`; the optional `libssl-dev` en
 | Sandbox runtime | `luna --sandbox`: module whitelist, native loading disabled, no subprocesses / file writes / environment; `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` cap compute and memory | [Sandbox runtime](https://cuihairu.github.io/luna/guide/sandbox) |
 | One-line servers | `luna serve` for a static directory; `http.serve()` static or programmable; `net.serve()` TCP echo | [Standard library · http](https://cuihairu.github.io/luna/stdlib/http) |
 | Modules | Relative require, `luna_modules/` walk-up, `package.json`-style manifest `main`, `package.loaded` cache semantics | [Module system](https://cuihairu.github.io/luna/guide/modules) |
-| Standard library | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto bind mature C libraries or LPeg; path/util/querystring/url/process/console/events/stream/assert are pure Lua following Node semantics; shipped inside the binary | [Standard library overview](https://cuihairu.github.io/luna/stdlib/) |
-| Logging | `logging`: six threshold levels, log4j-style appenders (console / file / rolling file / socket; lualogging 1.8, bundled) | [Standard library · logging](https://cuihairu.github.io/luna/stdlib/logging) |
+| Standard library | fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto bind mature C libraries or LPeg; json/path/util/querystring/url/process/console/events/stream/assert are pure Lua following Node semantics; shipped inside the binary | [Standard library overview](https://cuihairu.github.io/luna/stdlib/) |
+| Logging | `logging`: six threshold levels, log4j-style appenders (console / file / rolling file / socket; lualogging 1.8.2, bundled) | [Standard library · logging](https://cuihairu.github.io/luna/stdlib/logging) |
 | Plugins | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`, manifest + entry point, isolated failures | [Plugin development](https://cuihairu.github.io/luna/guide/plugins) |
 | Architecture | Thin C kernel + embedded Lua strategy layer + extension points; design comparisons and event-loop rationale | [Architecture](https://cuihairu.github.io/luna/architecture) |
 
@@ -106,14 +106,11 @@ On macOS, `brew install pkg-config autoconf cmake`; the optional `libssl-dev` en
 - Tests: sixteen ctest suites (luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum); run `ctest --test-dir build` after changes. Coverage uses a separate Profiling-instrumented tree, see [Build and testing](https://cuihairu.github.io/luna/other/build);
 - Pushes to main trigger CI to build and publish the docs site to Pages (deployment does not count as a release).
 
-## 本地测试口径
+## Local test policy
 
-CI 与本地开发按改动面三路分流——改一行文档不该全量编译。
+CI and local development split by change surface — editing a doc should not trigger a full compile.
 
-1. **文档改动**（`*.md`、`docs/**`、图片）：不编译。主 CI workflow 的
-   `paths-ignore` 已跳过这些路径。
-2. **代码改动**：只跑改动子集，不全量。
-   - `ctest -R '<改动测试>'`
-3. **全量**（`ctest --output-on-failure`）：仅以下情形触发——CMakeLists.txt、
-   `.github/**`、Docker/Compose 配置、发布前。
+1. **Docs-only changes** (`*.md`, `docs/**`, `LICENSE`, `.gitignore`, `*.svg`, `.editorconfig`): the main CI workflow's `paths-ignore` skips these paths, so no build is triggered.
+2. **Code changes**: the main CI workflow runs the full `ctest -C <build-type> --output-on-failure` suite on every push. Locally, run a subset first for speed with `ctest -R '<changed test>'`, then the full suite before pushing.
+3. **Full suite** (`ctest --output-on-failure`): required before every push; CI runs it automatically on any push that touches code.
 

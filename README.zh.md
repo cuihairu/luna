@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README.zh.md)
 
 <p align="center">
-  <img src="assets/logo.svg" alt="luna logo" width="64"/> <a href="https://cuihairu.github.io/luna/zh//"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
+  <img src="assets/logo.svg" alt="luna logo" width="64"/> <a href="https://cuihairu.github.io/luna/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs"></a>
 </p>
 
 <h1 align="center">luna</h1>
@@ -9,7 +9,7 @@
 <p align="center">A batteries-included Lua runtime for scripting, tooling, and lightweight services</p>
 
 <p align="center">
-<a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a> <a href="https://github.com/cuihairu/luna/actions/workflows/daily-build.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/daily-build.yml?label=nightly&style=flat-square"></a> <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua"> <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
+<a href="https://github.com/cuihairu/luna/actions/workflows/cmake.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/cmake.yml?branch=main&label=CI&style=flat-square"></a> <a href="https://github.com/cuihairu/luna/actions/workflows/nightly.yml"><img alt="nightly" src="https://img.shields.io/github/actions/workflow/status/cuihairu/luna/nightly.yml?label=nightly&style=flat-square"></a> <img alt="Lua 5.5" src="https://img.shields.io/badge/Lua-5.5-2C2D35?style=flat-square&logo=lua"> <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@ luna 是**开箱即用的 Lua 通用运行时**,服务三类场景:脚本(script
 
 Lua 生态里趁手的通用工具不多,每开一个新项目,周边设施都要先搭一遍。luna 想把这一层提前备好,把时间还给业务本身。
 
-Node.js 只是**架构参考,不是产品身份**:luna 先是 Lua 运行时,再谈 Node 式体验——模块解析、标准库形状这些工程习惯对齐 Node,解释都在文档站[架构设计](https://cuihairu.github.io/luna/architecture)的对照表里;身份与内核仍是 Lua。
+Node.js 只是**架构参考,不是产品身份**:luna 先是 Lua 运行时,再谈 Node 式体验——模块解析、标准库形状这些工程习惯对齐 Node,解释都在文档站[架构设计](https://cuihairu.github.io/luna/zh/architecture)的对照表里;身份与内核仍是 Lua。
 
 IPython 式的 REPL 是其中一件工具,不是全部。
 
@@ -48,7 +48,7 @@ luna -e 'require("net").serve("*", 9000, function(c)
   c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
 ```
 
-REPL 里 `6 * 7` 回答 `Out[1]: 42`,`%timeit` 随手测性能,`%whos` 看当前全部全局;细节见[CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl)。
+REPL 里 `6 * 7` 回答 `Out[1]: 42`,`%timeit` 随手测性能,`%whos` 看当前全部全局;细节见[CLI 与 REPL](https://cuihairu.github.io/luna/zh/guide/cli-repl)。
 
 ## 获取
 
@@ -66,7 +66,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 
 产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`、`windows-x86_64`。
 
-- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/daily-build.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项构建与产物已通并随夜间上线,该腿仍带试运行豁免(红不拖垮其余平台);macOS 项构建与产物已通,运行期测试按平台移植清单收敛中(见 todo)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
+- **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/nightly.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项构建与产物已通并随夜间上线,该腿仍带试运行豁免(红不拖垮其余平台);macOS 项构建与产物已通,运行期测试全矩阵已转正(2026-10-09,见 daily.yml,红即拦)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
 - **源码构建**:依赖只有 CMake ≥ 3.14 与 C 编译器,其余全部在 `deps/` 内:
 
 ```bash
@@ -75,33 +75,41 @@ cmake --build build -j
 ctest --test-dir build       # 全部测试组应全绿
 ```
 
-macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用 crypto 模块。详见[快速上手](https://cuihairu.github.io/luna/guide/getting-started)。
+macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用 crypto 模块。详见[快速上手](https://cuihairu.github.io/luna/zh/guide/getting-started)。
 
 ## 工具集
 
 | 能力 | 说明 | 文档 |
 | --- | --- | --- |
-| REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回、`In[n]`/`Out[n]` | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%eval` `%load` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 运行时内省 | `luna ps` 列出可 attach 进程(live/stale + 命令行);`%info` `%modules` `%stats` `%gc` `%globals` 探活本进程;`luna --attach <pid>` 远程同款 | [CLI 与 REPL](https://cuihairu.github.io/luna/guide/cli-repl) |
-| 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/guide/loop) |
-| 异步任务 | `task`:`task.run/await/sleep/promise/promisify`,句柄 `:cancel` 协作取消;`%tasks` 观测 | [异步任务](https://cuihairu.github.io/luna/guide/tasks) |
-| 脚手架 | `luna new plugin/package/script <name>` 内置模板一键生成起步代码;`--list` 列模板,已存在即拒 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
-| 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、文件工具、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/guide/examples) |
-| 沙箱运行时 | `luna --sandbox`:模块白名单、禁原生加载、无子进程/文件写/环境,`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 限算力与内存 | [沙箱运行时](https://cuihairu.github.io/luna/guide/sandbox) |
-| 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/stdlib/http) |
-| 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/guide/modules) |
-| 标准库 | json/fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;path/util/querystring/url/process/console/events/stream/assert 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/stdlib/) |
-| 日志 | `logging`:六级阈值,console/文件/滚动文件/socket 等 log4j 式 appender(lualogging 1.8,随二进制) | [标准库 · logging](https://cuihairu.github.io/luna/stdlib/logging) |
-| 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/guide/plugins) |
-| 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/architecture) |
+| REPL | replxx 行编辑、scintillua/LPeg 实时高亮、^C 中断、历史召回、`In[n]`/`Out[n]` | [CLI 与 REPL](https://cuihairu.github.io/luna/zh/guide/cli-repl) |
+| 魔法命令 | `%time` `%timeit` `%hist` `%whos` `%eval` `%load` `%reset` `%plugins` `%help` …,可插件注册 | [CLI 与 REPL](https://cuihairu.github.io/luna/zh/guide/cli-repl) |
+| 运行时内省 | `luna ps` 列出可 attach 进程(live/stale + 命令行);`%info` `%modules` `%stats` `%gc` `%globals` 探活本进程;`luna --attach <pid>` 远程同款 | [CLI 与 REPL](https://cuihairu.github.io/luna/zh/guide/cli-repl) |
+| 事件循环 | `loop`:定时器、TCP/Unix/TLS、异步 fs、信号、子进程;脚本尾部自动排水 | [事件循环](https://cuihairu.github.io/luna/zh/guide/loop) |
+| 异步任务 | `task`:`task.run/await/sleep/promise/promisify`,句柄 `:cancel` 协作取消;`%tasks` 观测 | [异步任务](https://cuihairu.github.io/luna/zh/guide/tasks) |
+| 脚手架 | `luna new plugin/package/script <name>` 内置模板一键生成起步代码;`--list` 列模板,已存在即拒 | [示例与脚手架](https://cuihairu.github.io/luna/zh/guide/examples) |
+| 官方示例 | `examples/` 八个可直接跑的完整示例:CLI、文件工具、HTTP/TCP 服务、抓取、构建、游戏脚本、自动化,文档输出即真实抓取 | [示例与脚手架](https://cuihairu.github.io/luna/zh/guide/examples) |
+| 沙箱运行时 | `luna --sandbox`:模块白名单、禁原生加载、无子进程/文件写/环境,`LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` 限算力与内存 | [沙箱运行时](https://cuihairu.github.io/luna/zh/guide/sandbox) |
+| 一行起服 | `luna serve` 静态目录;`http.serve()` 静态/可编程;`net.serve()` TCP echo | [标准库 · http](https://cuihairu.github.io/luna/zh/stdlib/http) |
+| 模块 | 相对 require、`luna_modules/` 逐级上溯、`package.json` 式清单 `main`、`package.loaded` 缓存语义 | [模块系统](https://cuihairu.github.io/luna/zh/guide/modules) |
+| 标准库 | fs/net/http/csv/ini/toml/yaml/xml/zlib/crypto 绑定成熟 C 库或 LPeg;json/path/util/querystring/url/process/console/events/stream/assert 纯 Lua 按 Node 语义;随二进制一体分发 | [标准库总览](https://cuihairu.github.io/luna/zh/stdlib/) |
+| 日志 | `logging`:六级阈值,console/文件/滚动文件/socket 等 log4j 式 appender(lualogging 1.8.2,随二进制) | [标准库 · logging](https://cuihairu.github.io/luna/zh/stdlib/logging) |
+| 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/zh/guide/plugins) |
+| 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/zh/architecture) |
 
 ## 文档
 
-- 文档站:**https://cuihairu.github.io/luna** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架 / 沙箱运行时)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;
+- 文档站:**https://cuihairu.github.io/luna/zh/** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架 / 沙箱运行时)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;
 - 源码在 [`docs/`](docs/),VitePress:`cd docs && pnpm install && pnpm run docs:dev` 本地预览。
 
 ## 开发
 
-- 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/other/build);
+- 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/zh/other/build);
 - 推送 main 后 CI 自动构建并发布文档站到 Pages(部署不计为发布)。
+
+## 本地测试口径
+
+CI 与本地开发按改动面分流——改一行文档不该触发全量编译。
+
+1. **仅文档改动**(`*.md`、`docs/**`、`LICENSE`、`.gitignore`、`*.svg`、`.editorconfig`):主 CI workflow 的 `paths-ignore` 已跳过这些路径,不触发构建。
+2. **代码改动**:主 CI workflow 每次 push 都跑全量 `ctest -C <构建类型> --output-on-failure`。本地可先用 `ctest -R '<改动测试>'` 跑子集提速,push 前再跑全量。
+3. **全量**(`ctest --output-on-failure`):每次 push 前必跑;CI 对任何触碰代码的 push 自动全量。

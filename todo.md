@@ -23,8 +23,8 @@
 - [x] 文档-源码一致性审计(2026-11-02):14 项差异登记(桶一 1/桶二 2/桶三 11),13 项已修全部文档侧、码侧零改动,A1(27 个 en 页缺)待翻译。docs build 绿
 - [x] 沙箱逃逸封闭(2026-11-02):P0——loop/socket.core/socket.unix/mime.core/_openssl.* 出基线并清 package.loaded,lfs 硬化(禁 chdir/link/lock/mkdir/rmdir/rename/setmode/touch/unlock),kernel.exec/check 拒二进制块,kernel.chmod 拒绝。f6fceb6,cli 10 例沙箱组
 - [x] loop.http 请求体封顶(2026-11-02):P1——Content-Length 与流式体双双限界(默认 16 MiB,http.listen opts.max_body 可调),超限 413;头只解析一次,去 O(n²) 重扫。63b4e79,loop 110
-- [x] SSL_new 空指针修(2026-11-02):P1——tsock_new 中 SSL_set_mode 在 `if (!t->ssl)` 之前被调,SSL_new 失败即解引用空指针;检查上移,失败路径 tsock_close 统一关 fd/丢 pin,accept 调用方不再重复关 fd。e8eb22f,loop 114
-- [x] DNS 解析期 UAF 修(2026-11-02):P1——net.connect/connectTls 关闭-在-解析中时 on_sock_closed/on_tls_closed 立即丢 selfref,GC 先于 on_resolved 回收结构体即 UAF;改为 resolve_pending 标志,关闭回调与解析完成两者都到后才丢 pin。a113410,loop 114
+- [x] SSL_new 空指针修(2026-11-02):P1——tsock_new 中 SSL_set_mode 在 `if (!t->ssl)` 之前被调,SSL_new 失败即解引用空指针;检查上移,失败路径 tsock_close 统一关 fd/丢 pin,accept 调用方不再重复关 fd。e8eb22f,loop 112
+- [x] DNS 解析期 UAF 修(2026-11-02):P1——net.connect/connectTls 关闭-在-解析中时 on_sock_closed/on_tls_closed 立即丢 selfref,GC 先于 on_resolved 回收结构体即 UAF;改为 resolve_pending 标志,关闭回调与解析完成两者都到后才丢 pin。a113410,loop 112
 - [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
 - [x] 双每日管线重评(2026-10-14):裁定互补保留(daily=验证门禁,daily-build=交付面),Windows 状态四份文档与 daily-build.yml 回显串同步到实态。docs build 绿,ctest 16/16
 - [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,8a63b97

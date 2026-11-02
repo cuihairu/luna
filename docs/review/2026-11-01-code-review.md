@@ -9,7 +9,8 @@ P0/P1 当场修（一问题一 commit，测试绿），P2/P3 记 todo（todo.md 
   `install.sh`/`install.ps1`、`.github/workflows/*`、`test/*.c`（16 文件）、`CMakeLists.txt`。
   `deps/` 属 vendored 第三方，按范围排除。
 - 总账：**发现 17（P0×1、P1×4、P2×4、P3×8）｜已修 5（P0×1、P1×4）｜剩余 12（P2×4、P3×8）**。
-- 修复验证：全量 ctest 16/16 绿（serve 39.5s 最重）；loop 组 112 例在 ASan（`detect_leaks=1`）下零报错零泄漏；
+- 修复验证：全量 ctest 16/16 绿（serve 39.5s 最重）；loop 组 112 例在 ASan（`detect_leaks=1`）下零报错零泄漏
+  （修复前 110，+2 关闭-在-解析中压测）；
   全量编译零警告。
 
 ## P0
@@ -67,7 +68,7 @@ P0/P1 当场修（一问题一 commit，测试绿），P2/P3 记 todo（todo.md 
 ## 质量门
 
 - 编译：全量零警告（gcc，`-Wall` 全开）。
-- 测试基线：修复前 16/16 组绿（loop 112）；修复后 16/16 组绿（loop **114**，+2 关闭-在-解析中压测），serve 39.5s、rocks 21.5s、line 11.7s 全绿。
+- 测试基线：修复前 16/16 组绿（loop 110）；修复后 16/16 组绿（loop **112**，+2 关闭-在-解析中压测），serve 39.5s、rocks 21.5s、line 11.7s 全绿。
 - ASan：loop 组 112 例 `detect_leaks=1` 零报错零泄漏（`-fsanitize=address -O1` 独立构建）。
 - 静态面：`strcpy` ×2（src/luna_loop.c:4406,4417）均为 `malloc(strlen()+1)` 精确尺寸；`sscanf "%200[^\n]"` 入 `reason[224]` 有界（src/luna_toml.c:116）；无 `gets`/`sprintf`/`%n`；格式串全字面量。
 
@@ -78,6 +79,6 @@ P0/P1 当场修（一问题一 commit，测试绿），P2/P3 记 todo（todo.md 
 | f6fceb6 | F0+F1：沙箱出基线 capability 模块 + 拒二进制块 + kernel.chmod 拒绝 + lfs 硬化 | cli 沙箱组 10 例；全量 ctest 绿 |
 | 63b4e79 | L2：loop.http 请求体 16 MiB 封顶 + 头单次解析 | loop 组新增 test_http_server_body_cap；全量 ctest 绿 |
 | e8eb22f | C1：SSL_new 空指针检查上移 + 失败路径 fd 契约统一 | loop 组全绿；ASan 零报错 |
-| a113410 | C2：DNS 解析期 UAF（resolve_pending 延迟丢 pin，net+TLS 双腿） | loop 组 +2 关闭-在-解析中压测；ASan 零报错零泄漏 |
+| a113410 | C2：DNS 解析期 UAF（resolve_pending 延迟丢 pin，net+TLS 双腿） | loop 组 110→112（+2 关闭-在-解析中压测）；ASan 零报错零泄漏 |
 
 todo.md 已同步登记剩余 12 项（P2×4、P3×8），每条带 file:line 与来源组别。

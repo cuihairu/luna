@@ -3086,6 +3086,9 @@ static struct tsock *tsock_new(lua_State *L, tls_os_fd fd, SSL_CTX *ctx,
 {
     struct tsock *t = calloc(1, sizeof(*t));
     if (!t) {
+        if (fd != TLS_FD_INVALID) {
+            tls_fd_close(fd); /* accepted socket: nobody else will */
+        }
         return NULL;
     }
     t->L = L;
@@ -3107,6 +3110,10 @@ static struct tsock *tsock_new(lua_State *L, tls_os_fd fd, SSL_CTX *ctx,
 
     t->ctx = NULL;
     t->ssl = SSL_new(ctx);
+    if (!t->ssl) {
+        tsock_close(t);
+        return NULL;
+    }
     /* the write path buffers the payload at the first partial write and
      * retries from the copy: tell OpenSSL the buffer may move (contents
      * stay identical, so the retry contract holds). AUTO_RETRY keeps
@@ -3114,10 +3121,6 @@ static struct tsock *tsock_new(lua_State *L, tls_os_fd fd, SSL_CTX *ctx,
      * WANT_READ when the app registered no read callback. */
     SSL_set_mode(t->ssl, SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER
                              | SSL_MODE_AUTO_RETRY);
-    if (!t->ssl) {
-        tsock_close(t);
-        return NULL;
-    }
     SSL_set_fd(t->ssl, (int)(intptr_t)fd);
     if (is_server) {
         SSL_set_accept_state(t->ssl);
@@ -3964,8 +3967,7 @@ static void on_tserver_event(uv_poll_t *h, int status, int events)
     tls_set_nonblocking(c);
     struct tsock *t = tsock_new(sv->L, c, sv->ctx, 1);
     if (!t) {
-        tls_fd_close(c);
-        return;
+        return; /* tsock_new already closed c */
     }
     /* pending handshake delivery: tsock_deliver pushes (nil, sock),
      * exactly the onConn shape — the conn ref rides in connectref */

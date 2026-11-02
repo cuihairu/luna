@@ -1885,6 +1885,47 @@ static void test_http_server_error_paths(void **state)
         "true,500;true");
 }
 
+static void test_http_server_body_cap(void **state)
+{
+    (void)state;
+    /* a Content-Length is the peer's word, so both the declared length
+     * and the streamed bytes get the cap: declared-too-large is 413
+     * before the body lands, streamed-past-cap is 413 too, and a body
+     * inside the cap still delivers */
+    assert_string_equal(eval_string(
+        "local http = require('loop.http')\n"
+        "local net = loop.net\n"
+        "local srv = http.listen('127.0.0.1', 0, function(req, res)\n"
+        "  res.send(200, 'len=' .. #req.body)\n"
+        "end, {max_body = 8})\n"
+        "local base = 'http://127.0.0.1:' .. srv:port()\n"
+        "out = ''\n"
+        "http.request({url = base .. '/a', method = 'POST', body = 'ok'},\n"
+        "  function(e1, r1)\n"
+        "    out = tostring(r1 and r1.status) .. '='\n"
+        "        .. tostring(r1 and r1.body) .. ';'\n"
+        "    http.request({url = base .. '/b', method = 'POST',\n"
+        "        body = '123456789'}, function(e2, r2)\n"
+        "      out = out .. tostring(r2 and r2.status) .. ';'\n"
+        "      net.connect('127.0.0.1', srv:port(), function(e3, s)\n"
+        "        s:read(function(e4, chunk)\n"
+        "          if chunk then\n"
+        "            out = out .. tostring(\n"
+        "                chunk:find('413', 1, true) ~= nil)\n"
+        "            s:close()\n"
+        "            srv:close()\n"
+        "          end\n"
+        "        end)\n"
+        "        s:write('POST /c HTTP/1.1\\r\\nContent-Length: 4\\r\\n\\r\\n'\n"
+        "            .. '123456789abc', function() end)\n"
+        "      end)\n"
+        "    end)\n"
+        "  end)\n"
+        "assert(loop.run())\n"
+        "return out"),
+        "200=len=2;413;true");
+}
+
 static void test_http_stream_content_length(void **state)
 {
     (void)state;
@@ -3150,6 +3191,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_redirect_budget_and_timeout, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_server_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_server_error_paths, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_server_body_cap, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_stream_content_length, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_stream_eof_mode, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_stream_onhead_once_after_redirect, setup_loop, teardown_loop),

@@ -555,6 +555,7 @@ local REASONS = {
     [301] = "Moved Permanently", [302] = "Found",
     [304] = "Not Modified", [400] = "Bad Request",
     [403] = "Forbidden", [404] = "Not Found",
+    [413] = "Content Too Large",
     [500] = "Internal Server Error", [501] = "Not Implemented",
 }
 
@@ -606,43 +607,66 @@ local function plain_status(sock, status)
                end)
 end
 
-local function serve_conn(sock, handler)
-    local buf = ""
+-- default request-body cap: a Content-Length is the peer's word, so
+-- both the declared length and the streamed bytes get a bound — without
+-- one, a client that declares a huge body and trickles bytes in grows
+-- the buffer (and the process) without end. 16 MiB keeps every
+-- small-payload service inside; a service that expects larger bodies
+-- passes http.listen(host, port, handler, {max_body = n}).
+local DEFAULT_MAX_BODY = 16 * 1024 * 1024
+
+local function serve_conn(sock, handler, max_body)
+    max_body = max_body or DEFAULT_MAX_BODY
+    local buf, rest = "", nil
+    local cl, method, path, headers
     sock:read(function(err, chunk)
         if err or not chunk then
             sock:close() -- peer gone before a whole request landed
             return
         end
-        buf = buf .. chunk
-        local split = buf:find("\r\n\r\n", 1, true)
-        if not split then
-            if #buf > 65536 then
-                plain_status(sock, 400) -- head runaways get one 400
+        if rest then
+            rest = rest .. chunk -- past the head: body only, no rescan
+        else
+            buf = buf .. chunk
+            local split = buf:find("\r\n\r\n", 1, true)
+            if not split then
+                if #buf > 65536 then
+                    plain_status(sock, 400) -- head runaways get one 400
+                end
+                return
             end
-            return
-        end
-        local head = buf:sub(1, split - 1)
-        local rest = buf:sub(split + 4)
-        local first = head:match("^([^\r\n]+)") or ""
-        local method, path = first:match("^(%S+) (%S+) HTTP/%d%.%d$")
-        if not method then
-            plain_status(sock, 400)
-            return
-        end
-        local headers = {}
-        local line = head:match("\r\n(.+)$") or "" -- past the request line
-        for h in line:gmatch("([^\r\n]+)") do
-            local k, v = h:match("^([^:]+):%s*(.*)$")
-            if k then
-                k = k:lower()
-                if headers[k] then
-                    headers[k] = headers[k] .. ", " .. v
-                else
-                    headers[k] = v
+            local head = buf:sub(1, split - 1)
+            rest = buf:sub(split + 4)
+            local first = head:match("^([^\r\n]+)") or ""
+            method, path = first:match("^(%S+) (%S+) HTTP/%d%.%d$")
+            if not method then
+                plain_status(sock, 400)
+                return
+            end
+            headers = {}
+            local line = head:match("\r\n(.+)$") or "" -- past the request line
+            for h in line:gmatch("([^\r\n]+)") do
+                local k, v = h:match("^([^:]+):%s*(.*)$")
+                if k then
+                    k = k:lower()
+                    if headers[k] then
+                        headers[k] = headers[k] .. ", " .. v
+                    else
+                        headers[k] = v
+                    end
                 end
             end
+            cl = tonumber(headers["content-length"]) or 0
+            if cl > max_body then
+                plain_status(sock, 413) -- declared more than the cap
+                return
+            end
+            buf = nil -- head parsed; the buffer's job is done
         end
-        local cl = tonumber(headers["content-length"]) or 0
+        if #rest > max_body then
+            plain_status(sock, 413) -- streamed past the cap
+            return
+        end
         if #rest < cl then
             return -- body still in flight
         end
@@ -662,16 +686,18 @@ local function serve_conn(sock, handler)
     end)
 end
 
--- http.listen(host, port, handler) -> server
-function M.listen(host, port, handler)
+-- http.listen(host, port, handler[, opts]) -> server; opts.max_body
+-- raises the request-body cap (bytes, default 16 MiB)
+function M.listen(host, port, handler, opts)
     if type(handler) ~= "function" then
         error("loop.http: handler required", 2)
     end
+    local max_body = type(opts) == "table" and tonumber(opts.max_body) or nil
     return net.listen(host, port, function(cerr, sock)
         if cerr or not sock then
             return
         end
-        serve_conn(sock, handler)
+        serve_conn(sock, handler, max_body)
     end)
 end
 

@@ -560,6 +560,107 @@ static void test_unknown_flag_rejected(void **state)
     assert_int_equal(last_code, 1);
 }
 
+/* -- sandbox group ------------------------------------------------------
+ * The sandbox is the untrusted-code boundary. Each probe here is one
+ * way an untrusted script could reach a capability (the C modules that
+ * used to ride the package.loaded baseline, the bytecode loaders, a
+ * kernel chmod), so the guard must deny it; the two positive controls
+ * prove the allowlist and the read face still work. Probes run inside
+ * pcall so a denial is a printed value, not an abort. */
+
+static void test_sandbox_denies_loop(void **state)
+{
+    (void)state;
+    run_luna_env("", "--sandbox -e 'print(pcall(require,\"loop\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "not in the allowlist"));
+}
+
+static void test_sandbox_denies_socket_core(void **state)
+{
+    (void)state;
+    run_luna_env("", "--sandbox -e 'print(pcall(require,\"socket.core\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "not in the allowlist"));
+}
+
+static void test_sandbox_denies_mime_core(void **state)
+{
+    (void)state;
+    run_luna_env("", "--sandbox -e 'print(pcall(require,\"mime.core\"))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "not in the allowlist"));
+}
+
+static void test_sandbox_denies_lfs_mutation(void **state)
+{
+    (void)state;
+    run_luna_env("",
+        "--sandbox -e 'print(pcall(function() require(\"lfs\").mkdir(\"/tmp/luna-sbx-t\") end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "lfs.mkdir is denied"));
+}
+
+static void test_sandbox_denies_binary_exec(void **state)
+{
+    (void)state;
+    run_luna_env("",
+        "--sandbox -e 'print(pcall(function() kernel.exec(string.dump(function() end)) end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "binary chunks are denied"));
+}
+
+static void test_sandbox_denies_binary_check(void **state)
+{
+    (void)state;
+    run_luna_env("",
+        "--sandbox -e 'print(pcall(function() kernel.check(string.dump(function() end)) end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "binary chunks are denied"));
+}
+
+static void test_sandbox_denies_kernel_chmod(void **state)
+{
+    (void)state;
+    run_luna_env("",
+        "--sandbox -e 'print(pcall(function() kernel.chmod(\"/tmp/x\",\"600\") end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "false"));
+    assert_non_null(strstr(outbuf, "kernel.chmod is denied"));
+}
+
+static void test_sandbox_allowlist_still_works(void **state)
+{
+    (void)state;
+    run_luna_env("", "--sandbox -e 'print(pcall(function() return require(\"json\").stringify({a=1}) end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "true"));
+    assert_non_null(strstr(outbuf, "{\"a\":1}"));
+}
+
+static void test_sandbox_lfs_read_still_works(void **state)
+{
+    (void)state;
+    run_luna_env("",
+        "--sandbox -e 'print(pcall(function() return require(\"lfs\").attributes(\"/tmp\") end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "true"));
+}
+
+static void test_sandbox_text_exec_still_works(void **state)
+{
+    (void)state;
+    run_luna_env("", "--sandbox -e 'print(pcall(function() return kernel.exec(\"return 42\") end))'");
+    assert_int_equal(last_code, 0);
+    assert_non_null(strstr(outbuf, "true"));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -596,6 +697,16 @@ int main(void)
         cmocka_unit_test(test_runs_without_coverage_instrumentation),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),
+        cmocka_unit_test(test_sandbox_denies_loop),
+        cmocka_unit_test(test_sandbox_denies_socket_core),
+        cmocka_unit_test(test_sandbox_denies_mime_core),
+        cmocka_unit_test(test_sandbox_denies_lfs_mutation),
+        cmocka_unit_test(test_sandbox_denies_binary_exec),
+        cmocka_unit_test(test_sandbox_denies_binary_check),
+        cmocka_unit_test(test_sandbox_denies_kernel_chmod),
+        cmocka_unit_test(test_sandbox_allowlist_still_works),
+        cmocka_unit_test(test_sandbox_lfs_read_still_works),
+        cmocka_unit_test(test_sandbox_text_exec_still_works),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -70,6 +70,34 @@ function M.install()
     for name in pairs(package.loaded) do
         baseline[name] = true
     end
+
+    -- Preloaded capability modules (loop, socket.core, socket.unix,
+    -- mime.core, the _openssl.* crypto face) are not infrastructure:
+    -- the baseline snapshot would admit them to the guard without an
+    -- explicit grant. Drop them from the baseline and from
+    -- package.loaded (a frozen package still serves package.loaded
+    -- reads straight at the live table, so require() is not the only
+    -- door). luna.serve captured its socket.unix reference before the
+    -- guard went up, so the attach channel is unaffected. The
+    -- default-allowlist backends (toml.core/yaml.core/lxp/zlib.core)
+    -- stay; lfs stays but is hardened below (reads are permitted, and
+    -- the fs grant and serve's socket listing need it).
+    local banned = { loop = true, ["socket.core"] = true,
+                     ["socket.unix"] = true, ["mime.core"] = true }
+    local drop = {}
+    for name in pairs(package.loaded) do
+        if banned[name] or name:match("^_openssl") then
+            drop[#drop + 1] = name
+        end
+    end
+    for _, name in ipairs(drop) do
+        baseline[name] = nil
+        package.loaded[name] = nil
+    end
+    if package.loaded.lfs then
+        M._harden_lfs(package.loaded.lfs)
+    end
+
     local realrequire = require
     local function guard(name)
         if type(name) ~= "string" or
@@ -162,6 +190,26 @@ function M.install()
         end
     end
 
+    -- kernel.exec/check load chunks through luaL_loadbufferx with a
+    -- NULL mode, which admits binary: string.dump + kernel.exec is the
+    -- bytecode escape the text-only rule above closes. The REPL and the
+    -- script runner feed text chunks (file contents / -e), so the wrap
+    -- costs them nothing; a precompiled bytecode script is exactly the
+    -- binary the sandbox denies. chmod is a filesystem mutation (layer
+    -- 3); serve pcall()s its own chmod, so denial is safe there.
+    local kexec, kcheck = kernel.exec, kernel.check
+    local function text_only(fn)
+        return function(chunk, ...)
+            if type(chunk) == "string" and chunk:sub(1, 1) == "\x1b" then
+                error("sandbox: binary chunks are denied", 2)
+            end
+            return fn(chunk, ...)
+        end
+    end
+    kernel.exec = text_only(kexec)
+    kernel.check = text_only(kcheck)
+    kernel.chmod = denied("kernel.chmod")
+
     -- debug: keep what reads function objects (getinfo drives the
     -- introspection magics), drop what unwinds closures and frames —
     -- the guards hold the real require/io as upvalues (getupvalue is
@@ -201,6 +249,25 @@ function M._harden_fs(fs)
     for _, name in ipairs({ "mkdir", "rmdir", "chdir", "touch", "lock", "unlock" }) do
         if fs[name] then
             fs[name] = denied(name)
+        end
+    end
+end
+
+-- lfs (luafilesystem) rides the baseline: the fs grant's backend and
+-- serve's socket-file listing need it, and file reads are permitted
+-- (io.open read mode stays open). Its mutation face is the same
+-- file-write layer 3 denies, so it gets the fs treatment without
+-- being asked.
+function M._harden_lfs(lfs)
+    local denied = function(what)
+        return function()
+            error("sandbox: lfs." .. what .. " is denied", 2)
+        end
+    end
+    for _, name in ipairs({ "chdir", "link", "lock", "mkdir", "rmdir",
+                            "rename", "setmode", "touch", "unlock" }) do
+        if lfs[name] then
+            lfs[name] = denied(name)
         end
     end
 end

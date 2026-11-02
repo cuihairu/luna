@@ -101,3 +101,13 @@
 - 不打版本号 tag,不建正式 GitHub Release,不跑正式发版 workflow,版本号只由用户手动给出。
 - 每日构建与滚动 nightly 二进制照常。
 - 未经验收测试通过的版本不得对外发布,不得出现在 Releases 页面。
+
+## 审核记录
+
+### 审核任务（只审不改）6ee7a717ec08..HEAD（2026-11-02）
+
+- [x] 审核发现：本轮 diff 为纯文档变更（36 文件 / +4322-85，6 提交：5897506,840762e,17b7196,8438d38,e293366,16f5a76），未引入代码级安全/正确性/测试缺口。已核：config.mts 双侧栏/导航链接全部可达、locale 结构正确（构建产物无 `/zh//zh/` 双重前缀）；变更 md 交叉链接全部可达（3 处为 Lua 内联代码 `s["end"](...)` 误报）；sandbox 拒绝 `os.execute`/`io.popen`、csv/ini/toml/yaml 错误格式、`task.run/await/promisify`、`--sandbox`、`LUNA_SANDBOX_MODULES`、`examples/game-script/main.lua`、`/images/architecture-en.svg` 均与实现/仓库一致；root 页面为英文（无 locale 内容错配）；首页断链 `/architecture.en`→`/architecture` 为修复。docs build 绿,链接全达
+- [x] 审核发现（低，安全提示，既有行为）：getting-started.md:19 明文记载安装脚本对 `.sha256` 不匹配「只警告不失败」（install.sh:168 一致）——被篡改/截断的下载仍会继续安装并仅告警，属于供应链加固缺口；系既有策略、非本 diff 引入。已修：install.sh/install.ps1 校验不匹配由警告升级为硬失败（die/Die），文档同步。install.sh:167,install.ps1:144,getting-started.md:19
+- [x] 审核发现（低，卫生，非 diff 内容）：工作树存在空目录 `docs/zh/"docs`（含引号字符，shell 误操作遗留），未跟踪、不影响构建，建议清理。已清空目录
+
+- 审核发现（低，文档一致性）已裁定不属实：luna 以键缺省(nil)表达 Node 的 null，Lua 无 null 字面量；loop.md:257 与 node-parity.md:485/488 均一致描述 key absent (nil)，与实现 luna_loop.c:2908 一致，无实际矛盾。

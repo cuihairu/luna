@@ -157,15 +157,16 @@ else
 
     # checksum: nightly assets ship a .zip.sha256 sidecar (sha256sum
     # format). A mismatch is usually the release being republished
-    # mid-download - warn, don't bail; the --version smoke below is the
-    # real gate. Sidecar fetch is anonymous and optional: no sha256sum
-    # command, no checksum, no verdict.
+    # mid-download; the --version smoke below is the fallback gate.
+    # Sidecar fetch is anonymous and optional: no sha256sum command or
+    # no sidecar means no verdict, but a verified mismatch is a hard
+    # failure (a tampered/truncated artifact must not install silently).
     if command -v sha256sum >/dev/null 2>&1; then
         if SHA=$(curl -fsSL "$RELEASE_URL.sha256" 2>/dev/null); then
             want=$(printf '%s' "$SHA" | awk '{print $1}')
             have=$(sha256sum "$ZIP" | awk '{print $1}')
             if [ -n "$want" ] && [ "$have" != "$want" ]; then
-                echo "install.sh: WARNING sha256 mismatch (expected $want, got $have) - the nightly may have been republished mid-download; re-run to retry" >&2
+                die "sha256 mismatch (expected $want, got $have) - the artifact is corrupt or the nightly was republished mid-download; re-run to retry"
             fi
         fi
     fi

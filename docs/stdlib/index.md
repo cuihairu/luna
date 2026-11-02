@@ -6,45 +6,45 @@ Everything ships in one binary and is `require`-ready — nothing to install. Th
 
 | Module | In one sentence | Backend | Page |
 | --- | --- | --- | --- |
-| json | JSON encode/decode (with Node-style `parse`/`stringify` aliases) | dkjson | [json](/zh/stdlib/json) |
-| fs | Filesystem: Node-style sync conveniences + the full lfs face | luafilesystem | [fs](/zh/stdlib/fs) |
-| path | Path handling, Node `path`-compatible API | pure Lua | [path](/zh/stdlib/path) |
-| util | `format`/`inspect`/`parseArgs`/`parseEnv`/`styleText`/`debuglog`, Node v24 semantics | pure Lua | [stdlib/util](/zh/stdlib/util) |
-| events | EventEmitter: on/once/emit/error contract | pure Lua | [events](/zh/stdlib/events) |
-| stream | Readable/Writable/Transform/pipe/backpressure | pure Lua | [stream](/zh/stdlib/stream) |
-| net | TCP/UDP synchronous sockets and one-line `serve()` | luasocket | [net](/zh/stdlib/net) |
-| http | One-line `serve()` + luasocket client face | luasocket + pure Lua | [http](/zh/stdlib/http) |
-| crypto | sha1/256/384/512, HMAC, random bytes (needs OpenSSL) | luaossl | [crypto](/zh/stdlib/crypto) |
-| console | Node console face: log/table/time/count/group family | pure Lua | (see [Node alignment](/zh/node-parity)) |
-| process | Node process synchronous subset: argv/env/cwd/exit/stdio | pure Lua | (see [Node alignment](/zh/node-parity)) |
-| querystring | URL query-string encode/decode (Node semantics) | pure Lua | (see [Node alignment](/zh/node-parity)) |
-| url | URL decompose/recompose/parse (legacy face) | pure Lua | (see [Node alignment](/zh/node-parity)) |
-| assert | Node assert face: assert/equal/strictEqual/deepEqual/deepStrictEqual/throws family | pure Lua | (see [Node alignment](/zh/node-parity)) |
+| json | JSON encode/decode (with Node-style `parse`/`stringify` aliases) | dkjson | [json](/stdlib/json) |
+| fs | Filesystem: Node-style sync conveniences + the full lfs face | luafilesystem | [fs](/stdlib/fs) |
+| path | Path handling, Node `path`-compatible API | pure Lua | [path](/stdlib/path) |
+| util | `format`/`inspect`/`parseArgs`/`parseEnv`/`styleText`/`debuglog`, Node v24 semantics | pure Lua | [stdlib/util](/stdlib/util) |
+| events | EventEmitter: on/once/emit/error contract | pure Lua | [events](/stdlib/events) |
+| stream | Readable/Writable/Transform/pipe/backpressure | pure Lua | [stream](/stdlib/stream) |
+| net | TCP/UDP synchronous sockets and one-line `serve()` | luasocket | [net](/stdlib/net) |
+| http | One-line `serve()` + luasocket client face | luasocket + pure Lua | [http](/stdlib/http) |
+| crypto | sha1/256/384/512, HMAC, random bytes (needs OpenSSL) | luaossl | [crypto](/stdlib/crypto) |
+| console | Node console face: log/table/time/count/group family | pure Lua | (see [Node alignment](/node-parity)) |
+| process | Node process synchronous subset: argv/env/cwd/exit/stdio | pure Lua | (see [Node alignment](/node-parity)) |
+| querystring | URL query-string encode/decode (Node semantics) | pure Lua | (see [Node alignment](/node-parity)) |
+| url | URL decompose/recompose/parse (legacy face) | pure Lua | (see [Node alignment](/node-parity)) |
+| assert | Node assert face: assert/equal/strictEqual/deepEqual/deepStrictEqual/throws family | pure Lua | (see [Node alignment](/node-parity)) |
 
 ## Data-Format — data format encode/decode
 
 | Module | In one sentence | Backend | Page |
 | --- | --- | --- | --- |
-| csv | RFC 4180 CSV encode/decode and per-line iteration | LPeg | [csv](/zh/stdlib/csv) |
-| ini | Classic .ini encode/decode | LPeg | [ini](/zh/stdlib/ini) |
-| toml | TOML v1.1 encode/decode, datetime component table | tomlc17 (C) | [toml](/zh/stdlib/toml) |
-| yaml | YAML 1.1 encode/decode, multi-document | lyaml | [yaml](/zh/stdlib/yaml) |
-| xml | DOM encode/decode + SAX passthrough | expat (lxp) | [xml](/zh/stdlib/xml) |
-| zlib | compress/decompress one-shot + streaming deflate/inflate | lua-zlib | [zlib](/zh/stdlib/zlib) |
+| csv | RFC 4180 CSV encode/decode and per-line iteration | LPeg | [csv](/stdlib/csv) |
+| ini | Classic .ini encode/decode | LPeg | [ini](/stdlib/ini) |
+| toml | TOML v1.1 encode/decode, datetime component table | tomlc17 (C) | [toml](/stdlib/toml) |
+| yaml | YAML 1.1 encode/decode, multi-document | lyaml | [yaml](/stdlib/yaml) |
+| xml | DOM encode/decode + SAX passthrough | expat (lxp) | [xml](/stdlib/xml) |
+| zlib | compress/decompress one-shot + streaming deflate/inflate | lua-zlib | [zlib](/stdlib/zlib) |
 
 ## Dev tooling — development tool face
 
 | Module | In one sentence | Backend | Page |
 | --- | --- | --- | --- |
-| logging | Leveled logging, console/file/rolling-file/socket appenders (upstream passed through verbatim) | lualogging | [logging](/zh/stdlib/logging) |
+| logging | Leveled logging, console/file/rolling-file/socket appenders (upstream passed through verbatim) | lualogging | [logging](/stdlib/logging) |
 
-The REPL's own faces (`repl`/`introspect`/`magic`/`complete`/`highlight`, embedded policy modules) also belong to this class, used through the REPL and [CLI and REPL](/zh/guide/cli-repl), not occupying require names.
+The REPL's own faces (`repl`/`introspect`/`magic`/`complete`/`highlight`, embedded policy modules) also belong to this class, used through the REPL and [CLI and REPL](/guide/cli-repl), not occupying require names.
 
 ## Ecosystem — ecosystem access face
 
-No separate stdlib page; entries live in the guide: [LuaRocks wrapper](/zh/guide/rocks) (`luna install` etc., package management), [directory plugins](/zh/guide/plugins) (extension-point access), [module system](/zh/guide/modules) (`luna_modules/` resolution). This class's job is "bring outside code in," not "rebuild outside things" — LuaRocks is wrapped without building a registry of its own, which is exactly that convention.
+No separate stdlib page; entries live in the guide: [LuaRocks wrapper](/guide/rocks) (`luna install` etc., package management), [directory plugins](/guide/plugins) (extension-point access), [module system](/guide/modules) (`luna_modules/` resolution). This class's job is "bring outside code in," not "rebuild outside things" — LuaRocks is wrapped without building a registry of its own, which is exactly that convention.
 
-The async face (TCP/TLS/async fs/subprocess/timers, `require "loop"` explicit entry) is listed separately under [Event loop](/zh/guide/loop), and the coroutine task model on top of it (`require "task"`, run/await/sleep/cancel) under [Async tasks](/zh/guide/tasks) — both are the opt-in second world, not folded into the four classes; see the architecture page's rationale.
+The async face (TCP/TLS/async fs/subprocess/timers, `require "loop"` explicit entry) is listed separately under [Event loop](/guide/loop), and the coroutine task model on top of it (`require "task"`, run/await/sleep/cancel) under [Async tasks](/guide/tasks) — both are the opt-in second world, not folded into the four classes; see the architecture page's rationale.
 
 Two cross-cutting contracts:
 
@@ -70,5 +70,5 @@ Beyond the table above, the binary also registers a layer of **upstream-verbatim
 | `argparse` | CLI argument parsing (the entry point uses it; scripts can `require` it too) | [argparse](https://github.com/luarocks/argparse) |
 | `linedit` | The C line editor; normally via the REPL, directly available for a custom interactive surface | built into luna |
 
-Above those are the `luna.*`-prefixed **embedded policy modules** (`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve`/`luna.modules`/`luna.rocks` etc.) — the REPL's Lua half; see the three-layer model section of [Architecture design](/zh/architecture). Upstream-verbatim means: error style and API shape follow upstream (mainly `nil, err`), and luna does not re-wrap.
+Above those are the `luna.*`-prefixed **embedded policy modules** (`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve`/`luna.modules`/`luna.rocks` etc.) — the REPL's Lua half; see the three-layer model section of [Architecture design](/architecture). Upstream-verbatim means: error style and API shape follow upstream (mainly `nil, err`), and luna does not re-wrap.
 

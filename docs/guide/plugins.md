@@ -30,7 +30,7 @@ return { modules = { hellox = { greet = "hi" } } }
 
 The returned table may contain a `modules` key: each entry is injected into `package.preload`, so any later `require("hellox")` in the session can load it. Plain values are wrapped as loaders; functions are used as loaders as-is.
 
-You do not have to write this skeleton by hand: `luna new plugin hello` generates it, including the `%hello` registration and manifest (see [Examples and scaffolding](/zh/guide/examples)). This page explains the mechanics from scratch.
+You do not have to write this skeleton by hand: `luna new plugin hello` generates it, including the `%hello` registration and manifest (see [Examples and scaffolding](/guide/examples)). This page explains the mechanics from scratch.
 
 ## Discovery and precedence
 

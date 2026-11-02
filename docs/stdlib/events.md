@@ -1,6 +1,6 @@
 # stdlib · events
 
-Node `EventEmitter` semantics. Construct with `events.new()`; methods hang off the instance. Semantics are pinned to measured Node v24; the selection record is in [Node alignment](/zh/node-parity). The event loop ([loop](/zh/guide/loop)) and streams ([stream](/zh/stdlib/stream)) both sit on top of it.
+Node `EventEmitter` semantics. Construct with `events.new()`; methods hang off the instance. Semantics are pinned to measured Node v24; the selection record is in [Node alignment](/node-parity). The event loop ([loop](/guide/loop)) and streams ([stream](/stdlib/stream)) both sit on top of it.
 
 ## API
 

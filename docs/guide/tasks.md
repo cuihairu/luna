@@ -1,6 +1,6 @@
 # Async tasks
 
-`require "task"` layers a coroutine task model over `loop`: `task.run` starts a coroutine, `task.await` suspends waiting on a promise, and timers reuse `loop.setTimeout` — no new loop API. The only C change in this batch fixes an existing crash (the loop callback previously landed on the thread that created the handle, so `setTimeout` inside a coroutine would pcall onto a suspended thread; see [Boundary rules](#boundary-rules)). Script-tail auto-drain (the `maybeDrain` contract in [Event loop](/zh/guide/loop)) keeps sleeping tasks alive; the REPL does not drain, so `sleep` streams belong to script / `-e` usage.
+`require "task"` layers a coroutine task model over `loop`: `task.run` starts a coroutine, `task.await` suspends waiting on a promise, and timers reuse `loop.setTimeout` — no new loop API. The only C change in this batch fixes an existing crash (the loop callback previously landed on the thread that created the handle, so `setTimeout` inside a coroutine would pcall onto a suspended thread; see [Boundary rules](#boundary-rules)). Script-tail auto-drain (the `maybeDrain` contract in [Event loop](/guide/loop)) keeps sleeping tasks alive; the REPL does not drain, so `sleep` streams belong to script / `-e` usage.
 
 ## API
 

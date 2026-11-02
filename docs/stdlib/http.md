@@ -1,6 +1,6 @@
 # stdlib · http
 
-HTTP's "one-line service" face: `http.serve()` compresses starting a service into a single call — static directory or programmable handler, both modes from one entry point. The client face is luasocket's `socket.http` re-exported verbatim (`request()` and so on); the async client of the event loop (redirects, timeouts, streaming, TLS) is in `loop.http`, see [loop](/zh/guide/loop).
+HTTP's "one-line service" face: `http.serve()` compresses starting a service into a single call — static directory or programmable handler, both modes from one entry point. The client face is luasocket's `socket.http` re-exported verbatim (`request()` and so on); the async client of the event loop (redirects, timeouts, streaming, TLS) is in `loop.http`, see [loop](/guide/loop).
 
 ## serve: two modes, one call
 
@@ -128,7 +128,7 @@ Content-Length: 0
 
 ## Service and exit contract
 
-- The service is a **live handle**: the listener plus an internal heartbeat together hold the event loop open, and script-tail auto-drain (the `maybeDrain` contract in [loop](/zh/guide/loop)) does not end the process while the service is alive — a server is meant to keep running;
+- The service is a **live handle**: the listener plus an internal heartbeat together hold the event loop open, and script-tail auto-drain (the `maybeDrain` contract in [loop](/guide/loop)) does not end the process while the service is alive — a server is meant to keep running;
 - `^C` lands on `loop.run()`'s `interrupted` error: both `luna serve` and a `luna -e` that starts a service respond immediately, exit **130**;
 - After `srv:close()` the heartbeat is cleared, the loop drains, and the process wraps up normally — use this for tests and background wrap-up, not `^C`.
 

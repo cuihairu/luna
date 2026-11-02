@@ -1,6 +1,6 @@
 # stdlib · net
 
-TCP/UDP sockets. Backed by [luasocket](https://github.com/lunarmodules/luasocket): a **synchronous blocking** model, with the full `socket` namespace still reachable via `require "socket"`; this module lifts the common factories up one layer. The async face of the event loop (`connect`/`listen`/`connectTls`/`listenTls`, Unix sockets) is in `loop.net` under [loop](/zh/guide/loop); the async server and TLS are there too. This page is the synchronous blocking face — one-shot clients, plus `net.serve`, a one-line blocking TCP service.
+TCP/UDP sockets. Backed by [luasocket](https://github.com/lunarmodules/luasocket): a **synchronous blocking** model, with the full `socket` namespace still reachable via `require "socket"`; this module lifts the common factories up one layer. The async face of the event loop (`connect`/`listen`/`connectTls`/`listenTls`, Unix sockets) is in `loop.net` under [loop](/guide/loop); the async server and TLS are there too. This page is the synchronous blocking face — one-shot clients, plus `net.serve`, a one-line blocking TCP service.
 
 ## API
 
@@ -45,7 +45,7 @@ ping	127.0.0.1	42618
 
 ## Usage
 
-One loopback round-trip: connect to a local [http](/zh/stdlib/http) service and grab a response header, the most common script posture —
+One loopback round-trip: connect to a local [http](/stdlib/http) service and grab a response header, the most common script posture —
 
 ```lua
 local net = require "net"
@@ -89,7 +89,7 @@ c:close()
 echo: hello
 ```
 
-The handler gets a raw luasocket client (all methods above available), and whether to close it is the handler's call; a handler error only goes to stderr and the service keeps serving; returning `false` wraps up cleanly. For async concurrency or a TLS server, use `net.listen`/`net.listenTls` in [loop](/zh/guide/loop); for HTTP directly, [http.serve](/zh/stdlib/http).
+The handler gets a raw luasocket client (all methods above available), and whether to close it is the handler's call; a handler error only goes to stderr and the service keeps serving; returning `false` wraps up cleanly. For async concurrency or a TLS server, use `net.listen`/`net.listenTls` in [loop](/guide/loop); for HTTP directly, [http.serve](/stdlib/http).
 
 DNS resolution:
 

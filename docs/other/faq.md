@@ -13,7 +13,7 @@ The moon (luna) reflects sunlight, neither emitting nor generating heat — it j
 ## Relationship to Node.js / Bun / Deno
 
 - **Not a JS runtime**; does not run JavaScript/TypeScript
-- Module resolution, standard-library API, and the event loop are **deliberately aligned to Node v24 semantics** (see [Node alignment](/zh/node-parity))
+- Module resolution, standard-library API, and the event loop are **deliberately aligned to Node v24 semantics** (see [Node alignment](/node-parity))
 - `http.serve`/`stream`/`events`/`path`/`util` etc. are pinned to measured Node, but underneath they are pure Lua + mature C libraries (luasocket, libuv, etc.), not V8
 
 ## Why not use LuaRocks?
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/cuihairu/luna/main/install.sh | sh
 irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 ```
 
-The artifacts are a **rolling nightly Release**: fixed tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly), re-published on each green run, assets `luna-nightly-<os>-<arch>.zip` (binary plus the `luna_modules/` module sidecar) + `.sha256` sidecar. Public repository assets are pulled anonymously, **no credentials needed**; `--token`/`GITHUB_TOKEN` and `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` remain for private forks and direct-link fallbacks. Actions artifacts are only run-page local copies; the delivery channel is the Release. See [Getting started](/zh/guide/getting-started).
+The artifacts are a **rolling nightly Release**: fixed tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly), re-published on each green run, assets `luna-nightly-<os>-<arch>.zip` (binary plus the `luna_modules/` module sidecar) + `.sha256` sidecar. Public repository assets are pulled anonymously, **no credentials needed**; `--token`/`GITHUB_TOKEN` and `LUNA_INSTALL_MIRROR` / `LUNA_MIRROR` remain for private forks and direct-link fallbacks. Actions artifacts are only run-page local copies; the delivery channel is the Release. See [Getting started](/guide/getting-started).
 
 ## Why does `require("crypto")` say OpenSSL was not linked?
 
@@ -68,7 +68,7 @@ Both sit on the same implementation; the CLI is just the static mode wrapped int
 
 ## Why is the `end` event in `stream` written as `s:end_(...)` or `s["end"](...)`?
 
-`end` is a Lua keyword and cannot be called directly as a method name. `stream` has a uniform convention: keyword-colliding methods are spelled with an underscore (`end_`), and `s["end"](...)` works the same way — `loop`'s sock hit the same constraint, where Node's `end` was renamed `shutdown` (see the half-close section of [Event loop](/zh/guide/loop)). This is a Lua-language limitation, not a bug.
+`end` is a Lua keyword and cannot be called directly as a method name. `stream` has a uniform convention: keyword-colliding methods are spelled with an underscore (`end_`), and `s["end"](...)` works the same way — `loop`'s sock hit the same constraint, where Node's `end` was renamed `shutdown` (see the half-close section of [Event loop](/guide/loop)). This is a Lua-language limitation, not a bug.
 
 ## `csv.lines` iterator raises on bad input; how to use it safely?
 
@@ -127,7 +127,7 @@ p:parse()        -- wrap-up, must call a no-arg parse once
 ## `util.inspect` and `util.format`'s `%j` behavior
 
 - `util.inspect`: Lua-syntax-shape output (strings quoted and escaped, cyclic references marked `[Circular *N]`, `depth` truncation); **key sorting guarantees determinism** — sequence segment first, then numeric ascending and strings byte-order, consistent across runs
-- `util.format("%j", v)`: JSON serialization. dkjson is stricter than browser `JSON.stringify` (the latter omits function fields); for values it rejects — functions, NaN, cyclic references — it **falls back to `util.inspect` rendering rather than throwing** — `format("%j", {f = f})` gives `{ f = <function ...> }`, and a cycle gives `{ self = [Circular *1] }`. This is a verified fork, see [Node alignment](/zh/node-parity)
+- `util.format("%j", v)`: JSON serialization. dkjson is stricter than browser `JSON.stringify` (the latter omits function fields); for values it rejects — functions, NaN, cyclic references — it **falls back to `util.inspect` rendering rather than throwing** — `format("%j", {f = f})` gives `{ f = <function ...> }`, and a cycle gives `{ self = [Circular *1] }`. This is a verified fork, see [Node alignment](/node-parity)
 
 ## How to embed luna into my own C/C++ project?
 

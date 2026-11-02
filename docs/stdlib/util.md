@@ -1,6 +1,6 @@
 # stdlib · util
 
-Node `util`'s `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharacters`/`styleText`/`debuglog` face (`promisify`/`types` have no Lua contract anchor and are explicitly out of scope). Semantics are pinned to measured Node v24.21.0; the selection record is in [Node alignment](/zh/node-parity).
+Node `util`'s `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharacters`/`styleText`/`debuglog` face (`promisify`/`types` have no Lua contract anchor and are explicitly out of scope). Semantics are pinned to measured Node v24.21.0; the selection record is in [Node alignment](/node-parity).
 
 ## API
 
@@ -14,9 +14,9 @@ Node `util`'s `format`/`inspect`/`parseArgs`/`parseEnv`/`stripVTControlCharacter
 | `util.styleText(fmt, text, opts?)` | Color name / `#RGB` / `#RRGGBB` / array → wrapped in SGR codes; returns text unchanged on non-TTY by default |
 | `util.debuglog(section)` | Returns a function; gated by `NODE_DEBUG`, writing `SECTION PID: msg` to stderr when it matches |
 
-`format` details (aligned with measured Node v24): `%d`/`%f` do not truncate, `%i` truncates toward zero; with no format specifier, arguments are appended separated by a space; unknown conversions are kept verbatim; `%j` goes through [json](/zh/stdlib/json) encoding.
+`format` details (aligned with measured Node v24): `%d`/`%f` do not truncate, `%i` truncates toward zero; with no format specifier, arguments are appended separated by a space; unknown conversions are kept verbatim; `%j` goes through [json](/stdlib/json) encoding.
 
-The per-item verification and deviation ledger for `parseArgs`/`parseEnv`/`styleText`/`debuglog` is in the util section of [Node alignment](/zh/node-parity).
+The per-item verification and deviation ledger for `parseArgs`/`parseEnv`/`styleText`/`debuglog` is in the util section of [Node alignment](/node-parity).
 
 ## Usage
 

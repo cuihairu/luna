@@ -34,7 +34,7 @@ cmake --build build -j
 ctest --test-dir build          # every test group should be green
 ```
 
-**Windows source builds are supported the same way**: Windows builds and runs the full ctest on the push-triggered `cmake.yml`; the two daily pipelines build and smoke on `windows-latest` but do not run the full ctest — the verification face's `daily.yml` Windows leg stops at Build/Smoke (the `Test` step is `if: runner.os != 'Windows'`), and the delivery face's `nightly.yml` passes `-DENABLE_UNIT_TESTS=OFF` on all platforms (tests off by design). Dependency assembly uses the vcpkg static triplet (`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`, zlib and openssl), no brew; installation via `install.ps1`. The previously recorded "Windows not in the support face" (replxx bridge, unix domain socket path) has been digested with the compile-time blockers; the current state is in [FAQ](/zh/other/faq).
+**Windows source builds are supported the same way**: Windows builds and runs the full ctest on the push-triggered `cmake.yml`; the two daily pipelines build and smoke on `windows-latest` but do not run the full ctest — the verification face's `daily.yml` Windows leg stops at Build/Smoke (the `Test` step is `if: runner.os != 'Windows'`), and the delivery face's `nightly.yml` passes `-DENABLE_UNIT_TESTS=OFF` on all platforms (tests off by design). Dependency assembly uses the vcpkg static triplet (`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`, zlib and openssl), no brew; installation via `install.ps1`. The previously recorded "Windows not in the support face" (replxx bridge, unix domain socket path) has been digested with the compile-time blockers; the current state is in [FAQ](/other/faq).
 
 ### Optional: enable the crypto module
 

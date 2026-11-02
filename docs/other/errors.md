@@ -4,7 +4,7 @@ Node's errors are Error objects with a `code` field; luna deliberately simplifie
 
 ## Synchronous face: two error kinds, two appearances
 
-The binary split that runs through the standard library ([standard library overview](/zh/stdlib/index)'s cross-cutting contract):
+The binary split that runs through the standard library ([standard library overview](/stdlib/index)'s cross-cutting contract):
 
 | | Data error | Argument error |
 | --- | --- | --- |
@@ -52,5 +52,5 @@ The discriminator is the `interrupted` text in the error message (ordinary error
 
 ## Errors on the attach channel
 
-`luna --attach` frames its replies with `\30`: an `OK` frame goes to stdout and an `ERR` frame (full traceback) goes to stderr — the pipe carries a clean result stream; when the target crashes the client gets `attach: target went away`. See [CLI and REPL](/zh/guide/cli-repl#attach-attach-to-a-running-luna).
+`luna --attach` frames its replies with `\30`: an `OK` frame goes to stdout and an `ERR` frame (full traceback) goes to stderr — the pipe carries a clean result stream; when the target crashes the client gets `attach: target went away`. See [CLI and REPL](/guide/cli-repl#attach-attach-to-a-running-luna).
 

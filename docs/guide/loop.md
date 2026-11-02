@@ -30,7 +30,7 @@ loop.run()                    -- drives the loop until no handles remain
 | `loop.now()` | The loop millisecond clock (`uv_now`) |
 | `handle:unref()` / `handle:ref()` | Removes/restores a handle's keep-alive (see the next section) |
 
-For coroutine-style await/cancel and one-shot promises, the sugar layer is [Async tasks](/zh/guide/tasks) (`require "task"`), built on this table's `setTimeout`/`clearTimeout` without adding a loop API.
+For coroutine-style await/cancel and one-shot promises, the sugar layer is [Async tasks](/guide/tasks) (`require "task"`), built on this table's `setTimeout`/`clearTimeout` without adding a loop API.
 
 Behavior rules:
 

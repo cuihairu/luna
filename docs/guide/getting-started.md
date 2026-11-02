@@ -37,11 +37,11 @@ cmake --build build -j
 ctest --test-dir build          # all test groups should be green
 ```
 
-On macOS also run `brew install pkg-config autoconf cmake`. See [Build and self-test](/zh/other/build) for the test groups and coverage-instrumented tree.
+On macOS also run `brew install pkg-config autoconf cmake`. See [Build and self-test](/other/build) for the test groups and coverage-instrumented tree.
 
 Optional: install OpenSSL development headers (`libssl-dev`) and reconfigure to enable the crypto module (`sha256`, `hmac`, random bytes, and so on) beyond zlib. Without OpenSSL the build still succeeds and `require("crypto")` returns a guided error.
 
-**Native Windows support**: all four platform legs are production-ready (2026-10-08), nightly ships assets for all four platforms, and `install.ps1` is a one-line install — see [FAQ](/zh/other/faq).
+**Native Windows support**: all four platform legs are production-ready (2026-10-08), nightly ships assets for all four platforms, and `install.ps1` is a one-line install — see [FAQ](/other/faq).
 
 ## Thirty seconds
 
@@ -71,7 +71,7 @@ luna -e 'require("net").serve("*", 9000, function(c)
   c:send("echo: " .. (c:receive("*l") or "") .. "\n") end)'
 ```
 
-See [Standard library · http](/zh/stdlib/http) and [Standard library · net](/zh/stdlib/net) for details.
+See [Standard library · http](/stdlib/http) and [Standard library · net](/stdlib/net) for details.
 
 ## Startup modes
 
@@ -92,7 +92,7 @@ Common switches:
 | `--no-serve` | Do not create the attach listener socket |
 | `--help` | Usage and examples |
 
-See [Configuration and environment variables](/zh/other/config) for every switch and environment variable.
+See [Configuration and environment variables](/other/config) for every switch and environment variable.
 
 Color policy: enabled automatically on a TTY that is not `dumb`; `NO_COLOR` forces it off and `LUNA_COLOR=1` forces it on; pipes fall back to plain text, so script output is never polluted.
 

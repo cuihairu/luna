@@ -75,11 +75,11 @@ watching /tmp/watchme — touch files there; ^C stops (exit 130)
 examples/automation/main.lua:30: interrupted
 ```
 
-web-scraper is http:// only (the luasocket client face has no TLS; TLS clients go through [loop.http's connectTls](/zh/guide/loop#loopnettlsconnecttls-listentls)); offline walkthroughs pair with `luna serve <dir>` — when scraping a JSON API, `title` is `(none)` and `links` counts zero; a failed connection exits with code 1.
+web-scraper is http:// only (the luasocket client face has no TLS; TLS clients go through [loop.http's connectTls](/guide/loop#loopnettlsconnecttls-listentls)); offline walkthroughs pair with `luna serve <dir>` — when scraping a JSON API, `title` is `(none)` and `links` counts zero; a failed connection exits with code 1.
 
 ### The ^C contract in the three resident examples
 
-http-server / tcp-server / automation all share the same "start a service, then wait for ^C" shape, backed by one loop contract: when a silent loop is blocked inside epoll, libuv retries EINTR internally without ending the iteration, and the prepare hook never sees the interrupt flag ([the `^C` entry on the loop page](/zh/guide/loop)) — the loop must keep turning. Each example picks one mechanism: http-server uses the built-in 100 ms heartbeat of `http.serve`; tcp-server's `net.serve` puts a 250 ms deadline on accept; automation installs its own 100 ms heartbeat. The examples are templates — copy them as-is.
+http-server / tcp-server / automation all share the same "start a service, then wait for ^C" shape, backed by one loop contract: when a silent loop is blocked inside epoll, libuv retries EINTR internally without ending the iteration, and the prepare hook never sees the interrupt flag ([the `^C` entry on the loop page](/guide/loop)) — the loop must keep turning. Each example picks one mechanism: http-server uses the built-in 100 ms heartbeat of `http.serve`; tcp-server's `net.serve` puts a 250 ms deadline on accept; automation installs its own 100 ms heartbeat. The examples are templates — copy them as-is.
 
 ## luna new: built-in scaffolding
 
@@ -113,4 +113,4 @@ In [2]: %hello
 hello from the hello plugin
 ```
 
-Once the package template lands in `luna_modules/`, resolution rules are in [Module system](/zh/guide/modules); the plugin template's four extension points and failure isolation are in [Plugin development](/zh/guide/plugins). Templates are starter code — once generated, ownership of the content is yours.
+Once the package template lands in `luna_modules/`, resolution rules are in [Module system](/guide/modules); the plugin template's four extension points and failure isolation are in [Plugin development](/guide/plugins). Templates are starter code — once generated, ownership of the content is yours.

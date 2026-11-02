@@ -1,11 +1,11 @@
 # Node alignment roadmap: format standard library and low-level capability selection
 
-This is a **planning document** (docs before implementation, the same style as [event-loop backend design](/zh/loop-backend-design)). It answers two questions:
+This is a **planning document** (docs before implementation, the same style as [event-loop backend design](/loop-backend-design)). It answers two questions:
 
 - **A. Format standard library**: bring the five format modules `xml` / `yaml` / `toml` / `csv` / `ini` into the built-in stdlib at the same level as `json` — which backend, what API shape, and how errors are reported;
 - **B. Node low-level capabilities**: item-by-item inventory of `path` / `timers` / `child_process` / `os` / `util` / `events` / `stream` — which already exist in luna (under which name), which are gaps, how to fill the gaps, and at which layer.
 
-The selection principles follow [architecture design](/zh/architecture)'s existing discipline: **bind mature C libraries** (maturity = specification coverage + years in production + error-reporting quality, not "more C is better"); **use pure Lua for logic/policy layers** (Node itself's path/events/stream are pure JS, so luna's counterparts go in the Lua layer); **keep the single binary** (new C dependencies are always statically linked into deps/ with versions pinned). Batch decomposition and acceptance criteria are in `todo.md` (the twentieth-round proposal); this document covers only "what to choose, why, and what the API looks like."
+The selection principles follow [architecture design](/architecture)'s existing discipline: **bind mature C libraries** (maturity = specification coverage + years in production + error-reporting quality, not "more C is better"); **use pure Lua for logic/policy layers** (Node itself's path/events/stream are pure JS, so luna's counterparts go in the Lua layer); **keep the single binary** (new C dependencies are always statically linked into deps/ with versions pinned). Batch decomposition and acceptance criteria are in `todo.md` (the twentieth-round proposal); this document covers only "what to choose, why, and what the API looks like."
 
 ## Standard library one-to-one comparison (Node ↔ luna)
 
@@ -277,7 +277,7 @@ First the conclusion table (current state verified by source, registered 2026-09
 
 ### timers: event-loop current-state check and recommendation
 
-**Current state (source-verified)**: the dispatch note's README "event loop deferred" has evolved — [architecture.md](/zh/architecture)'s section is now "event loop: first batch (explicit choice, opt-in in scripts)": `require "loop"` has long landed, libuv 1.53.0 statically linked, with eight C faces (timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process) plus the pure-Lua `loop.http` face; the prepare hook carries `^C` → `interrupted` (exit 130) and the attach poll. **The deferred thing is no longer "whether to have a loop," it is "whether to globalize / enter the REPL"** — the README overview's "event loop deferred" wording was updated to the current state with the 2026-10-04 positioning batch (timers/TCP/Unix/TLS/async fs/signals/subprocesses + script-tail auto-drain).
+**Current state (source-verified)**: the dispatch note's README "event loop deferred" has evolved — [architecture.md](/architecture)'s section is now "event loop: first batch (explicit choice, opt-in in scripts)": `require "loop"` has long landed, libuv 1.53.0 statically linked, with eight C faces (timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process) plus the pure-Lua `loop.http` face; the prepare hook carries `^C` → `interrupted` (exit 130) and the attach poll. **The deferred thing is no longer "whether to have a loop," it is "whether to globalize / enter the REPL"** — the README overview's "event loop deferred" wording was updated to the current state with the 2026-10-04 positioning batch (timers/TCP/Unix/TLS/async fs/signals/subprocesses + script-tail auto-drain).
 
 **Recommendation: enable "script-tail auto-drain," keep deferring "globalization and REPL integration."**
 

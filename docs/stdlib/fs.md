@@ -1,6 +1,6 @@
 # stdlib · fs
 
-Filesystem. Backed by [luafilesystem](https://lunarmage.co.uk/projects/luafilesystem/) (lfs): **the full lfs API is reachable verbatim** (`attributes`/`dir`/`mkdir` and so on, passed through `__index`), with a Node-style synchronous convenience layer on top. Asynchronous file operations (read/write/directory/stat) live in `loop.fs` under [loop](/zh/guide/loop), not on this page.
+Filesystem. Backed by [luafilesystem](https://lunarmage.co.uk/projects/luafilesystem/) (lfs): **the full lfs API is reachable verbatim** (`attributes`/`dir`/`mkdir` and so on, passed through `__index`), with a Node-style synchronous convenience layer on top. Asynchronous file operations (read/write/directory/stat) live in `loop.fs` under [loop](/guide/loop), not on this page.
 
 ## API
 

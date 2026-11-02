@@ -47,14 +47,51 @@ export default defineConfig({
           {
             text: 'Standard library',
             items: [
-              { text: 'Overview', link: '/stdlib/' }
+              { text: 'Overview (four-class split)', link: '/stdlib/' },
+              { text: 'Core', collapsed: false, items: [
+                { text: 'json', link: '/stdlib/json' },
+                { text: 'fs', link: '/stdlib/fs' },
+                { text: 'path', link: '/stdlib/path' },
+                { text: 'util', link: '/stdlib/util' },
+                { text: 'events', link: '/stdlib/events' },
+                { text: 'stream', link: '/stdlib/stream' },
+                { text: 'net', link: '/stdlib/net' },
+                { text: 'http', link: '/stdlib/http' },
+                { text: 'crypto', link: '/stdlib/crypto' }
+              ] },
+              { text: 'Data-Format', collapsed: false, items: [
+                { text: 'csv', link: '/stdlib/csv' },
+                { text: 'ini', link: '/stdlib/ini' },
+                { text: 'toml', link: '/stdlib/toml' },
+                { text: 'yaml', link: '/stdlib/yaml' },
+                { text: 'xml', link: '/stdlib/xml' },
+                { text: 'zlib', link: '/stdlib/zlib' }
+              ] },
+              { text: 'Dev tooling', collapsed: false, items: [
+                { text: 'logging', link: '/stdlib/logging' }
+              ] },
+              { text: 'Ecosystem', collapsed: false, items: [
+                { text: 'Package management (LuaRocks)', link: '/guide/rocks' },
+                { text: 'Plugins', link: '/guide/plugins' },
+                { text: 'Module system', link: '/guide/modules' }
+              ] }
+            ]
+          },
+          {
+            text: 'Other',
+            items: [
+              { text: 'Configuration and environment', link: '/other/config' },
+              { text: 'Error model and exit codes', link: '/other/errors' },
+              { text: 'Building and self-testing', link: '/other/build' },
+              { text: 'FAQ', link: '/other/faq' }
             ]
           },
           {
             text: 'Design',
             items: [
               { text: 'Architecture', link: '/architecture' },
-              { text: 'Event-loop backend', link: '/loop-backend-design' }
+              { text: 'Event-loop backend', link: '/loop-backend-design' },
+              { text: 'Node alignment', link: '/node-parity' }
             ]
           }
         ],

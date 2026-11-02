@@ -1,6 +1,6 @@
 # stdlib · stream
 
-A v1 narrow face of Node streams, pure Lua, built on [events](/zh/stdlib/events). Semantics pinned to Node v24; the verification record is in [Node alignment](/zh/node-parity). The socket adapter (`duplexFromSock`) has a full echo-server example in [loop](/zh/guide/loop).
+A v1 narrow face of Node streams, pure Lua, built on [events](/stdlib/events). Semantics pinned to Node v24; the verification record is in [Node alignment](/node-parity). The socket adapter (`duplexFromSock`) has a full echo-server example in [loop](/guide/loop).
 
 ## API
 
@@ -94,6 +94,6 @@ item1;item2;item3;
 ## Boundary rules
 
 - Accounting: strings count in bytes, other values count as 1 (an always-on objectMode simplification); `highWaterMark` defaults to 16384 and is a threshold, not a byte-exact count;
-- The error linkage difference from a bare Node pipe is **verified**: a source `error` destroys the destination and unpipes, while a destination `error` only unpipes — see the stream section of [Node alignment](/zh/node-parity);
+- The error linkage difference from a bare Node pipe is **verified**: a source `error` destroys the destination and unpipes, while a destination `error` only unpipes — see the stream section of [Node alignment](/node-parity);
 - `end`/`finish` auto-destroy afterwards (autoDestroy semantics), and `destroy(err)` fires `error` then `close`, idempotently.
 

@@ -60,7 +60,7 @@ All kernel output converges through one `emit()`:
 - **`kernel.fuel(strikes?)`**: the instruction budget, in count-hook strike units (one strike ≈ 100,000 instructions); the hook first checks the `^C` flag, then deducts the budget, and hitting zero raises `error("sandbox: instruction budget exhausted")`. Setting 0 is equivalent to unset; calling with no argument reads the current value.
 - **`kernel.memcap(bytes?)`**: the allocator byte ceiling; allocations past the cap fail (Lua reports `not enough memory`); the cap is a runtime value — unset (or 0) makes the allocator byte-for-byte equivalent to the default, and accounting starts only once set (shrinking recovers, double-entry accounting).
 
-These two are the underlying knobs of the [Sandbox](/zh/guide/sandbox) resource-limit layer: `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` translate into these calls, and the knobs are removed from the `kernel` table after being set — in trusted mode they are ordinary adjustable APIs whose availability is unaffected.
+These two are the underlying knobs of the [Sandbox](/guide/sandbox) resource-limit layer: `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` translate into these calls, and the knobs are removed from the `kernel` table after being set — in trusted mode they are ordinary adjustable APIs whose availability is unaffected.
 
 ## Internal surface
 

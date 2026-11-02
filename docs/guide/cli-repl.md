@@ -14,9 +14,9 @@ The REPL is luna's primary entry point; every CLI mode is a variation on it. Thi
 | `luna --attach <pid>` | Attach interactively to another running luna process | gdb attach / IPython `%connect_info` |
 | `luna ps` | List attachable luna processes (pid / live or stale / command line) | `ps` / `pgrep` |
 | `luna new <template> <name>` | Generate starter code from a built-in template: `plugin` (directory plugin), `package` (`luna_modules/` package), or `script` (single-file CLI); `--list` shows templates and an existing target is rejected | `cargo new` |
-| `luna --sandbox script.lua` (short `-S`) | Restricted session: module allowlist, native loading disabled, no subprocesses/file writes/environment; `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` limit computation and memory | [Sandbox runtime](/zh/guide/sandbox) |
+| `luna --sandbox script.lua` (short `-S`) | Restricted session: module allowlist, native loading disabled, no subprocesses/file writes/environment; `LUNA_SANDBOX_FUEL`/`LUNA_SANDBOX_MEM` limit computation and memory | [Sandbox runtime](/guide/sandbox) |
 
-Modes combine with the common `--no-color` and `--no-plugins` switches. Plugins apply to **every** startup mode: scripts can `require` modules injected by plugins (`--sandbox` skips plugins entirely; see [Sandbox](/zh/guide/sandbox)). `luna ps` is a read-only directory view: it scans `$LUNA_SOCK_DIR` (default `/tmp`) for `luna-<pid>.sock`, probes each pid for liveness (`kill(pid, 0)`), and marks sockets left by dead processes as `stale`; an empty result exits with status 0 rather than an error.
+Modes combine with the common `--no-color` and `--no-plugins` switches. Plugins apply to **every** startup mode: scripts can `require` modules injected by plugins (`--sandbox` skips plugins entirely; see [Sandbox](/guide/sandbox)). `luna ps` is a read-only directory view: it scans `$LUNA_SOCK_DIR` (default `/tmp`) for `luna-<pid>.sock`, probes each pid for liveness (`kill(pid, 0)`), and marks sockets left by dead processes as `stale`; an empty result exits with status 0 rather than an error.
 
 ## Input model
 
@@ -55,7 +55,7 @@ Lines beginning with `%` bypass Lua evaluation and are dispatched by the REPL:
 | `%tasks` | Live task list (id/what is awaited/source) plus cumulative counts; requires `require "task"` first and only reads `package.loaded`, never auto-loads |
 | `%exit` | Exit (same as `^D`) |
 
-The introspection family (`%info`/`%modules`/`%globals`/`%stats`/`%gc`) all goes through the target kernel, so REPL and attach behave identically; this is the P1 runtime-introspection surface. `%tasks` is the observation surface for the P2 task model ([Async tasks](/zh/guide/tasks)), backed by the registry from `require "task"` and likewise read-only over loaded modules.
+The introspection family (`%info`/`%modules`/`%globals`/`%stats`/`%gc`) all goes through the target kernel, so REPL and attach behave identically; this is the P1 runtime-introspection surface. `%tasks` is the observation surface for the P2 task model ([Async tasks](/guide/tasks)), backed by the registry from `require "task"` and likewise read-only over loaded modules.
 
 ## Session state
 

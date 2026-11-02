@@ -28,7 +28,7 @@ luna_modules/hello/
 - without `main`, `init.lua` is the convention;
 - the manifest is parsed with dkjson; the result enters `package.loaded` as usual, so a second `require` hits the cache.
 
-The manifest skeleton is generated too: `luna new package mylib` creates `package.json` and `init.lua` (see [Examples and scaffolding](/zh/guide/examples)); move it under `luna_modules/` and it resolves.
+The manifest skeleton is generated too: `luna new package mylib` creates `package.json` and `init.lua` (see [Examples and scaffolding](/guide/examples)); move it under `luna_modules/` and it resolves.
 
 ## Built-in modules
 
@@ -56,13 +56,13 @@ All ship in the binary: C backends are registered in the kernel, while thin pure
 | `assert` | pure Lua | Node assert surface: `assert`/`ok` (JS falsy: nil/false/0/`''`/NaN), `equal`/`notEqual` (loose), `strictEqual`/`notStrictEqual`, `deepEqual`/`notDeepEqual`, `deepStrictEqual`/`notDeepStrictEqual` (structural), `fail`, `ifError`, `throws`/`doesNotThrow` |
 | `zlib` | lua-zlib | Streaming `deflate`/`inflate` plus one-shot `compress`/`decompress` conveniences |
 | `crypto` | luaossl | `sha256` family, `hmac`, `randombytes` (requires build-time OpenSSL) |
-| `loop` | libuv (C) + pure-Lua http | Asynchronous surface: timer/fs/net/process/udp/dns/os/signal/http; see [loop](/zh/guide/loop) |
-| `task` | pure Lua | Structured asynchronous tasks: `run`/`await`/`sleep`/`promise`/`promisify`; see [tasks](/zh/guide/tasks) |
-| `logging` | lualogging (vendored) | Six-level thresholds plus log4j-style appenders; see [logging](/zh/stdlib/logging) |
+| `loop` | libuv (C) + pure-Lua http | Asynchronous surface: timer/fs/net/process/udp/dns/os/signal/http; see [loop](/guide/loop) |
+| `task` | pure Lua | Structured asynchronous tasks: `run`/`await`/`sleep`/`promise`/`promisify`; see [tasks](/guide/tasks) |
+| `logging` | lualogging (vendored) | Six-level thresholds plus log4j-style appenders; see [logging](/stdlib/logging) |
 
-**Error contract for format modules** (csv/ini/toml/yaml/xml, like json; see [Node alignment](/zh/node-parity)): `decode`/`encode` **return `nil, err` for bad data instead of throwing**, and the message carries line and column (`<fmt>: <reason> at line N, column M`, columns counted in UTF-8 characters). Only wrong argument types raise. toml is the exception: tomlc17 reports only a line, so messages are `<reason> at line N` with no column clause (numeric arguments are first converted with `string.format`'s `%s`, then treated as bad data and returned as `nil, err`). yaml's coordinates also differ: they identify the start of the **last successfully parsed event** (lyaml discards libyaml's own problem_mark), often not the failing line — that is the implementation semantics, pinned by tests. `csv.lines` is an iterator (nil means done), and bad input can only raise; use `pcall` when feeding untrusted data.
+**Error contract for format modules** (csv/ini/toml/yaml/xml, like json; see [Node alignment](/node-parity)): `decode`/`encode` **return `nil, err` for bad data instead of throwing**, and the message carries line and column (`<fmt>: <reason> at line N, column M`, columns counted in UTF-8 characters). Only wrong argument types raise. toml is the exception: tomlc17 reports only a line, so messages are `<reason> at line N` with no column clause (numeric arguments are first converted with `string.format`'s `%s`, then treated as bad data and returned as `nil, err`). yaml's coordinates also differ: they identify the start of the **last successfully parsed event** (lyaml discards libyaml's own problem_mark), often not the failing line — that is the implementation semantics, pinned by tests. `csv.lines` is an iterator (nil means done), and bad input can only raise; use `pcall` when feeding untrusted data.
 
-**path/querystring/url/process/console/util/events/stream/assert are Node-semantics modules** (not format modules, so the `nil, err` contract above does not apply): there is no "bad data," only wrong argument types, which always raise. Behavior is pinned function by function against **measured Node v24 behavior**; intentional divergences (`util.format`'s `%x`/`%X`, inspect's Lua syntax and deterministic key order, `pipe` error propagation, deterministic querystring key order, millisecond-resolution process hrtime, console's millisecond timers and Lua-shaped units, and so on) are audited in [Node alignment](/zh/node-parity). Because `end` is a keyword, stream's method is spelled `s:end_(...)` (`s["end"]` also works, following the existing sock precedent).
+**path/querystring/url/process/console/util/events/stream/assert are Node-semantics modules** (not format modules, so the `nil, err` contract above does not apply): there is no "bad data," only wrong argument types, which always raise. Behavior is pinned function by function against **measured Node v24 behavior**; intentional divergences (`util.format`'s `%x`/`%X`, inspect's Lua syntax and deterministic key order, `pipe` error propagation, deterministic querystring key order, millisecond-resolution process hrtime, console's millisecond timers and Lua-shaped units, and so on) are audited in [Node alignment](/node-parity). Because `end` is a keyword, stream's method is spelled `s:end_(...)` (`s["end"]` also works, following the existing sock precedent).
 
 ```lua
 local fs = require("fs")

@@ -1365,6 +1365,8 @@ struct sock {
     struct addrinfo *ai_cur;  /* next address to try (NULL: none left) */
     int h_closing;            /* a retry uv_close on h is in flight */
     int last_err;             /* most recent dial status, reported last */
+    int resolve_pending;      /* uv_getaddrinfo in flight: pin may not drop */
+    int closed_cb;            /* the uv_close callback has already run */
 };
 
 static void sock_close(struct sock *s);
@@ -1406,11 +1408,25 @@ static int sock_deliver(struct sock *s, int *cbref, int errcode,
     return 1;
 }
 
+/* the uv_close callback and on_resolved can each be the last to see the
+ * sock: whichever runs second drops the pin, and only once both the
+ * close callback has run and no resolution is in flight. Before this
+ * guard, a close during uv_getaddrinfo freed the struct under the
+ * resolver and on_resolved read the dead sock. */
+static void sock_pin_drop(struct sock *s)
+{
+    if (s->closed_cb && !s->resolve_pending && s->selfref != LUA_NOREF) {
+        keepalive_close();
+        luaL_unref(s->L, LUA_REGISTRYINDEX, s->selfref);
+        s->selfref = LUA_NOREF;
+    }
+}
+
 static void on_sock_closed(uv_handle_t *handle)
 {
     struct sock *s = (struct sock *)handle; /* union is the first member */
-    keepalive_close();
-    luaL_unref(s->L, LUA_REGISTRYINDEX, s->selfref);
+    s->closed_cb = 1;
+    sock_pin_drop(s);
 }
 
 static void sock_close(struct sock *s)
@@ -1525,10 +1541,12 @@ static void on_resolved(uv_getaddrinfo_t *ai, int status, struct addrinfo *res)
     struct resolver *r = (struct resolver *)ai->data;
     struct sock *s = r->s;
     free(r); /* the carrier was only a shuttle into this callback */
+    s->resolve_pending = 0;
     if (s->closed) {
         if (res) {
             uv_freeaddrinfo(res);
         }
+        sock_pin_drop(s); /* finishes a close that the callback deferred */
         return;
     }
     if (status != 0) {
@@ -1615,6 +1633,8 @@ static int l_net_connect(lua_State *L)
         free(r);
         sock_deliver(s, &s->connectref, rc, 0, NULL, 0);
         sock_close(s);
+    } else {
+        s->resolve_pending = 1; /* pins the sock through on_resolved */
     }
     return 1; /* the sock userdata */
 }
@@ -3043,6 +3063,7 @@ struct tsock {
     struct addrinfo *ai_list; /* resolved dial chain, owned until done */
     struct addrinfo *ai_cur;  /* next address to try (NULL: none left) */
     int h_closing;            /* a retry uv_close on h is in flight */
+    int resolve_pending;      /* uv_getaddrinfo in flight: pin may not drop */
     char last_err[128];       /* most recent dial error, reported last */
 };
 
@@ -3412,6 +3433,9 @@ static void tls_dial_failed(struct tsock *t, int soerr)
 static void on_tls_closed(uv_handle_t *h)
 {
     struct tsock *t = (struct tsock *)h;
+    if (t->resolve_pending) {
+        return; /* DNS still in flight: on_tls_resolved finishes it */
+    }
     tsock_deliver(t, &t->closeref, NULL, NULL, 0);
     luaL_unref(t->L, LUA_REGISTRYINDEX, t->selfref);
     t->selfref = LUA_NOREF;
@@ -3573,6 +3597,7 @@ static int l_net_connect_tls(lua_State *L)
         tls_fail(t, uv_strerror(rc));
         return 1;
     }
+    t->resolve_pending = 1; /* pins the tsock through on_tls_resolved */
     return 1; /* the tsock userdata */
 }
 
@@ -3581,10 +3606,12 @@ static void on_tls_resolved(uv_getaddrinfo_t *req, int status,
 {
     struct tsock *t = (struct tsock *)((char *)req -
                                        offsetof(struct tsock, ai));
+    t->resolve_pending = 0;
     if (t->closed) {
         if (res) {
             uv_freeaddrinfo(res);
         }
+        on_tls_closed((uv_handle_t *)&t->h); /* finish deferred close */
         return;
     }
     if (status != 0 || !res) {

@@ -1167,6 +1167,28 @@ static void test_net_tcp_connect_refused_yields_error(void **state)
     assert_string_equal(eval_string(code), "true,nil");
 }
 
+static void test_net_close_during_resolution_is_safe(void **state)
+{
+    (void)state;
+    /* the user drops each dialing sock while its uv_getaddrinfo is still
+     * in flight. The resolver lands on the closed sock afterwards: the
+     * pin must survive until resolution finishes (a deferred close), or
+     * on_resolved reads a freed struct. collectgarbage between close and
+     * run pushes GC into the window where the old code had already
+     * unpinned. port 9 (discard) is never listening, but the close wins
+     * the race, so every connectref is dropped by sock_close and only
+     * the teardown path runs. */
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "for i = 1, 100 do\n"
+        "  local s = net.connect('127.0.0.1', 9, function() end)\n"
+        "  s:close()\n"
+        "end\n"
+        "collectgarbage()\n"
+        "assert(loop.run())\n"
+        "return 'ok'"), "ok");
+}
+
 static void test_net_pipe_echo(void **state)
 {
     (void)state;
@@ -1594,6 +1616,25 @@ static void test_tls_sock_addr_and_server_address(void **state)
         "return out", cert, key, cert);
     assert_string_equal(eval_string(code),
         "true,true,inet,true,true,true,true,inet");
+}
+
+static void test_net_connecttls_close_during_resolution_is_safe(void **state)
+{
+    (void)state;
+    /* the TLS dial is dropped while its uv_getaddrinfo is in flight: the
+     * inline on_tls_closed (no poll yet) must defer the pin drop to
+     * on_tls_resolved, or the resolver reads a freed tsock. Same stress
+     * shape as the plain-connect twin, on an unlistened port. */
+    assert_string_equal(eval_string(
+        "local net = loop.net\n"
+        "for i = 1, 50 do\n"
+        "  local s = net.connectTls('127.0.0.1', 9, {insecure = true},\n"
+        "                            function() end)\n"
+        "  s:close()\n"
+        "end\n"
+        "collectgarbage()\n"
+        "assert(loop.run())\n"
+        "return 'ok'"), "ok");
 }
 #endif /* LUNA_LOOP_HAVE_OPENSSL */
 
@@ -3166,6 +3207,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_os_network_interfaces_lists_loopback, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_echo_then_eof, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_connect_refused_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_close_during_resolution_is_safe, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_tcp_server_echo, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_net_pipe_server_echo, setup_loop, teardown_loop),
@@ -3182,6 +3224,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_sock_addr_and_server_address, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_net_connecttls_close_during_resolution_is_safe, setup_loop, teardown_loop),
 #endif
         cmocka_unit_test_setup_teardown(test_http_get_plain_roundtrip, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_get_chunked_body, setup_loop, teardown_loop),

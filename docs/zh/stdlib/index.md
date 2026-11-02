@@ -70,4 +70,4 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 | `argparse` | CLI 参数解析(入口自己用,脚本同样可 require) | [argparse](https://github.com/luarocks/argparse) |
 | `linedit` | C 行编辑器;一般经 REPL 使用,自建交互面时可直取 | luna 内置 |
 
-再往上是 `luna.*` 前缀的**内嵌策略模块**(`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve`/`luna.modules`/`luna.rocks` 等)——REPL 的 Lua 半身,见[架构设计](/architecture)的三层模型一节。上游原样面意味着:错误风格与 API 形状随上游(`nil, err` 为主),luna 不做再包装。
+再往上是 `luna.*` 前缀的**内嵌策略模块**(`luna.magic`/`luna.complete`/`luna.introspect`/`luna.highlight`/`luna.plugins`/`luna.serve`/`luna.modules`/`luna.rocks` 等)——REPL 的 Lua 半身,见[架构设计](/zh/architecture)的三层模型一节。上游原样面意味着:错误风格与 API 形状随上游(`nil, err` 为主),luna 不做再包装。

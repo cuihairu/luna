@@ -169,7 +169,7 @@ Node 之"Node",一半在事件循环。luna 现在有了第一块:**`require "lo
 
 keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `uv_close` 完成回调落地(`uv_close` 异步,句柄内存必须活过它);最后一个句柄关闭,钩子停,空转的 `run("default")` 返回——和 Node 的"事件空则退出"一致。同一批上又加了 `loop.fs`:readFile/writeFile/stat 跑在 libuv 线程池上、回调落回循环线程,错误的"回调首参"风格照 Node,后来又补齐目录面(appendFile/readdir/mkdir/rmdir/unlink/rename,读法仍是同一张契约);再一批补上 `loop.net`:TCP 与 unix domain 的客户端与服务端套接字(connect/connectPipe/listen/listenPipe + sock 与 server 句柄),EOF 以 `(nil, nil)` 交付,同一张回调契约,`sock:peer/sockname` 与 `server:address` 给出地址面(inet/inet6/unix 三族,TLS 与 UDP 两面同款,TLS 端从手搓 fd 直读内核);`loop.udp` 再补上数据报一面(bind 常驻收包、send 按包一次性回调,bind 冲突同步抛错);`fs.watch` 又补上观察的一面——目录变化的常驻事件回调(inotify 接线);`loop.signal` 再把 Unix 信号接进同一张契约(SIGTERM 优雅退出是主场;SIGINT/SIGUSR1 各有主人,拒绝注册);`loop.dns` 把 net.connect 内部用的线程池解析器独立成面(lookup/reverse,getaddrinfo 直通车);`net.connectTls` 与 `net.listenTls` 在 net 面上叠出 TLS 两端——uv_poll 驱动手搓 fd 上的 OpenSSL 状态机(握手、WANT_READ/WRITE 让路、pending 写缓冲、close_notify 即 EOF),证书校验默认开启、opts 可换 CA 或跳过,服务端只把完成握手的连接交给 onConn。`loop.http` 则是第一个纯 Lua 面——HTTP/1.1 客户端跑在 net.connect/connectTls 之上,一个请求一次聚合回调,body 按 content-length、chunked 或 EOF 三路分帧,重定向链与整请求超时也都在 Lua 里闭包成状态机,不动 C 内核一行;服务端一面同在 Lua 里——`http.listen` 把 net 的 server 接过来,整个请求落地才调 handler,res.send 三种重载写完整响应即关,handler 抛错补 500;大响应不必整块进内存——onHead/onData 把 body 转成流式观察,content-length 与无帧两路真增量,分帧判定照旧。`loop.os` 是唯一的同步一面——主机名、网卡、CPU、内存这些系统信息直读直返,不进循环,归在 loop 名下只因它同出自 libuv(后来按 Node os 的键名补齐 arch/release/EOL/userInfo/availableParallelism 五件,arch 把 uname 的 `x86_64`/`aarch64` 换成 Node 的 `x64`/`arm64`)。最新一批补上 `loop.process`:子进程的聚合执行(无 shell spawn、stdout/stderr 捕获、`proc:kill`),交付条件是"退出 + 双管道 EOF",spawn 失败像 listen 一样同步抛错,后来又叠了两个糖——`exec` 是 `run("sh", {"-c", cmd})` 的逐字直通(shell 语义),`execSync` 是 popen 同步面(读尽 stdout,非零退出码 raise);`process.spawn` 再给出流式反面——三路 stdio 直接交成普通的 `loop.net` sock,退出回调对齐 Node 的 `'exit'`(不等流排空),半关闭用 `sock:shutdown`。全句柄族的 `unref`/`ref` 把 keep-alive 的账本交到用户手里——句柄照常运行,只是可以"在,但不留人",后台周期任务与旁观者不再绑住脚本的寿命。脚本尾部还有一道自动排水——`luna script.lua`/`luna -e` 的主块正常结束后,loop 里还撑着的句柄被自动跑到空再退出(Node 的"事件循环跑到空"契约),主块出错不排、REPL 不排,`^C` 落在排水段照旧 130。
 
-**底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/loop-backend-design)。
+**底层后端选型**(IOCP 白送、io_uring 为何不立项而跟随 libuv 升级白得)专文讨论见 [事件循环后端设计](/zh/loop-backend-design)。
 
 先把模块、插件、高亮、内省做扎实——运行时的"骨头"长好了,事件循环才能长在正确的位置。
 
@@ -177,7 +177,7 @@ keep-alive 语义与 libuv 对齐:每个回调句柄被 registry 持有直到 `u
 
 `luna --attach` 让一个进程观测另一个进程的实时状态,要在目标忙于任意 Lua 代码(甚至死循环)或阻塞在行编辑器时仍能应答——这本质是个并发问题,而它的实现刻意**不引入**事件循环:
 
-- **两个轮询点**。目标进程在 `lua/luna/serve.lua` 暴露一个非阻塞的 `serve.step()`(accept → 读一行 → pcall 求值 → 封帧应答)。调用它的只有两处:REPL 主循环的空闲间隙,和脚本执行期间 C 计数钩子里每 10 万条指令的一次顺带调用(钩子在轮询期间挂起、之后复原,嵌套 `pcall` 保证轮询失败不伤用户代码)。没有新线程进 Lua,没有 epoll,语义仍是纯同步的;
+- **两个轮询点**。目标进程在 `lua/luna/serve.lua` 暴露一个非阻塞的 `serve.step()`(accept → 读一行 → pcall 求值 → 封帧应答)。调用它的只有两处:REPL 主循环的空闲间隙,和脚本执行期间 C 计数钩子里每约 20 万条指令(计数钩子每第二次命中)的一次顺带调用(钩子在轮询期间挂起、之后复原,嵌套 `pcall` 保证轮询失败不伤用户代码)。没有新线程进 Lua,没有 epoll,语义仍是纯同步的;
 - **信号即门铃**。空闲目标阻塞在 replxx 的行编辑上——replxx 内部吞掉 EINTR,同线程的 notify 又被刻意忽略,所以 `luna_line.c` 里有一个专用助手线程:SIGUSR1 处理器只往管道写一个字节(async-signal-safe),线程醒来对 replxx 合成一个 `KEY_ENTER`(必须是带 control 修饰的键码,裸 `\r` 只会响铃),被阻塞的 `input()` 返回空行,主循环回接到轮询点;
 - **协议一行可读**:请求就是一行文本,应答是 `"OK\n"/"ERR\n"/"EXIT\n" + 正文 + "\30\n"` 的文本帧(`EXIT` 只脱离客户端、不杀目标),`\30` 后的换行让行读取器不悬空;命令执行期间内核输出被捕获进帧并同时镜像到目标终端。`%` 魔法、`?expr` 帮助糖、以及 `\1complete` 补全元行全部复用目标端自己的模块(`luna.magic`、`luna.introspect`、`luna.complete`)——serve 只是桥,不是第二套 REPL 实现;客户端错误走 stderr,stdout 保持结果流干净;
 - **可观测性的边界**:attach 只在**轮询点**到达,所以它看到的是目标"呼吸的间隙"里的状态,而不是任意指令边界的状态——这正好把它和调试器、和未来的事件循环区分开。

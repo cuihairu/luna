@@ -4,10 +4,11 @@
 
 ## 待办
 
-- [ ] en 文档补齐:27 个 zh 页面缺 en 版(guide/loop、tasks、examples、sandbox、kernel、stdlib/\*、other/\*、node-parity),待翻译后 README/sidebar 链接自然可达(审计表 A1)。
+- [ ] en 文档补齐:33 个 en 页缺(提交态:guide 11、stdlib 17、other 4、node-parity 1;其中 6 页 guide 已在工作树翻译在途,净 27),待翻译后 README/sidebar 链接自然可达(审计表 A1)。
 
 ## 已完成
 
+- [x] 文档-源码一致性审计(2026-11-02):14 项差异登记(桶一 1/桶二 2/桶三 11),13 项已修全部文档侧、码侧零改动,A1(27 个 en 页缺)待翻译。docs build 绿
 - [x] Node assert 模块(纯 Lua,deepEqual 与 deepStrictEqual 与 strictEqual 三口径)。5 组形状对拍,modules 107
 - [x] 双每日管线重评(2026-10-14):裁定互补保留(daily=验证门禁,daily-build=交付面),Windows 状态四份文档与 daily-build.yml 回显串同步到实态。docs build 绿,ctest 16/16
 - [x] util.parseArgs(Node v24.21.0 差分对拍,长/短/内联/`--`/strict/位置参/tokens)。5 组形状对拍,modules 108,8a63b97

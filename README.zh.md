@@ -67,7 +67,7 @@ irm https://raw.githubusercontent.com/cuihairu/luna/main/install.ps1 | iex
 产物是**滚动 nightly Release**(固定 tag [`nightly`](https://github.com/cuihairu/luna/releases/tag/nightly),每次绿跑清旧传新重发,附 sha256 侧车校验):公共仓库资产公开可下、**匿名直拉,不需要任何凭据**;脚本装完自验 `luna --version`。Actions artifact 只是每次 run 的本地副本,不作交付通道。当前产物矩阵:`linux-x86_64`、`linux-aarch64`、`macos-aarch64`、`windows-x86_64`。
 
 - **每日构建**:Actions 的 [Daily Build](https://github.com/cuihairu/luna/actions/workflows/nightly.yml) 每天定时跑(UTC 01:23):Release 型构建 + 冒烟自检,发布滚动 nightly Release——纯产物流水线,全量测试由每次 push 的 CI 负责(夜间不把 rocks 组的网络腿带进每日窗口)。平台 zip `luna-nightly-<os>-<arch>`(内含二进制与 `luna_modules/` 模块侧车——二进制从自身同级目录解析 Lua 策略层)与 `.sha256` 侧车清旧传新;run 页 artifact(`pkg-<os>-<arch>` 3 天、汇总 `daily-build` 14 天)只是佐证副本。Windows 项构建与产物已通并随夜间上线,该腿仍带试运行豁免(红不拖垮其余平台);macOS 项构建与产物已通,运行期测试全矩阵已转正(2026-10-09,见 daily.yml,红即拦)。生命线是 nightly Release,artifact 页与 Release 页互为佐证。
-- **源码构建**:依赖只有 CMake ≥ 3.14 与 C 编译器,其余全部在 `deps/` 内:
+- **源码构建**:依赖只有 CMake ≥ 3.14 与 C/C++ 编译器,其余全部在 `deps/` 内:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
@@ -104,7 +104,7 @@ macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用
 ## 开发
 
 - 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/zh/other/build);
-- 推送 main 后 CI 自动构建并发布文档站到 Pages(部署不计为发布)。
+- 推送 main 且触及 `docs/` 时 CI 自动构建并发布文档站到 Pages(部署不计为发布)。
 
 ## 本地测试口径
 

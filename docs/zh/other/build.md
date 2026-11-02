@@ -34,7 +34,7 @@ cmake --build build -j
 ctest --test-dir build          # 全部测试组应全绿
 ```
 
-**Windows 源码构建同面支持**:交付面与验证面都在 `windows-latest` 上构建与跑全量 ctest,依赖装配走 vcpkg 静态三元组(`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`,zlib 与 openssl),无 brew;安装走 `install.ps1`。此前记的「Windows 不在支持面」(replxx 桥、unix 域 socket 路径)已随编译期阻碍消化清掉,现况见 [FAQ](/zh/other/faq)。
+**Windows 源码构建同面支持**:Windows 在 push 触发的 `cmake.yml` 上构建并跑全量 ctest;两条每日管线在 `windows-latest` 上构建与冒烟,但不跑全量 ctest——验证面 `daily.yml` 的 Windows 腿只到 Build/Smoke(`Test` 步 `if: runner.os != 'Windows'`),交付面 `nightly.yml` 全平台传 `-DENABLE_UNIT_TESTS=OFF`(测试按设计关闭)。依赖装配走 vcpkg 静态三元组(`-DCMAKE_TOOLCHAIN_FILE=.../vcpkg.cmake`,zlib 与 openssl),无 brew;安装走 `install.ps1`。此前记的「Windows 不在支持面」(replxx 桥、unix 域 socket 路径)已随编译期阻碍消化清掉,现况见 [FAQ](/zh/other/faq)。
 
 ### 可选:启用 crypto 模块
 
@@ -138,9 +138,9 @@ pnpm run docs:build    # 产物在 .vitepress/dist/
 
 VitePress 2.0-alpha,base `/luna/`,中文本地搜索。
 
-## CI:两条每日管线(daily 门禁 + daily-build 交付)
+## CI:两条每日管线(daily 门禁 + nightly 交付)
 
-**双管线裁定(2026-10-14 重评):两条管线角色互补,不退役任一条。** daily 是验证面(全量测试、红即拉响),daily-build 是交付面(打包、滚动 Release)——退役门禁腿就丢红报警,退役交付腿就丢唯一交付通道。此前「旧管线是否退役属待裁定」的悬置项以此结论关闭;触发重评的是 2026-10-08 Windows 腿转正(`12c90bd`)后,交付面的文档与回显文案未同步:windows 资产实为在传(2026-10-13 一轮实核,见下),文案仍称「尚无产物」。
+**双管线裁定(2026-10-14 重评):两条管线角色互补,不退役任一条。** `daily.yml` 是验证面(全量测试、红即拉响),`nightly.yml` 是交付面(打包、滚动 Release)——退役门禁腿就丢红报警,退役交付腿就丢唯一交付通道。此前「旧管线是否退役属待裁定」的悬置项以此结论关闭;触发重评的是 2026-10-08 Windows 腿转正(`12c90bd`)后,交付面的文档与回显文案未同步:windows 资产实为在传(2026-10-13 一轮实核,见下),文案仍称「尚无产物」。
 
 ### daily.yml —— 验证门禁
 
@@ -148,7 +148,7 @@ VitePress 2.0-alpha,base `/luna/`,中文本地搜索。
 - 四平台测试矩阵,每腿全量 ctest,`fail-fast: false`;四腿全转正(Windows 2026-10-08、macOS 2026-10-09),无试运行豁免腿——构建或测试红直接拉响夜间;
 - 不打 tag、不发 Release;per-run artifact `luna-nightly-<os>-<arch>` 保留 14 天,仅作佐证,不算交付。
 
-### daily-build.yml —— 交付面
+### nightly.yml —— 交付面
 
 - `schedule`: 每天 UTC 01:23(北京时间 09:23);`workflow_dispatch` 手动触发;
 - 四平台并行构建:linux-x86_64 / linux-aarch64 / macos-aarch64 稳定腿 + windows-x86_64(`continue-on-error`——单腿构建失败不冻结全平台发货,红报警由验证面负责;windows 腿在传资产,2026-10-13 一轮实核);

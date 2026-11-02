@@ -9,10 +9,10 @@ hero:
   actions:
     - theme: brand
       text: 快速上手
-      link: /guide/getting-started
+      link: /zh/guide/getting-started
     - theme: alt
       text: 架构设计
-      link: /architecture
+      link: /zh/architecture
     - theme: alt
       text: GitHub
       link: https://github.com/cuihairu/luna

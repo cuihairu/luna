@@ -1,11 +1,11 @@
 # Node 方向补齐:格式标准库与底层能力选型
 
-这是一篇**规划文档**(先文档后实现,与[事件循环后端设计](/loop-backend-design)同一体例),回答两件事:
+这是一篇**规划文档**(先文档后实现,与[事件循环后端设计](/zh/loop-backend-design)同一体例),回答两件事:
 
 - **A. 格式标准库**:`xml` / `yaml` / `toml` / `csv` / `ini` 五个格式模块进内置 stdlib,与 `json` 同级——选哪个后端、API 长什么样、错误怎么报;
 - **B. Node 底层能力**:`path` / `timers` / `child_process` / `os` / `util` / `events` / `stream` 逐项盘点——哪些已经在 luna 里(以哪个名字)、哪些是缺口、缺口怎么补、补在哪一层。
 
-选型总原则沿用 [架构设计](/architecture) 的既有纪律:**绑定成熟 C 库**(成熟度 = 规范覆盖 + 实战年头 + 错误报告质量,不是"越 C 越好");**纯 Lua 用于逻辑/策略层**(Node 本尊的 path/events/stream 就是纯 JS,luna 对应放 Lua 层);**单二进制不变**(新 C 依赖一律静态链进 deps/,版本钉死)。批次拆解与验收标准在 `todo.md`(第二十轮立项);本文只管"选什么、为什么、API 长什么样"。
+选型总原则沿用 [架构设计](/zh/architecture) 的既有纪律:**绑定成熟 C 库**(成熟度 = 规范覆盖 + 实战年头 + 错误报告质量,不是"越 C 越好");**纯 Lua 用于逻辑/策略层**(Node 本尊的 path/events/stream 就是纯 JS,luna 对应放 Lua 层);**单二进制不变**(新 C 依赖一律静态链进 deps/,版本钉死)。批次拆解与验收标准在 `todo.md`(第二十轮立项);本文只管"选什么、为什么、API 长什么样"。
 
 ## 标准库一一对照(Node ↔ luna)
 
@@ -277,7 +277,7 @@ ini.encode({ server = { host = "127.0.0.1" } })
 
 ### timers:事件循环现状核实与建议
 
-**现状(源码核实)**:派发单引用的 README「事件循环推迟」已经演进——[architecture.md](/architecture) 的章节现在是「事件循环:第一批(显式选择,脚本 opt-in)」:`require "loop"` 落地已久,libuv 1.53.0 静态链接,已有 timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process 八个 C 面 + `loop.http` 纯 Lua 面;prepare 钩子承接 `^C` → `interrupted`(退出码 130)与 attach 轮询。**推迟的对象已经不是"要不要循环",而是"要不要全局化/进 REPL"**——README 概览表原有"事件循环推迟"的表述已随 2026-10-04 定位批更新为现状口径(定时器/TCP/Unix/TLS/异步 fs/信号/子进程 + 脚本尾部自动排水)。
+**现状(源码核实)**:派发单引用的 README「事件循环推迟」已经演进——[architecture.md](/zh/architecture) 的章节现在是「事件循环:第一批(显式选择,脚本 opt-in)」:`require "loop"` 落地已久,libuv 1.53.0 静态链接,已有 timer/fs(+watch)/net(+TLS)/udp/dns/signal/os/process 八个 C 面 + `loop.http` 纯 Lua 面;prepare 钩子承接 `^C` → `interrupted`(退出码 130)与 attach 轮询。**推迟的对象已经不是"要不要循环",而是"要不要全局化/进 REPL"**——README 概览表原有"事件循环推迟"的表述已随 2026-10-04 定位批更新为现状口径(定时器/TCP/Unix/TLS/异步 fs/信号/子进程 + 脚本尾部自动排水)。
 
 **建议:启用「脚本尾部自动排水」,继续推迟「全局化与 REPL 集成」。**
 

@@ -3,7 +3,7 @@
 **luna** 是一个开箱即用的 Lua 通用运行时——为脚本(scripting)、开发工具(tooling)与轻量服务(lightweight services)而造,包含两部分愿望:
 
 - **IPython 式的 REPL**:多行输入、实时语法高亮、Tab 补全、内省帮助、魔法命令、`In[n]`/`Out[n]` 会话记录;
-- **Node.js 式的工程体验**:贴近 Node 的模块解析规则、标准库形状、目录插件机制与包管理包装——Node 对齐是架构参考,不是身份,见[架构设计](/architecture)。
+- **Node.js 式的工程体验**:贴近 Node 的模块解析规则、标准库形状、目录插件机制与包管理包装——Node 对齐是架构参考,不是身份,见[架构设计](/zh/architecture)。
 
 三层模型:你的代码(User Space)跑在 luna 自己(标准库、模块、插件、REPL 策略层——Luna Runtime)之上,底下是官方 Lua 5.5 与 vendor 库(Native Runtime)。
 
@@ -33,7 +33,7 @@ Wall time: 6.000 ms
 
 ## 三条设计底线
 
-1. **成熟库铁律**:行编辑、词法、参数解析、JSON、zlib、TLS 全部取自维护良好的成熟库,见[架构设计](/architecture#选型对比)的逐项对比;
+1. **成熟库铁律**:行编辑、词法、参数解析、JSON、zlib、TLS 全部取自维护良好的成熟库,见[架构设计](/zh/architecture#选型对比)的逐项对比;
 2. **内核/策略分层**:C 内核只提供状态与原语,REPL、补全、高亮、魔法命令全部是嵌入二进制的 Lua 源,插件可在运行期替换其中任意一环;
 3. **REPL 始终是入口**:`luna` 裸启动进控制台,`luna script.lua` 与 `luna -e` 是它的脚本形态——node 也是这么做的。
 

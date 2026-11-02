@@ -697,7 +697,8 @@ function M.parseEnv(content)
                             if q == '"' then
                                 value = value:gsub("\\n", "\n")
                             end
-                            -- 跳到闭合引号所在行的行尾之后
+                            -- 跳到闭合引号所在行的行尾之后 (可跨行);
+                            -- 跨行时中间行整行吞掉, 底部不再回退到 nl+1
                             i = s:find("\n", close, true) or (n + 1)
                         end
                         -- 未闭合: 开引号保留, 值只取本行, 下一行照常解析
@@ -711,7 +712,9 @@ function M.parseEnv(content)
                 end
             end
         end
-        i = nl + 1
+        if i <= nl then
+            i = nl + 1
+        end
     end
     return out
 end

@@ -3549,9 +3549,11 @@ static void test_util_parseenv_surface(void **state)
                     "r[6] = r3(e('A=\"a\"tr\\nB=2'))\n"
                     "r[7] = r3(e('A=\"a\\n\\nb\"'))\n"
                     "r[8] = r3(e('A=\"a\\rb\"'))\n"
+                    "r[9] = r3(e('A=\"x\\ny=z\"\\nB=1'))\n"
+                    "r[10] = r3(e('A=\"x\\ny=z\"\\nB=1\\nC=3'))\n"
                     "return table.concat(r, ',')"),
         "A<a\\nb>,A<a\\nb>,A<a\\nb>,A<a\\\\nb>,A<\"unclosed>;B<2>,"
-        "A<a>;B<2>,A<a\\n\\nb>,A<ab>");
+        "A<a>;B<2>,A<a\\n\\nb>,A<ab>,A<x\\ny=z>;B<1>,A<x\\ny=z>;B<1>;C<3>");
 }
 
 static void test_util_text_surface(void **state)

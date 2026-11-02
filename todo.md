@@ -5,7 +5,7 @@
 ## 待办
 
 - [x] en 文档补齐(2026-11-02):33 个 en 页全数落库(guide 11、stdlib 17、other 4、node-parity 1);6 页 guide 工作树 WIP 先核完整后按批提交,余 27 页按审计表 A1 顺序分三批提交(guide 5→stdlib 17→other 4+node-parity 1),每批 docs build 绿后单 commit+push(禁 force push);最后补齐 EN sidebar(标准库四类分法/Other/Design 全链)并归一化全部跨页链接为 en 目标。README/sidebar 链接自此自然可达。5897506,840762e,17b7196,8438d38,e293366
-- [ ] util.parseEnv 引号多行值跳行死代码:lua/modules/util/init.lua:701 的跨行跳过被 :714 无条件覆盖,续行被重解析为 key=value(如 'A="x\ny=z"\nB=1' 多出 y='z"')。P2,码审 Finding 1
+- [x] util.parseEnv 引号多行值跳行死代码:lua/modules/util/init.lua:701 的跨行跳过被 :714 无条件覆盖,续行被重解析为 key=value(如 'A="x\ny=z"\nB=1' 多出 y='z"')。P2,码审 Finding 1。已修:底部回退改为仅当 i<=nl 时推进,跨行跳过不再被覆盖;新增 2 例跨行引号含 = 回归。lua/modules/util/init.lua:700,test/luna_test_modules.c:3550
 - [ ] serve.ps 读 /proc/<pid>/cmdline 无 nil 检查:lua/luna/serve.lua:285 `fh:read("a")` 结果直接 gsub,读失败(pid 回收/IO 错)抛"attempt to index a nil value"。P3,码审 Finding 3
 - [ ] attach 命令的 kernel.exec 未包 pcall:lua/luna/serve.lua:181-185,目标 stdout 断管时错误越过 kernel.sink(nil),捕获 sink 滞留,后续输出被吞。P3,码审 Finding 4
 - [ ] attach 会话 inputs 表永不裁剪:lua/luna/serve.lua:136,进程存活期随每条命令增长。P3,码审 Finding 5

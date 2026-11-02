@@ -282,7 +282,10 @@ function serve.ps()
             local cmdline
             local fh = io.open("/proc/" .. pid .. "/cmdline", "r")
             if fh then
-                cmdline = fh:read("a"):gsub("%z", " "):gsub("%s+$", "")
+                local raw = fh:read("a")
+                if raw then
+                    cmdline = raw:gsub("%z", " "):gsub("%s+$", "")
+                end
                 fh:close()
             end
             rows[#rows + 1] = {

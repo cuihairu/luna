@@ -44,6 +44,7 @@
 
 int luaopen_lpeg(lua_State *L);        /* introspect's pattern use */
 int luaopen_socket_unix(lua_State *L); /* luasocket unix transport */
+int luaopen_lfs(lua_State *L);         /* serve.ps() scans the sock dir */
 
 #ifndef SERVE_FIXTURES
 #define SERVE_FIXTURES "fixtures"
@@ -85,6 +86,8 @@ static int setup_serve(void **state)
     luaL_requiref(L, "lpeg", luaopen_lpeg, 0);
     lua_pop(L, 1);
     luaL_requiref(L, "socket.unix", luaopen_socket_unix, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lfs", luaopen_lfs, 0);
     lua_pop(L, 1);
 
     /* the embedded policy modules the serve chain requires */
@@ -246,6 +249,40 @@ static void test_stop_clears_socket_and_poll_noops(void **state)
         "S.stop()\n"
         "S.step()\n" /* must not raise */
         "assert(os.remove(S.path_for(kernel.pid())) == nil, 'socket gone')");
+}
+
+/* serve.ps() scans the sock dir and reads /proc/<pid>/cmdline per row.
+ * A stale socket for a recycled pid can make io.open succeed but the
+ * read fail (fh:read("a") returns nil): ps() must not raise "attempt to
+ * index a nil value" and must leave cmdline nil for that row. The test
+ * stubs io.open + lfs.dir to force that exact shape deterministically. */
+static void test_ps_handles_stale_socket(void **state)
+{
+    (void)state;
+    run(L,
+        "local io_open = io.open\n"
+        "local dir_iter = lfs.dir\n"
+        "local entries = {'luna-4242.sock'}\n"
+        "local fake_handle = setmetatable({read = function() return nil end,\n"
+        "                                  close = function() end}, {})\n"
+        "io.open = function(p, m)\n"
+        "  if p:find('4242', 1, true) then return fake_handle end\n"
+        "  return io_open(p, m)\n"
+        "end\n"
+        "lfs.dir = function(d)\n"
+        "  local i = 0\n"
+        "  return function()\n"
+        "    i = i + 1\n"
+        "    return entries[i]\n"
+        "  end\n"
+        "end\n"
+        "local ok, err = pcall(S.ps)\n"
+        "io.open = io_open\n"
+        "lfs.dir = dir_iter\n"
+        "assert(ok, 'serve.ps raised on nil read: ' .. tostring(err))\n"
+        "assert(#S.ps() >= 0, 'ps returned non-table')\n"
+        "return 'ok'");
+    assert_string_equal(eval_string("return 'ok'"), "ok");
 }
 
 /* pty_expect with a diagnostic: on timeout, dump what actually came
@@ -1383,6 +1420,7 @@ int main(void)
         cmocka_unit_test(test_exotic_error_object_still_frames),
         cmocka_unit_test(test_a_raising_completion_candidate_still_frames),
         cmocka_unit_test(test_wake_and_chmod_report_errors),
+        cmocka_unit_test(test_ps_handles_stale_socket),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test_setup_teardown(test_sigusr1_releases_idle_editor, NULL, sweep_teardown),

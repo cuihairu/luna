@@ -111,7 +111,7 @@ add_test(NAME plugins COMMAND luna_test_plugins)
 
 # Attach channel: unix socket serve, framed replies, error isolation
 add_executable(luna_test_serve luna_test_serve.c)
-target_link_libraries(luna_test_serve PRIVATE cmocka-static lualib lpeg luasocket luna_kernel)
+target_link_libraries(luna_test_serve PRIVATE cmocka-static lualib lpeg luasocket lfs luna_kernel)
 # the idle-wake test drives the real binary on a pty; the busy-script
 # attach test drives it again with a fixture
 if(NOT WIN32)

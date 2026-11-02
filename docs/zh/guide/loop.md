@@ -439,7 +439,7 @@ loop.run()
 
 | 服务端调用 | 语义 |
 | --- | --- |
-| `http.listen(host, port, handler)` | 起服务,返回 net server;`port 0` = 临时端口;handler 非 function 同步抛错 |
+| `http.listen(host, port, handler, opts?)` | 起服务,返回 net server;`port 0` = 临时端口;handler 非 function 同步抛错;`opts.max_body`(字节,默认 16 MiB)调请求体上限 |
 | `req` | `{method, path(含查询串), headers(键小写、多值逗号合并), body(字符串)}` |
 | `res.send(status?, body?, headers?)` | 三种重载:`send(body)`=200 / `send(status, body)` / `send(status, body, headers)`;写完整个响应即关连接;**幂等**——再调不生效 |
 
@@ -454,6 +454,7 @@ loop.run()
 - **https 的证书校验默认开启**,`opts.insecure` / `opts.ca` 透传给 `connectTls`;
 - **服务端一连接一请求**:与自己的客户端同款 `Connection: close` 语义——响应写完即关,不做 keep-alive;
 - **服务端在请求整体落地后才调 handler**:请求体按 `content-length` 收满为准(chunked 请求体不在面内);请求行不匹配 HTTP/1.x 或头部越过 64KiB,直接回 400 并关连接;
+- **服务端请求体有上限**:声明的 `content-length` 或流式体越过 `opts.max_body`(默认 16 MiB)直接回 413 并关连接——`content-length` 是对端的自述,不设界就是让对端牵着内存走;
 - **handler 抛错**:若此时响应尚未发出,实现回一个 500;已 `send` 过的连接不受影响;
 - **handler 不发 `send` 连接就挂着**:没有自动补发——忘了回就是挂到对端超时;
 - **边界**:本面不做多路复用与无限流(如 SSE——聚合模型等不到完结;大文件下载用 `onData` 流式,双向长连接请直接用 net 面);IPv6 字面量主机暂不支持;传入的 opts 表不会被修改(重定向折叠写在内部拷贝上);与 stdlib 的同步 `http`(luasocket 后端)互不影响——阻塞单发用它,循环内并发用 `loop.http`。

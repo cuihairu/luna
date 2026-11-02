@@ -12,7 +12,7 @@ hero:
       link: /guide/getting-started
     - theme: alt
       text: Architecture
-      link: /architecture.en
+      link: /architecture
     - theme: alt
       text: GitHub
       link: https://github.com/cuihairu/luna
@@ -31,6 +31,13 @@ features:
     title: Directory plugins
     details: ./plugins discovered in place, plugin.json manifests, four extension points — magic commands, completion sources, highlight rules, module injection — with failure isolation, never fatal.
 ---
+
+
+## Architecture
+
+<p align="center">
+  <img src="/images/architecture-en.svg" alt="luna three-layer architecture: User Space / Luna Runtime / Native Runtime" width="960"/>
+</p>
 
 
 ## In the terminal

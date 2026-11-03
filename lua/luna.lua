@@ -194,6 +194,11 @@ local function run_script(path, script_args)
     end
     local src = fh:read("a")
     fh:close()
+    if not src then
+        io.stderr:write("luna: cannot read " .. path .. "\n")
+        _G.arg = old_arg
+        return 1
+    end
 
     -- While the script runs, the kernel's count hook polls the attach
     -- socket (installed by serve.start), so an attach client reaches a

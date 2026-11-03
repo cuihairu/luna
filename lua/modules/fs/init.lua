@@ -28,6 +28,9 @@ function fs.readFileSync(path)
     end
     local data = fh:read("a")
     fh:close()
+    if not data then
+        error("fs.readFileSync: cannot read " .. path, 2)
+    end
     return data
 end
 

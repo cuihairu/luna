@@ -335,6 +335,33 @@ static void test_fs_readdir_sort_and_error_paths(void **state)
         "return true"));
 }
 
+/* fs.readFileSync stubs io.open so the handle's read returns nil (the
+ * shape an I/O failure gives): the convenience must raise "cannot read"
+ * instead of crashing on the nil return. */
+static void test_fs_read_reports_read_failure(void **state)
+{
+    (void)state;
+    assert_true(eval_bool(
+        "local fs = require('fs')\n"
+        "local io_open = io.open\n"
+        "io.open = function(path)\n"
+        "  if path == '/nope' then\n"
+        "    return setmetatable({}, {__index =\n"
+        "      function(_, k)\n"
+        "        if k == 'read' then return function() return nil end end\n"
+        "        if k == 'close' then return function() end end\n"
+        "        return nil\n"
+        "      end})\n"
+        "  end\n"
+        "  return io_open(path)\n"
+        "end\n"
+        "local ok, err = pcall(fs.readFileSync, '/nope')\n"
+        "io.open = io_open\n"
+        "assert(not ok, 'expected readFileSync to fail')\n"
+        "assert(tostring(err):find('cannot read /nope', 1, true), err)\n"
+        "return true"));
+}
+
 static void test_zlib_one_shot_roundtrip(void **state)
 {
     (void)state;
@@ -4164,6 +4191,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_fs_write_read_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_fs_append_mkdir_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_fs_readdir_sort_and_error_paths, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_fs_read_reports_read_failure, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_zlib_one_shot_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_net_and_http_expose_functions, setup_modules, teardown_modules),
 #ifdef LUNA_HAVE_OPENSSL

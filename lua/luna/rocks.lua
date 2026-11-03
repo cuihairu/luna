@@ -351,6 +351,10 @@ local function read_lock(path)
     end
     local text = fh:read("a")
     fh:close()
+    if not text then
+        io.stderr:write("luna: cannot read luna.lock\n")
+        os.exit(1)
+    end
     local lock, pos, jerr = json.decode(text)
     if not lock then
         io.stderr:write("luna: luna.lock is not valid JSON at position " ..

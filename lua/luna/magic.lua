@@ -367,6 +367,9 @@ magic.register("load", function(session, arg)
     end
     local src = fh:read("a")
     fh:close()
+    if not src then
+        error("load: cannot read " .. path)
+    end
     local lines = src == ""
         and 0
         or select(2, src:gsub("\n", "\n")) + (src:sub(-1) ~= "\n" and 1 or 0)

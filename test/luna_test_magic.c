@@ -382,6 +382,32 @@ static void test_plugins_with_shadowed(void **state)
     assert_true(local_a < local_z);
 }
 
+/* %load stubs io.open to hand back a handle whose read returns nil (the
+ * shape an I/O failure gives): magic.dispatch must surface it as an
+ * error, not crash on src:gsub(nil). */
+static void test_load_reports_read_failure(void **state)
+{
+    (void)state;
+    assert_int_equal(luaL_dostring(L,
+                       "local io_open = io.open\n"
+                       "io.open = function(path)\n"
+                       "  if path == '/nope' then\n"
+                       "    return setmetatable({}, {__index =\n"
+                       "      function(_, k)\n"
+                       "        if k == 'read' then return function() return nil end end\n"
+                       "        if k == 'close' then return function() end end\n"
+                       "        return nil\n"
+                       "      end})\n"
+                       "  end\n"
+                       "  return io_open(path)\n"
+                       "end\n"
+                       "local ok, err = M.dispatch(S, 'load', '/nope')\n"
+                       "io.open = io_open\n"
+                       "assert(not ok, 'expected dispatch to fail')\n"
+                       "assert(tostring(err):find('cannot read /nope', 1, true), err)\n"
+                       "return true"), LUA_OK);
+}
+
 /* -- runner --------------------------------------------------------------- */
 
 int main(void)
@@ -411,6 +437,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_plugins_with_loaded_and_failed, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_plugins_with_shadowed, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_exit_magic_calls_os_exit, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_load_reports_read_failure, setup_magic, teardown_magic),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -46,6 +46,21 @@ local function parent(dir)
     return up
 end
 
+-- A rock name/version is glued into cache and rockspec paths. The lock
+-- file (or a hand-written one) could otherwise walk out of .luna/cache
+-- or the tree with ../ — the same input also feeds os.remove and
+-- sha256_file, so a hostile name/version could read or delete arbitrary
+-- files. Accept only [A-Za-z0-9._-]+ and refuse .. segments outright.
+local function check_rock_component(what, value)
+    if type(value) ~= "string" or value == ""
+        or not value:match("^[A-Za-z0-9._%-]+$")
+        or value:find("..", 1, true) then
+        error("rocks: unsafe " .. what .. ": "
+            .. tostring(value), 0)
+    end
+    return value
+end
+
 local function is_dir(path)
     return lfs.attributes(path, "mode") == "directory"
 end
@@ -257,6 +272,8 @@ local function tree_rocks(tree)
 end
 
 local function cache_file(tree, name, version)
+    check_rock_component("name", name)
+    check_rock_component("version", version)
     local root = parent(parent(tree))
     return (root or ".") .. "/" .. CACHE_DIR .. "/" .. name .. "-" .. version .. ".src.rock"
 end
@@ -305,6 +322,8 @@ end
 -- sha of the rockspec luarocks stored in the tree: the authoritative
 -- lockable fingerprint of what was installed (source URL + version)
 local function rockspec_sha(tree, name, version)
+    check_rock_component("name", name)
+    check_rock_component("version", version)
     return sha256_file(tree .. "/lib/luarocks/rocks-" .. LUA_VERSION ..
         "/" .. name .. "/" .. version .. "/" .. name .. "-" .. version .. ".rockspec")
 end

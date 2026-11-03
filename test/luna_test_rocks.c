@@ -289,6 +289,23 @@ static void test_from_lock_refuses_a_cached_sha_mismatch(void **state)
     free(log);
 }
 
+/* A hostile luna.lock whose rock name carries ../ must not let the
+ * cache path (or the rockspec path) escape .luna/cache or the tree:
+ * that would let a crafted lock read or delete arbitrary files. The
+ * run must refuse before touching the filesystem. */
+static void test_from_lock_refuses_path_traversal(void **state)
+{
+    (void)state;
+    write_file("luna.lock",
+               "{\"version\":1,\"lua\":\"5.5\",\"rocks\":["
+               "{\"name\":\"../../../../etc/passwd\",\"version\":\"1.0-1\"}]}\n");
+    assert_int_equal(run_luna("install --from-lock"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "unsafe name"));
+    free(log);
+}
+
 static void test_rocks_tree_injects_module_paths(void **state)
 {
     (void)state;
@@ -346,6 +363,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_update_on_an_empty_lock_relocks_offline,
                                         setup_rocks, teardown_rocks),
         cmocka_unit_test_setup_teardown(test_from_lock_refuses_a_cached_sha_mismatch,
+                                        setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_from_lock_refuses_path_traversal,
                                         setup_rocks, teardown_rocks),
         cmocka_unit_test_setup_teardown(test_rocks_tree_injects_module_paths,
                                         setup_rocks, teardown_rocks),

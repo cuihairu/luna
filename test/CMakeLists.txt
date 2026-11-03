@@ -197,6 +197,14 @@ target_compile_definitions(luna_test_covsum PRIVATE
         LUNA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME covsum COMMAND luna_test_covsum)
 
+# install.sh checksum hardening: the sha256-mismatch hard die and the
+# token-attached sidecar fetch are shell logic with no C harness, so
+# they run as a POSIX shell script under ctest. The script builds fake
+# uname/curl/sha256sum/unzip in a scratch dir and needs no network.
+add_test(NAME install_sh
+        COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/luna_test_install.sh"
+                "${CMAKE_SOURCE_DIR}/install.sh")
+
 # luacov collection (Profiling builds only): the harness glue targets
 # learn the coverage paths; every test exports LUNA_COVERAGE=1 so spawned
 # children (the real binary) instrument themselves as well.

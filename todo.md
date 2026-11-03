@@ -111,3 +111,11 @@
 - [x] 审核发现（低，卫生，非 diff 内容）：工作树存在空目录 `docs/zh/"docs`（含引号字符，shell 误操作遗留），未跟踪、不影响构建，建议清理。已清空目录
 
 - 审核发现（低，文档一致性）已裁定不属实：luna 以键缺省(nil)表达 Node 的 null，Lua 无 null 字面量；loop.md:257 与 node-parity.md:485/488 均一致描述 key absent (nil)，与实现 luna_loop.c:2908 一致，无实际矛盾。
+
+### 审核任务（只审不改）16f5a76fea52..HEAD（2026-11-03）
+
+覆盖：3 提交（9331b22,83b7456,1018076）、10 文件全数（todo.md 为记账文件除外）。已实证：parseEnv 新旧对照（旧码 r[9]/r[10] 多出 `y<z">` 多余键，新码正确）与仓库内真实 util 模块加载验证均通过；serve.ps 测试桩仅影响 io.open/lfs，`kernel.alive` 为 C 绑定 `kill(pid,0)` 不受桩影响；install.ps1 的 Die=exit 1 不被 catch 吞、install.sh 的 die 定义于 line 38 早于使用。另注：工作树存在未提交改动（lua/luna/serve.lua、test/luna_test_serve.c，系 todo Finding 5「attach inputs 裁剪」的 WIP），位于审计范围 16f5a76..HEAD 之外，未纳入审查亦未改动。
+
+- [ ] 审核发现（低，安全提示，既有行为）：install.ps1:143 / install.sh:165 的 .sha256 侧车拉取为匿名（未随 `-Headers $headers` / `-H "Authorization"`），私有仓库/`--token` 路径侧车 404 →「无侧车无结论」→ 继续安装且零校验；提交 1018076 的「不匹配即硬失败」加固仅对公开/匿名路径生效，私有安装不受保护。属既有侧车设计、非本 diff 引入，但限制了该提交宣称的供应链属性（可随 token 拉取侧车令私有路径同享校验）。
+- [x] 审核发现（低，测试缺口）：install.sh:169 / install.ps1:146 的 sha256 不匹配硬失败分支无自动化测试（test/ 无 install 脚本 harness）；parseEnv 跨行引号（r[9]/r[10]）与 serve.ps nil-read（test_ps_handles_stale_socket）修复均有有效确定性回归，唯安装脚本加固分支未测。已补：新增 ctest 组 install_sh（test/luna_test_install.sh），假 uname/curl/sha256sum/unzip 无网络驱动，两腿断言——侧车不匹配→die「sha256 mismatch」、--token 时侧车拉取携带 Bearer 头；install_sh 组绿，全量 ctest 17/17。test/luna_test_install.sh,test/CMakeLists.txt
+- [ ] 审核发现（低，错误处理缺失，既有模式）：serve.lua:300-303 的 nil-read 守卫只修 /proc/<pid>/cmdline 一处；同类未加保护的 `fh:read("a")` 仍存于 magic.lua:368（read 失败 src=nil，:370 `src:gsub` 抛错）、plugins.lua:40、modules.lua:36、rocks.lua:352、luna.lua:195、fs/init.lua:29。均读常规文件（nil-read 概率远低于过期 pid），既有、出 diff 范围，属同类缺陷残留。

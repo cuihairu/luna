@@ -8,7 +8,7 @@
 - [x] util.parseEnv 引号多行值跳行死代码:lua/modules/util/init.lua:701 的跨行跳过被 :714 无条件覆盖,续行被重解析为 key=value(如 'A="x\ny=z"\nB=1' 多出 y='z"')。P2,码审 Finding 1。已修:底部回退改为仅当 i<=nl 时推进,跨行跳过不再被覆盖;新增 2 例跨行引号含 = 回归。lua/modules/util/init.lua:700,test/luna_test_modules.c:3550
 - [x] serve.ps 读 /proc/<pid>/cmdline 无 nil 检查:lua/luna/serve.lua:285 `fh:read("a")` 结果直接 gsub,读失败(pid 回收/IO 错)抛"attempt to index a nil value"。P3,码审 Finding 3。已修:read 结果先判 nil 再 gsub,读失败保留 cmdline nil;新增确定性回归(桩 io.open/lfs.dir 强制 read→nil)。lua/luna/serve.lua:285,test/luna_test_serve.c:254
 - [x] attach 命令的 kernel.exec 未包 pcall:lua/luna/serve.lua:181-185,目标 stdout 断管时错误越过 kernel.sink(nil),捕获 sink 滞留,后续输出被吞。P3,码审 Finding 4。已修:dispatch 经 exec_pack 包 pcall 调 kernel.exec(三处:sugar/首个 eval/失败回退),raise 以 {false,msg} 上浮,cleanup 恒达 kernel.sink(nil);新增回归 test_raising_exec_does_not_strand_sink(桩 kernel.exec 抛 EPIPE,断言 ERR 帧且 sink 释放)。serve 组绿。lua/luna/serve.lua:132,test/luna_test_serve.c:223
-- [ ] attach 会话 inputs 表永不裁剪:lua/luna/serve.lua:136,进程存活期随每条命令增长。P3,码审 Finding 5
+- [x] attach 会话 inputs 表永不裁剪:lua/luna/serve.lua:136,进程存活期随每条命令增长。P3,码审 Finding 5。已修:record_input 按绝对 in_n 记录,超 MAX_INPUTS=1000 裁最旧(留空隙,%hist 跳过),in_n 恒计数;新增回归 test_attach_history_recorded_and_bounded(1002 条后窗口 1000、最旧丢弃、最新保留、in_n 连续)。serve 组绿。lua/luna/serve.lua:91,test/luna_test_serve.c
 - [ ] stream _want_read 同步紧循环:lua/modules/stream/init.lua:232-253,常就绪同步源每推即耗时不让出,饿死定时器与中断钩子。P3,码审 Finding 6
 - [ ] %hist 范围不封顶:lua/luna/magic.lua:150,`%hist 1-99999999999` 挂起会话。P3,码审 Finding 7
 - [ ] rocks.lua 路径穿越:lua/luna/rocks.lua:259-262 cache_file 以 name/version 拼路径(name 可含 `../`),:299 os.remove 可删任意路径,:80 sha256_file io.open 可读任意文件(触发面 `luna install --from-lock`)。P2,安全审 F2

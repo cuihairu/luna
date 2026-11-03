@@ -1617,6 +1617,11 @@ static int l_net_connect(lua_State *L)
 
     struct resolver *r = malloc(sizeof(*r));
     if (!r) {
+        /* sock_new pinned selfref/keepalive and pin_cb pinned the
+         * callback; the longjmp out of luaL_error would strand all
+         * three. Tear the sock down first (unrefs connectref, closes
+         * the handle; on_sock_closed drops the selfref pin). */
+        sock_close(s);
         return luaL_error(L, "loop.net: out of memory");
     }
     r->s = s;
@@ -1688,6 +1693,13 @@ static int l_sock_write(lua_State *L)
         luaL_checktype(L, 3, LUA_TFUNCTION);
     }
     luaL_argcheck(L, s->connected && !s->closed, 1, "socket not connected");
+    /* uv_buf_init takes an unsigned int; a len past UINT_MAX (4 GiB)
+     * would be silently truncated and the tail of the payload would
+     * never be sent. Refuse rather than silently drop bytes. */
+    if (len > UINT_MAX) {
+        return luaL_error(L, "loop.net: write of %zu bytes exceeds the "
+                          "4 GiB libuv single-buffer limit", len);
+    }
     struct sockwrite *w = malloc(sizeof(*w) + len);
     if (!w) {
         return luaL_error(L, "loop.net: out of memory");

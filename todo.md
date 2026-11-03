@@ -13,10 +13,10 @@
 - [x] %hist 范围不封顶:lua/luna/magic.lua:150,`%hist 1-99999999999` 挂起会话。P3,码审 Finding 7。已修:%hist 的 lo/hi 先 clamp(lo=max(lo,1),hi=min(hi,in_n)),超顶大范围不再旋转;新增回归 test_hist_range_is_capped(%hist 1-99999999999 与 0-2 均封顶且顺序完好)。magic 组绿。lua/luna/magic.lua:152,test/luna_test_magic.c
 - [x] rocks.lua 路径穿越:lua/luna/rocks.lua:259-262 cache_file 以 name/version 拼路径(name 可含 `../`),:299 os.remove 可删任意路径,:80 sha256_file io.open 可读任意文件(触发面 `luna install --from-lock`)。P2,安全审 F2。已修:新增 check_rock_component 校验 name/version 仅 [A-Za-z0-9._-]+ 且拒 `..` 与空串,cache_file/rockspec_sha 入口先校验(经 os.remove/sha256_file 的越界读删被堵);新增回归 test_from_lock_refuses_path_traversal(锁内 name=../../../../etc/passwd → 拒「unsafe name」)。rocks 组绿。lua/luna/rocks.lua:47,test/luna_test_rocks.c:296
 - [x] http.serve Windows 路径穿越:lua/modules/http/init.lua:196-203 只挡 `..` 段,POSIX 有效但 Windows 反斜杠分隔可绕过,静态文件面可越界读。P2,安全审 F3。已修:解码后路径含反斜杠直接 403(Windows 视 `\` 为分隔符,`..\` 段绕过分段检查);新增回归 test_http_static_refuses_backslash_traversal(桩 loop.http.listen,断言 `/..\..\etc\passwd` → 403)。loop 组绿。lua/modules/http/init.lua:199,test/luna_test_loop.c
-- [ ] l_net_connect OOM 泄漏:src/luna_loop.c:1600-1603 malloc(resolver) 失败走 luaL_error,但 sock_new 已 pin selfref/keepalive/connectref,longjmp 后三者永不释放,keepalive 计数滞留。P2(仅 OOM 触发),码审 C3
-- [ ] l_sock_write 长写截断:src/luna_loop.c:1671 `uv_buf_init(copy, (unsigned)len)`,len>UINT_MAX(4GiB) 时写长截断,>4GiB 数据静默不发送。P3,码审 C4
-- [ ] prepend_module_dir 路径截断:src/luna_main.c:128-131 `snprintf(merged, 10240, "%s%s", add, cur)`,package.path 超长(用户 LUA_PATH)时截断破坏路径(非崩溃)。P3,码审 C5
-- [ ] _FORTIFY_SOURCE 未开:编译面仅 -fstack-protector-strong,_FORTIFY_SOURCE=2 缺失(需 -O2 且 glibc)。P3,质量门
+- [x] l_net_connect OOM 泄漏:src/luna_loop.c:1600-1603 malloc(resolver) 失败走 luaL_error,但 sock_new 已 pin selfref/keepalive/connectref,longjmp 后三者永不释放,keepalive 计数滞留。P2(仅 OOM 触发),码审 C3。已修:malloc 失败先 sock_close(s)(unref connectref/关句柄,on_sock_closed 落 selfref pin)再 luaL_error,三 pin 不再滞留。src/luna_loop.c:1618
+- [x] l_sock_write 长写截断:src/luna_loop.c:1671 `uv_buf_init(copy, (unsigned)len)`,len>UINT_MAX(4GiB) 时写长截断,>4GiB 数据静默不发送。P3,码审 C4。已修:len>UINT_MAX 直接 luaL_error(单缓冲超 libuv 上限),不静默丢字节。src/luna_loop.c:1689
+- [x] prepend_module_dir 路径截断:src/luna_main.c:128-131 `snprintf(merged, 10240, "%s%s", add, cur)`,package.path 超长(用户 LUA_PATH)时截断破坏路径(非崩溃)。P3,码审 C5。已修:snprintf 返回值超 10240 即弃 prepend 并 stderr 警告(不截断);新增回归 test_long_lua_path_not_truncated(LUA_PATH 40KB → 警告且不崩溃)。cli 组绿。src/luna_main.c:131,test/luna_test_cli.c
+- [x] _FORTIFY_SOURCE 未开:编译面仅 -fstack-protector-strong,_FORTIFY_SOURCE=2 缺失(需 -O2 且 glibc)。P3,质量门。已修:luna 目标在 UNIX 且非 MSVC 加 -fstack-protector-strong 与 Release/RelWithDebInfo/MinSizeRel 的 -O2 -D_FORTIFY_SOURCE=2;Release 编译实测 nm 见 __memcpy_chk/__sprintf_chk 等。CMakeLists.txt:340
 
 ## 已完成
 

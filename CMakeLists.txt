@@ -335,6 +335,19 @@ if(LUNA_HAVE_OPENSSL)
 endif()
 set_target_properties(luna PROPERTIES LINKER_LANGUAGE CXX)
 
+# Hardening: _FORTIFY_SOURCE=2 (and the stack protector the review
+# noted) only make sense with -O2 or better and a glibc/glibc-like
+# libc; MSVC's _FORTIFY is a different beast, so the flags are UNIX and
+# non-MSVC only. The fortify header refuses to engage below -O2, so we
+# set it for the optimization levels that actually use it.
+if(UNIX AND NOT MSVC)
+    target_compile_options(luna PRIVATE
+            -fstack-protector-strong
+            $<$<CONFIG:Release>:-O2 -D_FORTIFY_SOURCE=2>
+            $<$<CONFIG:RelWithDebInfo>:-O2 -D_FORTIFY_SOURCE=2>
+            $<$<CONFIG:MinSizeRel>:-O2 -D_FORTIFY_SOURCE=2>)
+endif()
+
 # vendored LuaRocks sources for `luna install/search/list/update`:
 # staged into the build tree (configure-time copy, like luna_modules/)
 # and located through kernel.vendor_dir at runtime. The wrapper embeds

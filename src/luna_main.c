@@ -128,7 +128,17 @@ static void prepend_module_dir(lua_State *L, int is_cpath, const char *dir)
         snprintf(add, sizeof(add), "%s/?.%s;", dir, LUNA_SO_EXT);
     else
         snprintf(add, sizeof(add), "%s/?.lua;%s/?/init.lua;", dir, dir);
-    snprintf(merged, sizeof(merged), "%s%s", add, cur ? cur : "");
+    int n = snprintf(merged, sizeof(merged), "%s%s", add, cur ? cur : "");
+    if (n < 0 || (size_t)n >= sizeof(merged)) {
+        /* A path past the 10 KiB stack buffer would be silently
+         * truncated (snprintf), corrupting every later require — the
+         * user's LUA_PATH is too long to prepend into. Drop the
+         * addition rather than corrupt the path. */
+        fprintf(stderr, "luna: warning: %s is too long to prepend "
+                "the module dir; leaving it unchanged\n", field);
+        lua_pop(L, 2); /* old value + package */
+        return;
+    }
     lua_pushstring(L, merged);
     lua_setfield(L, -3, field);
     lua_pop(L, 2); /* old value + package */

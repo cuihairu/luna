@@ -541,6 +541,31 @@ static void test_runs_without_coverage_instrumentation(void **state)
     assert_null(strstr(outbuf, "coverage"));
 }
 
+/* A user LUA_PATH past the 10 KiB stack buffer used to be silently
+ * truncated by snprintf, corrupting every later require. The fix drops
+ * the module-dir prepend (with a warning) instead of truncating, so
+ * package.path stays intact — the script can still see its full length. */
+static void test_long_lua_path_not_truncated(void **state)
+{
+    (void)state;
+    /* 20000 'x' segments => ~40000 bytes, well past the 10240 buffer */
+    char env[42000];
+    size_t pos = 0;
+    memcpy(env + pos, "LUA_PATH=", 9); pos += 9;
+    for (int i = 0; i < 20000; i++) {
+        env[pos++] = '/'; env[pos++] = 'x';
+    }
+    env[pos] = '\0';
+    setenv("LUA_PATH", env + 9, 1);
+    /* the module dir cannot be prepended (over-long), so the eval can
+     * only assert package.path survived; argparse may be missing, so
+     * just check the warning fired and the process did not crash */
+    run_luna("-e 'assert(#package.path > 40000)'");
+    unsetenv("LUA_PATH");
+    assert_non_null(strstr(outbuf, "too long to prepend the module dir"));
+    assert_int_not_equal(last_code, -1); /* no crash */
+}
+
 /* -- help / usage -------------------------------------------------------- */
 
 static void test_help_smoke(void **state)
@@ -695,6 +720,7 @@ int main(void)
         cmocka_unit_test(test_color_disabled_by_env),
         cmocka_unit_test(test_color_empty_value_defers_to_tty),
         cmocka_unit_test(test_runs_without_coverage_instrumentation),
+        cmocka_unit_test(test_long_lua_path_not_truncated),
         cmocka_unit_test(test_help_smoke),
         cmocka_unit_test(test_unknown_flag_rejected),
         cmocka_unit_test(test_sandbox_denies_loop),

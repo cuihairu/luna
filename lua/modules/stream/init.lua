@@ -29,6 +29,14 @@ local Emitter = getmetatable(events.new()) -- events 的方法表, 流继承它
 
 local DEFAULT_HWM = 16384
 
+-- A synchronous source that always delivers (every _read pushes) would
+-- spin the _want_read loop without ever returning to the event loop,
+-- starving timers and the interrupt hook. Hand control back every
+-- SYNC_PULL_BUDGET consecutive synchronous pulls and resume on the next
+-- tick; without loop (pure sync world) there is no scheduler to starve,
+-- so the loop stays iterative.
+local SYNC_PULL_BUDGET = 64
+
 -- 尺寸记账: 字符串按 #, 其余 (数字/表等) 按 1
 local function sizeof(chunk)
     if type(chunk) == "string" then
@@ -230,11 +238,26 @@ end
 -- 内部缓冲空且在流动时向源要数据: _read 一次不产出 (同步 push 没发生)
 -- 就返回等下次 push; 产出了就投递再续要, 直到源收口或暂停。
 function Readable:_want_read()
+    local pulls = 0
     while not self._destroyed and not self._ended
         and self._flowing and #self._bufR == 0 do
         local src = self._opts._read
         if not src or self._reading then
             return
+        end
+        pulls = pulls + 1
+        if pulls > SYNC_PULL_BUDGET then
+            local loop = package.loaded["loop"]
+            if loop ~= nil and type(loop.setImmediate) == "function" then
+                self._reading = true -- hold the read slot across the tick
+                local self_ = self
+                loop.setImmediate(function()
+                    self_._reading = false
+                    self_:_pump(false) -- drain only; _want_read continues below
+                    self_:_want_read()
+                end)
+                return
+            end
         end
         local seq = self._pushseq
         self._reading = true

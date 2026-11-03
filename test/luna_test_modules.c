@@ -3240,6 +3240,43 @@ static void test_stream_readable_flow(void **state)
         "solo");
 }
 
+/* A synchronous source that always delivers (each _read pushes) must
+ * hand control back to the event loop rather than spin _want_read
+ * forever and starve timers/interrupts. The test installs a fake loop
+ * whose setImmediate queues the callback; it counts how many times the
+ * source was pulled before the stream deferred, then flushes the queue
+ * and checks the source finishes and the data order is intact. */
+static void test_stream_sync_source_yields(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local queue = {}\n"
+                    "package.loaded['loop'] = {\n"
+                    "  setImmediate = function(fn) queue[#queue + 1] = fn end\n"
+                    "}\n"
+                    "local i, n = 0, 10000\n"
+                    "local r = s.readable{ _read = function(self)\n"
+                    "  i = i + 1\n"
+                    "  if i <= n then self:push('x') else self:push(nil) end\n"
+                    "end }\n"
+                    "local got = 0\n"
+                    "local pulled_before_defer = -1\n"
+                    "r:on('data', function(c) got = got + #c end)\n"
+                    "r:on('end', function() end)\n"
+                    "-- after _start, _want_read spun until the budget tripped\n"
+                    "pulled_before_defer = i\n"
+                    "local deferred = #queue > 0\n"
+                    "while #queue > 0 do\n"
+                    "  local fn = table.remove(queue, 1)\n"
+                    "  fn()\n"
+                    "end\n"
+                    "package.loaded['loop'] = nil\n"
+                    "return tostring(deferred) .. ',' .. tostring(i) .. ','\n"
+                    "  .. tostring(got)"),
+        "true,10001,10000");
+}
+
 static void test_assert_surface(void **state)
 {
     (void)state;
@@ -4285,6 +4322,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_events_error_and_maxlisteners, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_events_args_contract, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_readable_flow, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_sync_source_yields, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_backpressure_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_error_destroy_close, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_pipe_error_propagation, setup_modules, teardown_modules),

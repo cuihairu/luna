@@ -135,7 +135,8 @@ magic.register("timeit", function(session, arg)
 end, "%timeit <expr> — repeated runs, reports per-loop time")
 
 magic.register("hist", function(session, arg)
-    local lo, hi = 1, session.in_n
+    local in_n = session.in_n or 0
+    local lo, hi = 1, in_n
     if arg ~= "" then
         local a, b = arg:match("^(%d+)%s*-%s*(%d+)$")
         local one = arg:match("^(%d+)$")
@@ -147,6 +148,11 @@ magic.register("hist", function(session, arg)
             error("usage: %hist [first-last | n]")
         end
     end
+    -- The input log is bounded (attach trims past MAX_INPUTS, and the
+    -- REPL only ever recorded in_n lines), so a range past the top is
+    -- clamped — `%hist 1-99999999999` must not spin a huge for-loop.
+    lo = math.max(lo, 1)
+    hi = math.min(hi, in_n)
     for i = lo, hi do
         local line = session.inputs and session.inputs[i]
         if line then

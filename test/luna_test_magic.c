@@ -171,6 +171,25 @@ static void test_hist_range_selection(void **state)
     assert_non_null(strstr(outbuf, "usage"));
 }
 
+/* A range past the recorded top must be clamped: `%hist 1-99999999999`
+ * would otherwise spin a ~1e11-iteration loop and hang the session.
+ * The clamp also keeps lo >= 1 (a 0 or negative low bound is nonsense). */
+static void test_hist_range_is_capped(void **state)
+{
+    (void)state;
+    feed("b1 = 1");
+    feed("b2 = 2");
+    assert_string_equal(feed("%hist 1-99999999999"), "ok");
+    assert_non_null(strstr(outbuf, "In [1]: b1 = 1"));
+    assert_non_null(strstr(outbuf, "In [2]: b2 = 2"));
+    /* the %hist line itself is input #3 and is in the range, so it is
+     * printed (it is a real recorded line); a 1e11 loop is not */
+    assert_non_null(strstr(outbuf, "In [3]: %hist 1-99999999999"));
+    /* a low bound below 1 is clamped up, not spun from a negative index */
+    assert_string_equal(feed("%hist 0-2"), "ok");
+    assert_non_null(strstr(outbuf, "In [1]: b1 = 1"));
+}
+
 static void test_plugins_lists_overridden(void **state)
 {
     (void)state;
@@ -419,6 +438,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_time_runs_statement_code, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_hist_prints_session_inputs, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_hist_range_selection, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_hist_range_is_capped, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_plugins_lists_overridden, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_whos_magic_lists_globals, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_reset_clears_user_globals, setup_magic, teardown_magic),

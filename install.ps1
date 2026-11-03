@@ -135,12 +135,14 @@ try {
         # checksum: nightly assets ship a .zip.sha256 sidecar (sha256sum
         # format). A mismatch is usually the release being republished
         # mid-download; the --version smoke below is the fallback gate.
-        # The sidecar fetch is anonymous and optional: no sidecar means
-        # no verdict, but a verified mismatch is a hard failure (a
-        # tampered/truncated artifact must not install silently).
+        # The sidecar fetch is optional: no sidecar means no verdict,
+        # but a verified mismatch is a hard failure (a tampered/
+        # truncated artifact must not install silently). Attach the
+        # same credentials the zip fetch used, so a private fork with
+        # -Token gets a verdict instead of a 404 that skips verification.
         try {
             $shaUrl = "https://github.com/$Repo/releases/download/nightly/$platform.zip.sha256"
-            $expected = ((Invoke-WebRequest -Uri $shaUrl).Content -split "\s+")[0]
+            $expected = ((Invoke-WebRequest -Headers $headers -Uri $shaUrl).Content -split "\s+")[0]
             $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
             if ($expected -and ($actual -ne $expected)) {
                 Die "sha256 mismatch (expected $expected, got $actual) - the artifact is corrupt or the nightly was republished mid-download; re-run to retry"

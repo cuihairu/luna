@@ -158,11 +158,18 @@ else
     # checksum: nightly assets ship a .zip.sha256 sidecar (sha256sum
     # format). A mismatch is usually the release being republished
     # mid-download; the --version smoke below is the fallback gate.
-    # Sidecar fetch is anonymous and optional: no sha256sum command or
-    # no sidecar means no verdict, but a verified mismatch is a hard
-    # failure (a tampered/truncated artifact must not install silently).
+    # Sidecar fetch is optional: no sha256sum command or no sidecar
+    # means no verdict, but a verified mismatch is a hard failure (a
+    # tampered/truncated artifact must not install silently). Attach
+    # the same credentials the zip fetch used, so a private fork with
+    # --token gets a verdict instead of a 404 that skips verification.
     if command -v sha256sum >/dev/null 2>&1; then
-        if SHA=$(curl -fsSL "$RELEASE_URL.sha256" 2>/dev/null); then
+        if [ -n "$TOKEN" ]; then
+            SHA=$(curl -fsSL -H "Authorization: Bearer $TOKEN" "$RELEASE_URL.sha256" 2>/dev/null) || SHA=
+        else
+            SHA=$(curl -fsSL "$RELEASE_URL.sha256" 2>/dev/null) || SHA=
+        fi
+        if [ -n "$SHA" ]; then
             want=$(printf '%s' "$SHA" | awk '{print $1}')
             have=$(sha256sum "$ZIP" | awk '{print $1}')
             if [ -n "$want" ] && [ "$have" != "$want" ]; then

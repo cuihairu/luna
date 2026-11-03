@@ -86,6 +86,21 @@ end
 -- (%load runs the file in the target instead of buffering it).
 local attach_session = { inputs = {}, out = {}, out_n = 0, __attach = true }
 
+-- History retention for the attach session: the target can outlive the
+-- client by days, so the input log must not grow with every command.
+-- Keep the last MAX_INPUTS lines, absolute-indexed like the REPL
+-- session (inputs[in_n] = line, dropped oldest leaves gaps %hist
+-- skips). in_n is what %hist / %stats actually read — it used to stay
+-- unset here, so %hist in attach died on a nil for-loop limit.
+local MAX_INPUTS = 1000
+local function record_input(session, line)
+    session.in_n = (session.in_n or 0) + 1
+    session.inputs[session.in_n] = line
+    if session.in_n > MAX_INPUTS then
+        session.inputs[session.in_n - MAX_INPUTS] = nil
+    end
+end
+
 -- Cap on captured output per command: a run-away print loop inside
 -- the target must not grow an unbounded frame.
 local MAX_CAPTURE = 64 * 1024
@@ -113,6 +128,22 @@ local function frame(status, body)
     return status .. "\n\30\n"
 end
 
+-- kernel.exec runs the chunk under pcall internally, but a raise can
+-- still escape it: the sink (capture_start) mirrors to io.write, and a
+-- broken target stdout makes that write raise. An escaping error would
+-- skip the kernel.sink(nil) cleanup in dispatch and strand the capture
+-- sink, swallowing later output. Run exec through pcall here so the
+-- cleanup always happens; a raise is surfaced as an error result.
+local function exec_pack(chunk, name)
+    local ok, res = pcall(function()
+        return table.pack(kernel.exec(chunk, name))
+    end)
+    if not ok then
+        return { false, tostring(res) }
+    end
+    return res
+end
+
 -- One command line from the attach client. Lines starting with the
 -- \1 control byte are meta requests (completion candidates); % lines
 -- dispatch through the target's own magic table; "?expr" / "expr?"
@@ -133,7 +164,7 @@ local function dispatch(line)
         return frame("OK", #parts > 0 and table.concat(parts, "\n") or nil)
     end
 
-    attach_session.inputs[#attach_session.inputs + 1] = line
+    record_input(attach_session, line)
 
     if line:sub(1, 1) == "%" then
         local name, arg = line:match("^%%(%S+)%s*(.-)%s*$")
@@ -168,7 +199,7 @@ local function dispatch(line)
     if sugar and sugar ~= "" then
         local acc = {}
         capture_start(acc)
-        local res = table.pack(kernel.exec("return " .. sugar, "=attach[help]"))
+        local res = exec_pack("return " .. sugar, "=attach[help]")
         kernel.sink(nil)
         if not res[1] then
             return frame("ERR", table.concat(acc) .. tostring(res[2]))
@@ -178,9 +209,9 @@ local function dispatch(line)
 
     local acc = {}
     capture_start(acc)
-    local res = table.pack(kernel.exec("return " .. line, "=attach"))
+    local res = exec_pack("return " .. line, "=attach")
     if not res[1] then
-        res = table.pack(kernel.exec(line, "=attach"))
+        res = exec_pack(line, "=attach")
     end
     kernel.sink(nil)
     if not res[1] then

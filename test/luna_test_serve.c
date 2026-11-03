@@ -214,6 +214,30 @@ static void test_print_output_is_captured_into_frame(void **state)
     assert_non_null(strstr(reply, "7"));
 }
 
+/* dispatch() must never strand the capture sink. The sink mirrors to
+ * io.write, which can raise when the target's stdout breaks; if that
+ * raise escapes kernel.exec, the kernel.sink(nil) cleanup is skipped
+ * and later kernel.write output is swallowed by the dead sink. The
+ * regression stubs kernel.exec to raise (the hostile shape) and
+ * asserts dispatch returns an ERR frame AND releases the sink. */
+static void test_raising_exec_does_not_strand_sink(void **state)
+{
+    (void)state;
+    run(L,
+        "local real_exec = kernel.exec\n"
+        "kernel.exec = function() error('EPIPE: broken pipe') end\n"
+        "local reply = exchange('return 1')\n"
+        "kernel.exec = real_exec\n"
+        "assert(reply:find('ERR', 1, true), reply)\n"
+        "assert(reply:find('EPIPE', 1, true), reply)\n"
+        "local seen = false\n"
+        "local real_write = io.write\n"
+        "io.write = function(s) seen = seen or s:find('sink-free', 1, true) ~= nil end\n"
+        "kernel.write('sink-free-probe\\n')\n"
+        "io.write = real_write\n"
+        "assert(not seen, 'capture sink still installed after a raising exec')\n");
+}
+
 static void test_magic_runs_against_live_state(void **state)
 {
     (void)state;
@@ -1307,6 +1331,39 @@ static void test_wake_and_chmod_report_errors(void **state)
         "assert(tostring(err):find('No such file', 1, true), err)\n");
 }
 
+/* attach history: every dispatched line lands in the session log with
+ * its absolute index (%hist / %stats read in_n — it was never set, so
+ * %hist in attach used to die on a nil for-loop limit), and the log is
+ * bounded: past the retention cap the oldest entries fall off while
+ * the count keeps running. */
+static void test_attach_history_recorded_and_bounded(void **state)
+{
+    (void)state;
+    /* recorded commands are visible to %hist */
+    run(L, "exchange('hist_a = 1')");
+    run(L, "exchange('hist_b = 2')");
+    const char *reply = eval_string("return exchange('%hist')");
+    assert_non_null(strstr(reply, "hist_a = 1"));
+    assert_non_null(strstr(reply, "hist_b = 2"));
+
+    /* push the log well past the cap: the window stays at the cap
+     * (dropping the oldest), the newest command survives, and in_n
+     * keeps counting absolutely. in_n is read back from %stats. */
+    run(L,
+        "for i = 1, 1002 do exchange('c' .. i .. ' = ' .. i) end\n"
+        "local H = exchange('%hist')\n"
+        "local cnt = 0\n"
+        "for _ in H:gmatch('In %[') do cnt = cnt + 1 end\n"
+        "local s2 = exchange('%stats')\n"
+        "local in_n = tonumber(s2:match('inputs (%d+)'))\n"
+        "local first = tonumber(H:match('In %[(%d+)%]'))\n"
+        "local last = tonumber(H:match('.*In %[(%d+)%]'))\n"
+        "assert(cnt == 1000, 'bounded: ' .. cnt .. ' retained, want 1000')\n"
+        "assert(first == in_n - 1000, 'oldest dropped to the window')\n"
+        "assert(last == in_n - 1, 'newest retained')\n"
+        "assert(H:find('c1002 = 1002', 1, true) ~= nil, 'newest cmd present')\n");
+}
+
 /* The count hook pcall's __LUNA_SERVE_STEP every ~200k instructions
  * while a chunk runs, and a poll that raises must be swallowed — "a
  * failing poll must not kill the chunk". The fixture installs one that
@@ -1403,6 +1460,7 @@ int main(void)
         cmocka_unit_test(test_expression_evaluates_in_live_state),
         cmocka_unit_test(test_error_reply_is_framed_and_isolated),
         cmocka_unit_test(test_print_output_is_captured_into_frame),
+        cmocka_unit_test(test_raising_exec_does_not_strand_sink),
         cmocka_unit_test(test_magic_runs_against_live_state),
         cmocka_unit_test(test_exit_magic_detaches_and_target_survives),
         cmocka_unit_test(test_completion_meta_line),
@@ -1421,6 +1479,7 @@ int main(void)
         cmocka_unit_test(test_a_raising_completion_candidate_still_frames),
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         cmocka_unit_test(test_ps_handles_stale_socket),
+        cmocka_unit_test(test_attach_history_recorded_and_bounded),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test_setup_teardown(test_sigusr1_releases_idle_editor, NULL, sweep_teardown),

@@ -190,6 +190,14 @@ local function static_handler(root)
             res:send("400 Bad Request\n")
             return
         end
+        -- Windows treats \ as a path separator too, so `..\..` (which
+        -- splits on / only, evading the segment check below) would
+        -- escape the root on win32. Refuse any backslash outright.
+        if rel:find("\\", 1, true) then
+            res.status = 403
+            res:send("403 Forbidden: " .. req.path .. "\n")
+            return
+        end
         -- traversal is refused outright: any ".." segment never reaches
         -- the filesystem, whatever encoding wrapped it
         local segs = {}

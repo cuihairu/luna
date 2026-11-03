@@ -58,6 +58,10 @@
 #include "luna_cov.h"
 #include "luna_kernel.h"
 
+int luaopen_lfs(lua_State *L);          /* http static face */
+int luaopen_socket_core(lua_State *L);  /* http client face */
+int luaopen_mime_core(lua_State *L);    /* socket.http pulls mime */
+
 static lua_State *L;
 
 /* eval(code) -> one string from the stack */
@@ -93,6 +97,12 @@ static int setup_loop(void **state)
     /* glb=1 only for the test harness: real scripts reach the module
      * through require "loop", which glb=0 already serves */
     luaL_requiref(L, "loop", luaopen_luna_loop, 1);
+    lua_pop(L, 1);
+    luaL_requiref(L, "lfs", luaopen_lfs, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "socket.core", luaopen_socket_core, 0);
+    lua_pop(L, 1);
+    luaL_requiref(L, "mime.core", luaopen_mime_core, 0);
     lua_pop(L, 1);
     /* the staged module tree serves require "loop.http" */
     assert_string_equal(eval_string(
@@ -2088,6 +2098,51 @@ static void test_http_bad_url_throws(void **state)
         "true,true");
 }
 
+/* Static serving refuses a Windows-style traversal: `\` is a path
+ * separator on win32, so `..\..\secret` (which splits on `/` only)
+ * would escape the doc root if the segment check only looked for
+ * `..`. The handler must 403 a backslash path outright. */
+static void test_http_static_refuses_backslash_traversal(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local http = require('http')\n"
+        "local fs = require('fs')\n"
+        "local base = os.tmpname()\n"
+        "os.remove(base)\n"
+        "fs.mkdirSync(base)\n"
+        "fs.writeFileSync(base .. '/inside.html', 'secret')\n"
+        "-- stub loop.http.listen so the adapted static handler runs in\n"
+        "-- process; capture what it writes through the raw res.send.\n"
+        "local captured\n"
+        "local real_loop = package.loaded['loop']\n"
+        "package.loaded['loop.http'] = {\n"
+        "  listen = function(host, port, handler)\n"
+        "    captured = handler\n"
+        "    return { port = function() return port end,\n"
+        "             close = function() end }\n"
+        "  end\n"
+        "}\n"
+        "package.loaded['loop'] = {\n"
+        "  setInterval = function() return 1 end,\n"
+        "  clearInterval = function() end,\n"
+        "}\n"
+        "local srv = http.serve(base, 0)\n"
+        "local status, body, hdrs\n"
+        "local res_raw = { send = function(s, b, h)\n"
+        "  status, body, hdrs = s, b, h\n"
+        "end }\n"
+        "local req_raw = { method = 'GET', path = '/..\\\\..\\\\etc\\\\passwd',\n"
+        "  headers = {}, body = nil }\n"
+        "captured(req_raw, res_raw)\n"
+        "package.loaded['loop.http'] = nil\n"
+        "package.loaded['loop'] = real_loop\n"
+        "os.remove(base .. '/inside.html')\n"
+        "os.remove(base)\n"
+        "return tostring(status) .. '=' .. tostring(body)"),
+        "403=403 Forbidden: /..\\..\\etc\\passwd\n");
+}
+
 #ifdef LUNA_LOOP_HAVE_OPENSSL
 static void test_http_get_over_tls(void **state)
 {
@@ -3239,6 +3294,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_http_stream_eof_mode, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_stream_onhead_once_after_redirect, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_http_bad_url_throws, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_http_static_refuses_backslash_traversal, setup_loop, teardown_loop),
 #ifdef LUNA_LOOP_HAVE_OPENSSL
         cmocka_unit_test_setup_teardown(test_http_get_over_tls, setup_loop, teardown_loop),
 #endif

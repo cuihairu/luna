@@ -361,6 +361,8 @@ static int l_run(lua_State *L)
     g_running_depth++;
     g_interrupted_depth++;
     uv_run(&g_loop, modes[m].mode);
+    if (g_interrupted && g_interrupted_depth > 1)
+        uv_stop(&g_loop);   /* inner drive cleared libuv's stop flag */
     g_interrupted_depth--;
     g_running_depth--;
     if (g_interrupted && g_interrupted_depth == 0) {
@@ -398,6 +400,8 @@ static int l_maybe_drain(lua_State *L)
     g_running_depth++;
     g_interrupted_depth++;
     uv_run(&g_loop, UV_RUN_DEFAULT);
+    if (g_interrupted && g_interrupted_depth > 1)
+        uv_stop(&g_loop);   /* inner drive cleared libuv's stop flag */
     g_interrupted_depth--;
     g_running_depth--;
     if (g_interrupted && g_interrupted_depth == 0) {
@@ -430,6 +434,8 @@ static int l_turn(lua_State *L)
     g_running_depth++;
     g_interrupted_depth++;
     uv_run(&g_loop, UV_RUN_NOWAIT);
+    if (g_interrupted && g_interrupted_depth > 1)
+        uv_stop(&g_loop);   /* inner drive cleared libuv's stop flag */
     g_interrupted_depth--;
     g_running_depth--;
     turning = 0;

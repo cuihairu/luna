@@ -192,7 +192,8 @@ static void test_interrupt_survives_nested_drive(void **state)
     luna_kernel_request_interrupt();
     assert_string_equal(eval_string(
         "local nested = 'not-run'\n"
-        "h = loop.setTimeout(function() end, 10000)\n"
+        "local fired = false\n"
+        "h = loop.setTimeout(function() fired = true end, 200)\n"
         "loop.setImmediate(function()\n"
         "  local ok, err = pcall(loop.turn)\n"
         "  nested = tostring(ok) .. ',' .. tostring(err)\n"
@@ -201,8 +202,9 @@ static void test_interrupt_survives_nested_drive(void **state)
         "loop.clearTimeout(h)\n"
         "assert(loop.run())  -- drain the cleared handle\n"
         "return nested .. '|' .. tostring(ok) .. ',' ..\n"
-        "  tostring(tostring(err):find('interrupted') ~= nil)"),
-        "true,true|false,true");
+        "  tostring(tostring(err):find('interrupted') ~= nil) .. ',' ..\n"
+        "  tostring(fired)"),
+        "true,true|false,true,false");
 }
 
 static void test_settimeout_fires_in_order_with_args(void **state)

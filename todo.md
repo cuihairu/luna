@@ -132,3 +132,7 @@
 - [x] 审核发现：嵌套驱动仍会覆写 g_interrupted——外层 run 的 on_prepare 在 ^C 时置 g_interrupted=1 并 uv_stop（src/luna_loop.c:229-230），同轮 check 阶段已排队的 immediate 回调若调 turn/run/maybeDrain，内层入口 `g_interrupted = 0`（src/luna_loop.c:421,358,392）清掉该标志，外层 uv_run 因 stop 返回后 l_run 读到 0 不抛「interrupted」、脚本退出 0 而非 130；触发需 ^C 恰落在含嵌套驱动的同轮迭代，属边界情形、低危，与本次 g_running 修复同类（嵌套驱动覆写外层态），仅修 running() 未修 g_interrupted。已修：g_interrupted 改深度计数 g_interrupted_depth++/--，仅无外层驱动时清零，嵌套驱动不再覆写外层 pending 中断；新增回归 test_interrupt_survives_nested_drive（^C 落 on_prepare、同轮 immediate 嵌套 turn，断言嵌套调用成功且外层 run 仍抛「interrupted」）。loop 组 116/116 绿。src/luna_loop.c:90,test/luna_test_loop.c:185
 
 - [x] 审核发现：中断后回调内嵌套驱动会让内层 uv_run 清除 libuv 的 stop 标志，外层默认循环继续等待未关闭的句柄，导致 Ctrl-C 延迟或永久无法返回；新增回归测试的 10 秒定时器也掩盖了该问题。已修：内层 run/maybeDrain/turn 的 uv_run 返回后，若检测到外层 pending 中断且当前非最外层驱动，立即补发 uv_stop 恢复外层停止请求；回归用例改用 200ms 定时器并断言 fired=false（原先 10000ms 定时器实测 loop 组 52s，改后 10s 内完成且 116/116 绿）。src/luna_loop.c:365,test/luna_test_loop.c:185
+
+## 审核发现
+
+- [ ] 审核发现：回归测试依赖 200ms 定时器在首次 loop.run 前尚未到期，若进程在创建定时器后被调度暂停超过 200ms，libuv 会先执行到期定时器再处理中断，导致正确实现也因 fired=true 间歇失败（test/luna_test_loop.c:196）。

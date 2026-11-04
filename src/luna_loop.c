@@ -86,7 +86,7 @@ struct loopbox {
 
 static uv_loop_t g_loop;
 static int g_loop_ready;
-static int g_running;
+static int g_running_depth;
 static int g_user_handles;
 static uv_prepare_t g_prep;
 static int g_prep_inited;
@@ -356,9 +356,9 @@ static int l_run(lua_State *L)
     }
     g_L = L; /* the attach poll runs in the state that drives the loop */
     g_interrupted = 0;
-    g_running = 1;
+    g_running_depth++;
     uv_run(&g_loop, modes[m].mode);
-    g_running = 0;
+    g_running_depth--;
     if (g_interrupted) {
         return luaL_error(L, "interrupted");
     }
@@ -390,9 +390,9 @@ static int l_maybe_drain(lua_State *L)
     }
     g_L = L;
     g_interrupted = 0;
-    g_running = 1;
+    g_running_depth++;
     uv_run(&g_loop, UV_RUN_DEFAULT);
-    g_running = 0;
+    g_running_depth--;
     if (g_interrupted) {
         return luaL_error(L, "interrupted");
     }
@@ -419,9 +419,9 @@ static int l_turn(lua_State *L)
     turning = 1;
     g_L = L;
     g_interrupted = 0;
-    g_running = 1;
+    g_running_depth++;
     uv_run(&g_loop, UV_RUN_NOWAIT);
-    g_running = 0;
+    g_running_depth--;
     turning = 0;
     if (g_interrupted)
         return luaL_error(L, "interrupted");
@@ -431,7 +431,7 @@ static int l_turn(lua_State *L)
 
 static int l_is_running(lua_State *L)
 {
-    lua_pushboolean(L, g_running);
+    lua_pushboolean(L, g_running_depth > 0);
     return 1;
 }
 

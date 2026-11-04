@@ -134,7 +134,7 @@ static void prepend_module_dir(lua_State *L, int is_cpath, const char *dir)
     } else {
         luaL_addstring(&buffer, "/?.lua;");
         luaL_addstring(&buffer, dir);
-        luaL_addstring(&buffer, "/?/init.lua;");
+        luaL_addstring(&buffer, "/?/init.lua");
     }
     luaL_addchar(&buffer, ';');
     if (cur)

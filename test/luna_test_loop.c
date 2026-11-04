@@ -160,6 +160,28 @@ static void test_running_reflects_an_active_run(void **state)
         "  .. tostring(loop.running())"), "false,true,false");
 }
 
+/* A callback that drives the loop itself (a nested run/maybeDrain/turn
+ * from inside a uv_run pass) must not flip running() back to false
+ * while the outer pass is still active: the depth counter keeps the
+ * reported state true until the outermost pass returns. This is the
+ * gate stream._want_read uses to decide whether a sync source yields
+ * via setImmediate, so a stale false here would silently revert it to
+ * synchronous pulls and let a big sync source starve the loop. */
+static void test_running_stays_true_across_nested_drive(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local outer = nil\n"
+        "loop.setImmediate(function()\n"
+        "  outer = loop.running()\n"
+        "  loop.turn()  -- nested drive from inside the outer pass\n"
+        "  outer = outer and loop.running()\n"
+        "end)\n"
+        "loop.run()\n"
+        "return tostring(outer) .. ',' .. tostring(loop.running())"),
+        "true,false");
+}
+
 static void test_settimeout_fires_in_order_with_args(void **state)
 {
     (void)state;
@@ -3231,6 +3253,7 @@ int main(void)
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_run_with_nothing_scheduled_returns, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_running_reflects_an_active_run, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_running_stays_true_across_nested_drive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_settimeout_fires_in_order_with_args, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_interval_runs_until_cleared, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_immediate_runs_within_the_run, setup_loop, teardown_loop),

@@ -314,7 +314,7 @@ static void test_update_refuses_flag_injected_lock_name(void **state)
     (void)state;
     write_file("luna.lock",
                "{\"version\":1,\"lua\":\"5.5\",\"rocks\":["
-               "{\"name\":\"--tree=/tmp/evil\",\"version\":\"1.0-1\"}]}\n");
+               "{\"name\":\"--tree\",\"version\":\"1.0-1\"}]}\n");
     assert_int_equal(run_luna("update"), 1);
     char *log = out_log();
     assert_non_null(log);

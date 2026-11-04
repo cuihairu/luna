@@ -182,6 +182,29 @@ static void test_running_stays_true_across_nested_drive(void **state)
         "true,false");
 }
 
+static void test_interrupt_survives_nested_drive(void **state)
+{
+    (void)state;
+    /* a ^C lands in on_prepare (g_interrupted=1, uv_stop) and the same
+     * iteration's check phase runs an immediate that drives the loop
+     * again. The nested drive must not clear the outer run's pending
+     * interrupt: the outer run still surfaces "interrupted". */
+    luna_kernel_request_interrupt();
+    assert_string_equal(eval_string(
+        "local nested = 'not-run'\n"
+        "h = loop.setTimeout(function() end, 10000)\n"
+        "loop.setImmediate(function()\n"
+        "  local ok, err = pcall(loop.turn)\n"
+        "  nested = tostring(ok) .. ',' .. tostring(err)\n"
+        "end)\n"
+        "local ok, err = pcall(loop.run)\n"
+        "loop.clearTimeout(h)\n"
+        "assert(loop.run())  -- drain the cleared handle\n"
+        "return nested .. '|' .. tostring(ok) .. ',' ..\n"
+        "  tostring(tostring(err):find('interrupted') ~= nil)"),
+        "true,true|false,true");
+}
+
 static void test_settimeout_fires_in_order_with_args(void **state)
 {
     (void)state;
@@ -3254,6 +3277,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_run_with_nothing_scheduled_returns, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_running_reflects_an_active_run, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_running_stays_true_across_nested_drive, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_interrupt_survives_nested_drive, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_settimeout_fires_in_order_with_args, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_interval_runs_until_cleared, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_immediate_runs_within_the_run, setup_loop, teardown_loop),

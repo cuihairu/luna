@@ -87,6 +87,7 @@ struct loopbox {
 static uv_loop_t g_loop;
 static int g_loop_ready;
 static int g_running_depth;
+static int g_interrupted_depth;
 static int g_user_handles;
 static uv_prepare_t g_prep;
 static int g_prep_inited;
@@ -355,11 +356,14 @@ static int l_run(lua_State *L)
         return luaL_error(L, "bad run mode '%s' (default|once|nowait)", name);
     }
     g_L = L; /* the attach poll runs in the state that drives the loop */
-    g_interrupted = 0;
+    if (g_interrupted_depth == 0)
+        g_interrupted = 0;      /* no outer drive: start clean */
     g_running_depth++;
+    g_interrupted_depth++;
     uv_run(&g_loop, modes[m].mode);
+    g_interrupted_depth--;
     g_running_depth--;
-    if (g_interrupted) {
+    if (g_interrupted && g_interrupted_depth == 0) {
         return luaL_error(L, "interrupted");
     }
     lua_pushboolean(L, 1);
@@ -389,11 +393,14 @@ static int l_maybe_drain(lua_State *L)
         return 1;
     }
     g_L = L;
-    g_interrupted = 0;
+    if (g_interrupted_depth == 0)
+        g_interrupted = 0;      /* no outer drive: start clean */
     g_running_depth++;
+    g_interrupted_depth++;
     uv_run(&g_loop, UV_RUN_DEFAULT);
+    g_interrupted_depth--;
     g_running_depth--;
-    if (g_interrupted) {
+    if (g_interrupted && g_interrupted_depth == 0) {
         return luaL_error(L, "interrupted");
     }
     lua_pushboolean(L, 1);
@@ -418,12 +425,15 @@ static int l_turn(lua_State *L)
     }
     turning = 1;
     g_L = L;
-    g_interrupted = 0;
+    if (g_interrupted_depth == 0)
+        g_interrupted = 0;      /* no outer drive: start clean */
     g_running_depth++;
+    g_interrupted_depth++;
     uv_run(&g_loop, UV_RUN_NOWAIT);
+    g_interrupted_depth--;
     g_running_depth--;
     turning = 0;
-    if (g_interrupted)
+    if (g_interrupted && g_interrupted_depth == 0)
         return luaL_error(L, "interrupted");
     lua_pushboolean(L, 1);
     return 1;

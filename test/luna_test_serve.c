@@ -238,6 +238,27 @@ static void test_raising_exec_does_not_strand_sink(void **state)
         "assert(not seen, 'capture sink still installed after a raising exec')\n");
 }
 
+/* A raise (broken stdout while the capture sink mirrors to io.write)
+ * must not be mistaken for a chunk error: dispatch falls back to the
+ * bare-line form, which would re-run a side-effecting expression. The
+ * regression counts evaluations of one attach line and asserts one. */
+static void test_raising_exec_does_not_rerun_line(void **state)
+{
+    (void)state;
+    run(L,
+        "local real_exec = kernel.exec\n"
+        "local calls = 0\n"
+        "kernel.exec = function(chunk, name)\n"
+        "  calls = calls + 1\n"
+        "  error('EPIPE: broken pipe')\n"
+        "end\n"
+        "local reply = exchange('foo()')\n"
+        "kernel.exec = real_exec\n"
+        "assert(reply:find('ERR', 1, true), reply)\n"
+        "assert(reply:find('EPIPE', 1, true), reply)\n"
+        "assert(calls == 1, 'rerun after raise: ' .. tostring(calls))\n");
+}
+
 static void test_magic_runs_against_live_state(void **state)
 {
     (void)state;
@@ -1461,6 +1482,7 @@ int main(void)
         cmocka_unit_test(test_error_reply_is_framed_and_isolated),
         cmocka_unit_test(test_print_output_is_captured_into_frame),
         cmocka_unit_test(test_raising_exec_does_not_strand_sink),
+        cmocka_unit_test(test_raising_exec_does_not_rerun_line),
         cmocka_unit_test(test_magic_runs_against_live_state),
         cmocka_unit_test(test_exit_magic_detaches_and_target_survives),
         cmocka_unit_test(test_completion_meta_line),

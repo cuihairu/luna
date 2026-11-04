@@ -248,7 +248,8 @@ function Readable:_want_read()
         pulls = pulls + 1
         if pulls > SYNC_PULL_BUDGET then
             local loop = package.loaded["loop"]
-            if loop ~= nil and type(loop.setImmediate) == "function" then
+            if loop ~= nil and type(loop.setImmediate) == "function"
+                and type(loop.running) == "function" and loop.running() then
                 self._reading = true -- hold the read slot across the tick
                 local self_ = self
                 loop.setImmediate(function()
@@ -258,6 +259,10 @@ function Readable:_want_read()
                 end)
                 return
             end
+            -- loop loaded but not running (pure sync consumer, no
+            -- scheduler turn): keep pulling synchronously so the old
+            -- "finishes now" contract holds; setImmediate would strand
+            -- the tail until maybeDrain/turn drives the loop.
         end
         local seq = self._pushseq
         self._reading = true

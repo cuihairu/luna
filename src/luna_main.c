@@ -110,12 +110,13 @@ static void exe_dir(char *buf, size_t size, const char *argv0)
 }
 
 /* Prepend one module dir to package.path/cpath so require finds
- * argparse and friends before any user configuration. */
+ * argparse and friends before any user configuration. The combined
+ * path is built in a luaL_Buffer, so an arbitrarily long user LUA_PATH
+ * still keeps the module dir prepended (the old fixed 10 KiB stack
+ * buffer silently truncated or dropped the prepend). */
 static void prepend_module_dir(lua_State *L, int is_cpath, const char *dir)
 {
     const char *field = is_cpath ? "cpath" : "path";
-    char add[5120];
-    char merged[10240];
 
     lua_getglobal(L, "package");
     if (!lua_istable(L, -1)) {
@@ -124,22 +125,21 @@ static void prepend_module_dir(lua_State *L, int is_cpath, const char *dir)
     }
     lua_getfield(L, -1, field);
     const char *cur = lua_tostring(L, -1);
-    if (is_cpath)
-        snprintf(add, sizeof(add), "%s/?.%s;", dir, LUNA_SO_EXT);
-    else
-        snprintf(add, sizeof(add), "%s/?.lua;%s/?/init.lua;", dir, dir);
-    int n = snprintf(merged, sizeof(merged), "%s%s", add, cur ? cur : "");
-    if (n < 0 || (size_t)n >= sizeof(merged)) {
-        /* A path past the 10 KiB stack buffer would be silently
-         * truncated (snprintf), corrupting every later require — the
-         * user's LUA_PATH is too long to prepend into. Drop the
-         * addition rather than corrupt the path. */
-        fprintf(stderr, "luna: warning: %s is too long to prepend "
-                "the module dir; leaving it unchanged\n", field);
-        lua_pop(L, 2); /* old value + package */
-        return;
+    luaL_Buffer buffer;
+    luaL_buffinit(L, &buffer);
+    luaL_addstring(&buffer, dir);
+    if (is_cpath) {
+        luaL_addstring(&buffer, "/?.");
+        luaL_addstring(&buffer, LUNA_SO_EXT);
+    } else {
+        luaL_addstring(&buffer, "/?.lua;");
+        luaL_addstring(&buffer, dir);
+        luaL_addstring(&buffer, "/?/init.lua;");
     }
-    lua_pushstring(L, merged);
+    luaL_addchar(&buffer, ';');
+    if (cur)
+        luaL_addstring(&buffer, cur);
+    luaL_pushresult(&buffer);
     lua_setfield(L, -3, field);
     lua_pop(L, 2); /* old value + package */
 }

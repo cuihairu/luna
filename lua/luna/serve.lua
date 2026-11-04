@@ -139,7 +139,12 @@ local function exec_pack(chunk, name)
         return table.pack(kernel.exec(chunk, name))
     end)
     if not ok then
-        return { false, tostring(res) }
+        -- A raise (target stdout broke mid-write) is not a chunk
+        -- error: returning the ordinary {false, msg} shape would make
+        -- dispatch fall back to re-running the line (evaluating a
+        -- side-effecting expression twice). Tag it so dispatch skips
+        -- the retry and reports the raise once.
+        return { false, tostring(res), raised = true }
     end
     return res
 end
@@ -210,7 +215,7 @@ local function dispatch(line)
     local acc = {}
     capture_start(acc)
     local res = exec_pack("return " .. line, "=attach")
-    if not res[1] then
+    if not res[1] and not res.raised then
         res = exec_pack(line, "=attach")
     end
     kernel.sink(nil)

@@ -306,6 +306,22 @@ static void test_from_lock_refuses_path_traversal(void **state)
     free(log);
 }
 
+/* A hostile luna.lock whose rock name leads with '-' (e.g.
+ * "--tree=/tmp/x") would otherwise flow straight into the luarocks
+ * argv as a flag: `update` must refuse it before running luarocks. */
+static void test_update_refuses_flag_injected_lock_name(void **state)
+{
+    (void)state;
+    write_file("luna.lock",
+               "{\"version\":1,\"lua\":\"5.5\",\"rocks\":["
+               "{\"name\":\"--tree=/tmp/evil\",\"version\":\"1.0-1\"}]}\n");
+    assert_int_equal(run_luna("update"), 1);
+    char *log = out_log();
+    assert_non_null(log);
+    assert_non_null(strstr(log, "unsafe name"));
+    free(log);
+}
+
 static void test_rocks_tree_injects_module_paths(void **state)
 {
     (void)state;
@@ -366,6 +382,8 @@ int main(void)
                                         setup_rocks, teardown_rocks),
         cmocka_unit_test_setup_teardown(test_from_lock_refuses_path_traversal,
                                         setup_rocks, teardown_rocks),
+        cmocka_unit_test_setup_teardown(test_update_refuses_flag_injected_lock_name,
+                                         setup_rocks, teardown_rocks),
         cmocka_unit_test_setup_teardown(test_rocks_tree_injects_module_paths,
                                         setup_rocks, teardown_rocks),
         cmocka_unit_test_setup_teardown(test_list_on_an_empty_tree_is_quiet_offline,

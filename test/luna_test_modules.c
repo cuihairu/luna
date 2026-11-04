@@ -3253,7 +3253,8 @@ static void test_stream_sync_source_yields(void **state)
         eval_string("local s = require('stream')\n"
                     "local queue = {}\n"
                     "package.loaded['loop'] = {\n"
-                    "  setImmediate = function(fn) queue[#queue + 1] = fn end\n"
+                    "  setImmediate = function(fn) queue[#queue + 1] = fn end,\n"
+                    "  running = function() return true end\n"
                     "}\n"
                     "local i, n = 0, 10000\n"
                     "local r = s.readable{ _read = function(self)\n"
@@ -3275,6 +3276,33 @@ static void test_stream_sync_source_yields(void **state)
                     "return tostring(deferred) .. ',' .. tostring(i) .. ','\n"
                     "  .. tostring(got)"),
         "true,10001,10000");
+}
+
+/* loop may be loaded but not running (pure sync consumption, no
+ * loop.run/turn/maybeDrain). The stream must still finish synchronously:
+ * deferring to an idle setImmediate queue would strand the tail. */
+static void test_stream_sync_source_without_running_loop(void **state)
+{
+    (void)state;
+    assert_string_equal(
+        eval_string("local s = require('stream')\n"
+                    "local queue = {}\n"
+                    "package.loaded['loop'] = {\n"
+                    "  setImmediate = function(fn) queue[#queue + 1] = fn end,\n"
+                    "  running = function() return false end,\n"
+                    "}\n"
+                    "local i, n = 0, 100\n"
+                    "local r = s.readable{ _read = function(self)\n"
+                    "  i = i + 1\n"
+                    "  if i <= n then self:push('x') else self:push(nil) end\n"
+                    "end }\n"
+                    "local got, ended = 0, false\n"
+                    "r:on('end', function() ended = true end)\n"
+                    "r:on('data', function(c) got = got + #c end)\n"
+                    "package.loaded['loop'] = nil\n"
+                    "return tostring(i) .. ',' .. tostring(got) .. ','\n"
+                    "  .. tostring(ended) .. ',' .. tostring(#queue)"),
+        "101,100,true,0");
 }
 
 static void test_assert_surface(void **state)
@@ -4323,6 +4351,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_events_args_contract, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_readable_flow, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_sync_source_yields, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_stream_sync_source_without_running_loop, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_backpressure_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_error_destroy_close, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_stream_pipe_error_propagation, setup_modules, teardown_modules),

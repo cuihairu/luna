@@ -54,6 +54,7 @@ end
 local function check_rock_component(what, value)
     if type(value) ~= "string" or value == ""
         or not value:match("^[A-Za-z0-9._%-]+$")
+        or value:sub(1, 1) == "-"
         or value:find("..", 1, true) then
         error("rocks: unsafe " .. what .. ": "
             .. tostring(value), 0)
@@ -468,6 +469,7 @@ local function cmd_install(tree, argv)
     -- one luarocks call per rock: `luarocks install` takes a single
     -- <name> [<version>]; extra arguments would read as version numbers
     for _, name in ipairs(names) do
+        check_rock_component("name", name)
         run_or_die(tree, { "install", name }, "install " .. name)
     end
     lock_tree(tree)
@@ -483,6 +485,7 @@ local function cmd_update(tree, argv)
         end
     end
     for _, name in ipairs(names) do
+        check_rock_component("name", name)
         run_or_die(tree, { "install", name }, "update " .. name) -- latest
         io.write("luna: updated " .. name .. "\n")
     end

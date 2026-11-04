@@ -541,10 +541,12 @@ static void test_runs_without_coverage_instrumentation(void **state)
     assert_null(strstr(outbuf, "coverage"));
 }
 
-/* A user LUA_PATH past the 10 KiB stack buffer used to be silently
- * truncated by snprintf, corrupting every later require. The fix drops
- * the module-dir prepend (with a warning) instead of truncating, so
- * package.path stays intact — the script can still see its full length. */
+/* A user LUA_PATH past a fixed stack buffer must not lose the module
+ * dir prepend (the old snprintf truncated or dropped it, leaving
+ * argparse unreachable and luna unable to start). The prepend is built
+ * in a luaL_Buffer now, so even a 40 KiB path keeps the module dir and
+ * the binary still boots: assert the path grew AND a real require
+ * (argparse) resolves. */
 static void test_long_lua_path_not_truncated(void **state)
 {
     (void)state;
@@ -557,13 +559,10 @@ static void test_long_lua_path_not_truncated(void **state)
     }
     env[pos] = '\0';
     setenv("LUA_PATH", env + 9, 1);
-    /* the module dir cannot be prepended (over-long), so the eval can
-     * only assert package.path survived; argparse may be missing, so
-     * just check the warning fired and the process did not crash */
-    run_luna("-e 'assert(#package.path > 40000)'");
+    run_luna("-e 'assert(#package.path > 40000, \"path not extended\") "
+             "assert(require(\"argparse\") ~= nil, \"argparse unreachable\")'");
     unsetenv("LUA_PATH");
-    assert_non_null(strstr(outbuf, "too long to prepend the module dir"));
-    assert_int_not_equal(last_code, -1); /* no crash */
+    assert_int_equal(last_code, 0);
 }
 
 /* -- help / usage -------------------------------------------------------- */

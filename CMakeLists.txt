@@ -335,17 +335,24 @@ if(LUNA_HAVE_OPENSSL)
 endif()
 set_target_properties(luna PROPERTIES LINKER_LANGUAGE CXX)
 
-# Hardening: _FORTIFY_SOURCE=2 (and the stack protector the review
-# noted) only make sense with -O2 or better and a glibc/glibc-like
-# libc; MSVC's _FORTIFY is a different beast, so the flags are UNIX and
-# non-MSVC only. The fortify header refuses to engage below -O2, so we
-# set it for the optimization levels that actually use it.
+# Hardening: the stack protector is portable and applies to every
+# UNIX (non-MSVC) build. _FORTIFY_SOURCE=2 needs a glibc/glibc-like
+# libc — the fortify header is a glibc feature, so musl/BSD/macOS are
+# excluded (the previous `if(UNIX AND NOT MSVC)` wrongly added the
+# define on all of them). The fortify define must not carry an -O
+# override either: appending -O2 silently downgrades the configured
+# optimization (Release's -O3, MinSizeRel's -Os); the per-config
+# defaults already meet fortify's -O1 minimum.
 if(UNIX AND NOT MSVC)
-    target_compile_options(luna PRIVATE
-            -fstack-protector-strong
-            $<$<CONFIG:Release>:-O2 -D_FORTIFY_SOURCE=2>
-            $<$<CONFIG:RelWithDebInfo>:-O2 -D_FORTIFY_SOURCE=2>
-            $<$<CONFIG:MinSizeRel>:-O2 -D_FORTIFY_SOURCE=2>)
+    target_compile_options(luna PRIVATE -fstack-protector-strong)
+    include(CheckCSourceCompiles)
+    check_c_source_compiles("#include <features.h>\n#ifndef __GLIBC__\n#error not glibc\n#endif\nint main(void){return 0;}" LUNA_HAVE_GLIBC)
+    if(LUNA_HAVE_GLIBC)
+        target_compile_options(luna PRIVATE
+                $<$<CONFIG:Release>:-D_FORTIFY_SOURCE=2>
+                $<$<CONFIG:RelWithDebInfo>:-D_FORTIFY_SOURCE=2>
+                $<$<CONFIG:MinSizeRel>:-D_FORTIFY_SOURCE=2>)
+    endif()
 endif()
 
 # vendored LuaRocks sources for `luna install/search/list/update`:

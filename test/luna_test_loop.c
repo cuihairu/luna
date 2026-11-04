@@ -145,6 +145,21 @@ static void test_run_with_nothing_scheduled_returns(void **state)
     assert_string_equal(eval_string("return loop.run()"), "true");
 }
 
+/* loop.running() reports whether the loop is inside a run/turn/
+ * maybeDrain pass (stream._want_read gates its setImmediate yield on
+ * this). It must be false outside a run and true inside a callback. */
+static void test_running_reflects_an_active_run(void **state)
+{
+    (void)state;
+    assert_string_equal(eval_string(
+        "local before = loop.running()\n"
+        "local inside = nil\n"
+        "loop.setImmediate(function() inside = loop.running() end)\n"
+        "loop.run()\n"
+        "return tostring(before) .. ',' .. tostring(inside) .. ','\n"
+        "  .. tostring(loop.running())"), "false,true,false");
+}
+
 static void test_settimeout_fires_in_order_with_args(void **state)
 {
     (void)state;
@@ -3215,6 +3230,7 @@ int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test_setup_teardown(test_run_with_nothing_scheduled_returns, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_running_reflects_an_active_run, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_settimeout_fires_in_order_with_args, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_interval_runs_until_cleared, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_immediate_runs_within_the_run, setup_loop, teardown_loop),

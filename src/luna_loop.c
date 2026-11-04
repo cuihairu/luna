@@ -86,6 +86,7 @@ struct loopbox {
 
 static uv_loop_t g_loop;
 static int g_loop_ready;
+static int g_running;
 static int g_user_handles;
 static uv_prepare_t g_prep;
 static int g_prep_inited;
@@ -355,7 +356,9 @@ static int l_run(lua_State *L)
     }
     g_L = L; /* the attach poll runs in the state that drives the loop */
     g_interrupted = 0;
+    g_running = 1;
     uv_run(&g_loop, modes[m].mode);
+    g_running = 0;
     if (g_interrupted) {
         return luaL_error(L, "interrupted");
     }
@@ -387,7 +390,9 @@ static int l_maybe_drain(lua_State *L)
     }
     g_L = L;
     g_interrupted = 0;
+    g_running = 1;
     uv_run(&g_loop, UV_RUN_DEFAULT);
+    g_running = 0;
     if (g_interrupted) {
         return luaL_error(L, "interrupted");
     }
@@ -414,11 +419,19 @@ static int l_turn(lua_State *L)
     turning = 1;
     g_L = L;
     g_interrupted = 0;
+    g_running = 1;
     uv_run(&g_loop, UV_RUN_NOWAIT);
+    g_running = 0;
     turning = 0;
     if (g_interrupted)
         return luaL_error(L, "interrupted");
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int l_is_running(lua_State *L)
+{
+    lua_pushboolean(L, g_running);
     return 1;
 }
 
@@ -480,6 +493,7 @@ static const luaL_Reg loop_funcs[] = {
     { "run", l_run },
     { "maybeDrain", l_maybe_drain },
     { "turn", l_turn },
+    { "running", l_is_running },
     { "waitMs", l_wait_ms },
     { "stop", l_stop },
     { "now", l_now },
@@ -1697,8 +1711,12 @@ static int l_sock_write(lua_State *L)
      * would be silently truncated and the tail of the payload would
      * never be sent. Refuse rather than silently drop bytes. */
     if (len > UINT_MAX) {
-        return luaL_error(L, "loop.net: write of %zu bytes exceeds the "
-                          "4 GiB libuv single-buffer limit", len);
+        /* Lua's luaO_pushvfstring has no %zu: use %I (lua_Integer) so
+         * the byte count actually appears in the error instead of a
+         * literal "%zu". */
+        return luaL_error(L, "loop.net: write of %I bytes exceeds the "
+                          "4 GiB libuv single-buffer limit",
+                          (lua_Integer)len);
     }
     struct sockwrite *w = malloc(sizeof(*w) + len);
     if (!w) {

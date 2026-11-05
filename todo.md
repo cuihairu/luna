@@ -135,4 +135,10 @@
 
 ## 审核发现
 
-- [ ] 审核发现：回归测试依赖 200ms 定时器在首次 loop.run 前尚未到期，若进程在创建定时器后被调度暂停超过 200ms，libuv 会先执行到期定时器再处理中断，导致正确实现也因 fired=true 间歇失败（test/luna_test_loop.c:196）。
+- [x] 审核发现：回归测试依赖 200ms 定时器在首次 loop.run 前尚未到期，若进程在创建定时器后被调度暂停超过 200ms，libuv 会先执行到期定时器再处理中断，导致正确实现也因 fired=true 间歇失败。已修：200ms 定时器移入 immediate 回调内创建，外层首次 run 前不存在可到期句柄。loop 组绿：1/1 passed。test/luna_test_loop.c:196
+- [x] 审核发现：第三轮复审证据「侧边栏 72 条链接逐条对盘」计数与实况不符——config.mts 侧边栏实际为 en 38 + zh 39 = 77 条链接条目（去重后 71 条，en 35 / zh 36）。已修：审计证据改为 77/71；脚本复算输出 en total 38 unique 35 / zh total 39 unique 36 / combined total 77 unique 71。docs/审计-文档一致性.md:86
+- [x] 审核发现：lua/modules/toml/init.lua:1 的「TOML 1.0」注释与实现（tomlc17 v1.1）及文档「strict TOML v1.1」三方不符。已修：代码注释改「TOML 1.1」，审计裁定同步为已修正。lua/modules/toml/init.lua:1,docs/审计-文档一致性.md:91
+- [x] 审核发现：custom.css 的 `.vp-doc table{display:block;overflow-x:auto}` 与 VitePress 内置规则完全重复（内置实际位于 vp-doc.css:225-230）。已修：删除冗余覆写；`rg "word-break|max-width: ?960|display: ?block|overflow-x|\.vp-doc table" custom.css` 无匹配。docs/.vitepress/theme/custom.css:206
+- [x] 审核发现：custom.css 用 `word-break: break-word`（非标准/废弃值）。已修：改为标准 `overflow-wrap: break-word`；`rg word-break custom.css` 无匹配。docs/.vitepress/theme/custom.css:210
+- [x] 审核发现：`.vp-doc table { display:block }` 使 table 失去表格格式化上下文，thead/tbody 可能各自匿名表化并错位列宽。已修：删除 `display:block` 覆写，恢复 VitePress 内置表格行为；残留检查无 `.vp-doc table`/`display:block`。docs/.vitepress/theme/custom.css:206
+- [x] 审核发现：`max-width:960px !important` 无条件覆盖 VitePress 响应式内容宽度。已修：删除三条 960px 强制宽度规则，恢复默认主题缩放；残留检查无 `max-width:960`/`!important`。docs/.vitepress/theme/custom.css:206

@@ -193,10 +193,10 @@ static void test_interrupt_survives_nested_drive(void **state)
     assert_string_equal(eval_string(
         "local nested = 'not-run'\n"
         "local fired = false\n"
-        "h = loop.setTimeout(function() fired = true end, 200)\n"
         "loop.setImmediate(function()\n"
         "  local ok, err = pcall(loop.turn)\n"
         "  nested = tostring(ok) .. ',' .. tostring(err)\n"
+        "  h = loop.setTimeout(function() fired = true end, 200)\n"
         "end)\n"
         "local ok, err = pcall(loop.run)\n"
         "loop.clearTimeout(h)\n"

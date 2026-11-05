@@ -1,4 +1,4 @@
--- toml: TOML 1.0 decode/encode.
+-- toml: TOML 1.1 decode/encode.
 --
 -- decode is a passthrough to the C face (toml.core over tomlc17,
 -- deps/tomlc17 pinned at R260821; registered by luna_main). Values map

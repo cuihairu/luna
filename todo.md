@@ -143,3 +143,4 @@
 - [x] 审核发现：`.vp-doc table { display:block }` 使 table 失去表格格式化上下文，thead/tbody 可能各自匿名表化并错位列宽。已修：删除 `display:block` 覆写，恢复 VitePress 内置表格行为；残留检查无 `.vp-doc table`/`display:block`。docs/.vitepress/theme/custom.css:206
 - [x] 审核发现：`max-width:960px !important` 无条件覆盖 VitePress 响应式内容宽度。已修：删除三条 960px 强制宽度规则，恢复默认主题缩放；残留检查无 `max-width:960`/`!important`。docs/.vitepress/theme/custom.css:206
 - [x] 审核发现：本轮 diff 未见问题（6c7a545e..HEAD）。已核：逐项复核 5 文件 diff（CSS 清理/审计计数/TOML 口径/回归时序/todo 证据），`env -u NO_COLOR ctest` 17/17 绿，`npm run docs:build` 绿。git diff 6c7a545e..HEAD;cd build&&env -u NO_COLOR ctest
+- [x] 审核发现：本轮 diff 未见问题（fb1e23d6..HEAD）。已核：该区间仅 `5cfbea0` 提交且只新增上一条审核结论行，无代码/文档内容改动；`env -u NO_COLOR ctest` 17/17 绿，`npm run docs:build` 绿。git diff --stat fb1e23d6..HEAD;cd build&&env -u NO_COLOR ctest

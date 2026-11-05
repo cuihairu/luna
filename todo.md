@@ -145,3 +145,4 @@
 - [x] 审核发现：本轮 diff 未见问题（6c7a545e..HEAD）。已核：逐项复核 5 文件 diff（CSS 清理/审计计数/TOML 口径/回归时序/todo 证据），`env -u NO_COLOR ctest` 17/17 绿，`npm run docs:build` 绿。git diff 6c7a545e..HEAD;cd build&&env -u NO_COLOR ctest
 - [x] 审核发现：本轮 diff 未见问题（fb1e23d6..HEAD）。已核：该区间仅 `5cfbea0` 提交且只新增上一条审核结论行，无代码/文档内容改动；`env -u NO_COLOR ctest` 17/17 绿，`npm run docs:build` 绿。git diff --stat fb1e23d6..HEAD;cd build&&env -u NO_COLOR ctest
 - [x] 审核发现：本轮 diff 未见问题（5cfbea05..HEAD）。已核：该区间仅 `38c0851` 提交且只新增上一条审核结论行，无代码/文档内容改动；`git diff --stat 5cfbea05..HEAD` 为 1 文件 1 插入。git rev-list 5cfbea05..HEAD;git diff --stat 5cfbea05..HEAD
+- [x] 审核发现：本轮 diff 未见问题（38c08517..HEAD）。已核：该区间仅 `b530c97` 提交且只新增上一条审核结论行，无代码/文档内容改动；`env -u NO_COLOR ctest` 17/17 绿。git rev-list 38c08517..HEAD;git diff --stat 38c08517..HEAD;cd build&&env -u NO_COLOR ctest

@@ -900,6 +900,7 @@ static void test_attach_pty_when_the_target_dies_mid_session(void **state)
     assert_int_equal(kill(target, SIGKILL), 0);
     waitpid(target, NULL, 0);
     sweep_done(target);
+    unlink(path); /* SIGKILL skipped the clean shutdown */
     assert_int_equal(write(master, "z\t", 2), 2);
     pty_collect(master, wire, sizeof(wire), 500);
     assert_int_equal(write(master, "x\r", 2), 2);
@@ -1385,6 +1386,100 @@ static void test_attach_history_recorded_and_bounded(void **state)
         "assert(H:find('c1002 = 1002', 1, true) ~= nil, 'newest cmd present')\n");
 }
 
+/* capture_start stops collecting past MAX_CAPTURE — the cap counts
+ * sink CHUNKS, not bytes: each print is one chunk, so past 65536
+ * chunks the frame stops growing while the target keeps running. The
+ * command runs against a recorded fake client: a real 1.1 MB reply
+ * would trip the server's slow-client drop before the frame could be
+ * read (non-blocking send on a full unix buffer), and io.write is
+ * stubbed so the mirror stays out of the log. */
+static void test_capture_cap_bounds_the_frame(void **state)
+{
+    (void)state;
+    run(L,
+        "local w = io.write\n"
+        "io.write = function() end\n"
+        "local sent\n"
+        "S.client = setmetatable({}, {__index = {\n"
+        "  receive = function(self)\n"
+        "    local l = self.line\n"
+        "    self.line = nil\n"
+        "    if l then return l end\n"
+        "    return nil, 'timeout'\n"
+        "  end,\n"
+        "  send = function(self, s)\n"
+        "    sent = (sent or '') .. s\n"
+        "    return #s\n"
+        "  end,\n"
+        "  close = function() end,\n"
+        "}})\n"
+        "S.client.line = 'for i = 1, 70000 do print(string.rep(\"x\", 16)) end'\n"
+        "S.step()\n"
+        "assert(sent, 'fake client received the reply')\n"
+        "S.client = nil\n"
+        "io.write = w\n"
+        "assert(sent:sub(1, 3) == 'OK\\n', 'runaway print still succeeds')\n"
+        "local body = #sent - 6\n" /* minus "OK\n" and "\30\n" */
+        "assert(body > 65000 * 17, 'cap kept the capped stream: ' .. body)\n"
+        "assert(body < 66000 * 17, 'cap bounded the chunk count: ' .. body)\n"
+        "return 'ok'\n");
+}
+
+/* The count hook pcall's __LUNA_SERVE_STEP with hooks suspended, so a
+ * dispatch driven by that poll executes uncounted -- every framed
+ * reply above is behavior-tested yet invisible to luacov. Neutralizing
+ * the poll global makes the explicit S.step() run under the live
+ * coverage hook instead; this pins the dispatch shapes AND the luacov
+ * accounting, so a regression that re-introduces the blind spot fails
+ * here rather than silently dropping serve.lua to ~48%. Plain builds
+ * (no __LUNA_COV_ROOT) skip the accounting half. */
+static void test_counted_dispatch_reaches_luacov(void **state)
+{
+    (void)state;
+    run(L,
+        "local saved = __LUNA_SERVE_STEP\n"
+        "__LUNA_SERVE_STEP = nil\n"
+        /* the capture-cap test's fake replaced (then dropped) the live
+         * client; reconnect so dispatch has a real peer to answer */
+        "C = require('socket.unix')()\n"
+        "assert(C:connect(S.path_for(kernel.pid())))\n"
+        "C:settimeout(2)\n"
+        "local function quiet(line)\n"
+        "  assert(C:send(line .. '\\n'))\n"
+        "  S.step()\n"
+        "  local parts = {}\n"
+        "  while true do\n"
+        "    local part = assert(C:receive('*l'))\n"
+        "    if part == '\\30' then break end\n"
+        "    parts[#parts + 1] = part\n"
+        "  end\n"
+        "  return table.concat(parts, '|')\n"
+        "end\n"
+        "assert(quiet('counted_g = 41') == 'OK|nil', 'statement form')\n"
+        "assert(quiet('return counted_g + 1') == 'OK|42', 'expression form')\n"
+        "assert(quiet('return 1, 2') == 'OK|1|2', 'multi-value form')\n"
+        "assert(quiet('%stats'):sub(1, 3) == 'OK|', 'magic form')\n"
+        "assert(quiet('?counted_g'):sub(1, 3) == 'OK|', 'help sugar')\n"
+        "assert(quiet('\\1complete attachg'):find('attachgx', 1, true),\n"
+        "       'completion meta line')\n"
+        "assert(quiet('%') == 'ERR|empty magic', 'empty magic')\n"
+        "assert(quiet('return #require(\"luna.serve\").ps() >= 0') == 'OK|true',\n"
+        "       'serve.ps scan')\n"
+        "assert(quiet('%exit') ==\n"
+        "       'EXIT|%exit inside attach detaches the client', 'exit frame')\n"
+        "__LUNA_SERVE_STEP = saved\n"
+        "if __LUNA_COV_ROOT then\n"
+        "  local path = __LUNA_COV_ROOT .. '/lua/luna/serve.lua'\n"
+        "  local file = require('luacov.runner').data[path]\n"
+        "  assert(file, 'serve.lua tracked by luacov')\n"
+        "  for _, l in ipairs({266, 172, 192, 212, 160, 169, 177, 181, 338}) do\n"
+        "    assert((file[l] or 0) > 0,\n"
+        "           'serve.lua line ' .. l .. ' uncounted')\n"
+        "  end\n"
+        "end\n"
+        "return 'ok'\n");
+}
+
 /* The count hook pcall's __LUNA_SERVE_STEP every ~200k instructions
  * while a chunk runs, and a poll that raises must be swallowed — "a
  * failing poll must not kill the chunk". The fixture installs one that
@@ -1502,6 +1597,8 @@ int main(void)
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         cmocka_unit_test(test_ps_handles_stale_socket),
         cmocka_unit_test(test_attach_history_recorded_and_bounded),
+        cmocka_unit_test(test_capture_cap_bounds_the_frame),
+        cmocka_unit_test(test_counted_dispatch_reaches_luacov),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),
         cmocka_unit_test_setup_teardown(test_sigusr1_releases_idle_editor, NULL, sweep_teardown),

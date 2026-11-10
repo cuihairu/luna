@@ -1084,6 +1084,53 @@ static void test_toml_decode_errors(void **state)
         "nil | toml: invalid UTF8 char \\ud800 at line 1");
 }
 
+static void test_toml_decode_nested_array_at_cap_succeeds(void **state)
+{
+    (void)state;
+    /* tomlc17's scanner allows exactly BRACKET_LEVEL_MAX (30) open
+     * brackets; the boundary document decodes and every level walks */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local doc = 'a = ' .. string.rep('[', 30) .. '1'\n"
+                    "            .. string.rep(']', 30)\n"
+                    "local t = toml.decode(doc)\n"
+                    "local node = t.a\n"
+                    "for _ = 1, 29 do node = node[1] end\n"
+                    "assert(node[1] == 1, 'innermost value reachable')\n"
+                    "return 'ok'"),
+        "ok");
+}
+
+static void test_toml_decode_array_overflow_rejected(void **state)
+{
+    (void)state;
+    /* one bracket past the scanner cap is rejected with the line, not
+     * left to blow the C stack during recursion */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local doc = 'a = ' .. string.rep('[', 31) .. '1'\n"
+                    "            .. string.rep(']', 31)\n"
+                    "local t, e = toml.decode(doc)\n"
+                    "return tostring(t) .. ' | ' .. e"),
+        "nil | toml: stack overflow at line 1");
+}
+
+static void test_toml_decode_dotted_key_parts_capped(void **state)
+{
+    (void)state;
+    /* dotted header keys allow KEYPARTMAX (10) parts; the 11th part is
+     * rejected with the line. 9 parts still decode (below the cap). */
+    assert_string_equal(
+        eval_string("local toml = require('toml')\n"
+                    "local nine = string.rep('k.', 9) .. 'k'\n"
+                    "local t9 = toml.decode('[' .. nine .. ']\\nv = 1')\n"
+                    "assert(type(t9) == 'table', 'nine parts decode')\n"
+                    "local eleven = string.rep('k.', 11) .. 'k'\n"
+                    "local t11, e11 = toml.decode('[' .. eleven .. ']\\nv = 1')\n"
+                    "return tostring(t11) .. ' | ' .. e11"),
+        "nil | toml: too many key parts at line 1");
+}
+
 static void test_toml_encode_exact_shapes(void **state)
 {
     (void)state;
@@ -4289,6 +4336,9 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_toml_decode_structures, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_decode_datetimes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_decode_errors, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_nested_array_at_cap_succeeds, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_array_overflow_rejected, setup_modules, teardown_modules),
+        cmocka_unit_test_setup_teardown(test_toml_decode_dotted_key_parts_capped, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_encode_exact_shapes, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_encode_roundtrip, setup_modules, teardown_modules),
         cmocka_unit_test_setup_teardown(test_toml_encode_errors, setup_modules, teardown_modules),

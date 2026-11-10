@@ -427,6 +427,86 @@ static void test_load_reports_read_failure(void **state)
                        "return true"), LUA_OK);
 }
 
+/* -- %info / %modules (P1 introspection set) ------------------------------ */
+
+static void test_info_reports_runtime_identity(void **state)
+{
+    (void)state;
+    /* %info prints version, pid, uptime, the attach-socket state and the
+     * footprint line; the harness preloads no luna.serve, so the
+     * "attach socket: off" branch is the one that runs. */
+    assert_string_equal(feed("%info"), "ok");
+    assert_non_null(strstr(outbuf, "pid "));
+    assert_non_null(strstr(outbuf, "uptime "));
+    assert_non_null(strstr(outbuf, "attach socket: off"));
+    assert_non_null(strstr(outbuf, "gc "));
+    assert_non_null(strstr(outbuf, "loaded modules"));
+}
+
+static void test_modules_lists_loaded_modules(void **state)
+{
+    (void)state;
+    /* the bare %modules listing sorts loaded module names and ends with
+     * the loaded + registered summary */
+    assert_string_equal(feed("%modules"), "ok");
+    assert_non_null(strstr(outbuf, "string"));
+    assert_non_null(strstr(outbuf, "loaded modules (+ "));
+}
+
+static void test_modules_describes_named_module(void **state)
+{
+    (void)state;
+    /* %modules <name> hands the loaded value to intro.help: a table
+     * renders as "table with N named fields:" plus field rows */
+    assert_string_equal(feed("%modules string"), "ok");
+    assert_non_null(strstr(outbuf, "table with "));
+    assert_non_null(strstr(outbuf, "format"));
+}
+
+static void test_modules_reports_registered_not_loaded(void **state)
+{
+    (void)state;
+    /* a name that sits in package.preload but was never required gets
+     * the "registered but not loaded" guidance error; a private preload
+     * entry keeps the fixture independent of what the repl chain loads */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['sidecar.never.required'] = function() return {} end\n"
+                       "return true"),
+                     LUA_OK);
+    assert_string_equal(feed("%modules sidecar.never.required"), "ok");
+    assert_non_null(strstr(outbuf, "registered but not loaded"));
+    assert_non_null(strstr(outbuf, "require it first"));
+}
+
+static void test_modules_reports_unknown_module(void **state)
+{
+    (void)state;
+    /* a name that is neither loaded nor registered gets the plain
+     * "not loaded" error pointing at the bare %modules list */
+    assert_string_equal(feed("%modules no.such.module.anywhere"), "ok");
+    assert_non_null(strstr(outbuf, "is not loaded"));
+    assert_non_null(strstr(outbuf, "try %modules"));
+}
+
+static void test_time_table_result_uses_inspect_sidecar(void **state)
+{
+    (void)state;
+    /* echo_repr prefers the inspect sidecar for tables; the sidecar is
+     * captured from require("util") when magic.lua loads, so the fixture
+     * preloads util and reloads magic, then times a table-valued
+     * expression so the pcall(inspect) path produces the rendering. */
+    assert_int_equal(luaL_dostring(L,
+                       "package.preload['util'] = function()\n"
+                       "  return { inspect = function(v) return 'sidecar:' .. type(v) end }\n"
+                       "end\n"
+                       "package.loaded['luna.magic'] = nil\n"
+                       "M = require 'luna.magic'\n"
+                       "return true"),
+                     LUA_OK);
+    assert_string_equal(feed("%time {10, 20}"), "ok");
+    assert_non_null(strstr(outbuf, "sidecar:table"));
+}
+
 /* -- runner --------------------------------------------------------------- */
 
 int main(void)
@@ -458,6 +538,12 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_plugins_with_shadowed, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_exit_magic_calls_os_exit, setup_magic, teardown_magic),
         cmocka_unit_test_setup_teardown(test_load_reports_read_failure, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_info_reports_runtime_identity, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_modules_lists_loaded_modules, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_modules_describes_named_module, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_modules_reports_registered_not_loaded, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_modules_reports_unknown_module, setup_magic, teardown_magic),
+        cmocka_unit_test_setup_teardown(test_time_table_result_uses_inspect_sidecar, setup_magic, teardown_magic),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -1457,6 +1457,46 @@ static void *tls_main(void *arg)
     return NULL;
 }
 
+/* accept one TLS connection, read one small record (never the bulk the
+ * client sends), then close_notify and hold the fd open briefly before
+ * closing: the client's big write has no reader, its socket buffer fills
+ * (SSL_write WANT_WRITE, pend armed), and the fd close surfaces as the
+ * pending write's failure. The callback must fire either way. */
+static void tls_close_serve(int listener)
+{
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx) {
+        BIO *cb = BIO_new_mem_buf(TLS_TEST_CERT, -1);
+        BIO *kb = BIO_new_mem_buf(TLS_TEST_KEY, -1);
+        X509 *x = PEM_read_bio_X509(cb, NULL, 0, NULL);
+        EVP_PKEY *k = PEM_read_bio_PrivateKey(kb, NULL, NULL, NULL);
+        SSL_CTX_use_certificate(ctx, x);
+        SSL_CTX_use_PrivateKey(ctx, k);
+        int c = accept(listener, NULL, NULL);
+        SSL *ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, c);
+        SSL_accept(ssl); /* rejects on its own when the client fails */
+        char buf[256];
+        SSL_read(ssl, buf, sizeof buf);
+        SSL_shutdown(ssl); /* close_notify */
+        usleep(400 * 1000); /* let the client arm its pending write */
+        close(c);
+        SSL_free(ssl);
+        X509_free(x);
+        EVP_PKEY_free(k);
+        BIO_free(cb);
+        BIO_free(kb);
+        SSL_CTX_free(ctx);
+    }
+    close(listener);
+}
+
+static void *tls_close_main(void *arg)
+{
+    tls_close_serve((int)(intptr_t)arg);
+    return NULL;
+}
+
 /* connect + handshake + one write/read round trip, then the server's
  * close_notify arrives as the EOF signal; opts is the Lua table text */
 static void tls_roundtrip_case(const char *opts, int port)
@@ -1547,6 +1587,39 @@ static void test_tls_connect_refused_yields_error(void **state)
     /* the failure surfaces in slot one, the loop drains to a natural
      * return, and the half-built sock cleaned itself up */
     assert_string_equal(eval_string(code), "true,nil");
+}
+
+/* A pending write whose peer shuts down must deliver its callback (with
+ * the failure) and let the loop drain — the tls_pump_body r==0/fall-
+ * through regression held the writeref forever with no read callback
+ * armed, stalling the socket and leaking the callback. */
+static void test_tls_pending_write_delivers_callback_on_peer_close(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_close_main,
+                                    (void *)(intptr_t)listener), 0);
+    char code[512];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connectTls('127.0.0.1', %d, {insecure = true}, function(e, sock)\n"
+        "  if e then log[1] = 'connect:' .. e return end\n"
+        "  local big = ('x'):rep(64 * 1024 * 1024)\n"
+        "  sock:write(big, function(e2)\n"
+        "    log[1] = e2 and ('write:' .. e2) or 'write-ok'\n"
+        "    sock:close()\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')\n", tcp_port_of(listener));
+    /* the callback must fire (either the failure, or a full flush if the
+     * kernel buffers happen to absorb the payload) — never hang */
+    const char *got = eval_string(code);
+    assert_non_null(got);
+    assert_true(strstr(got, "write:") != NULL);
+    pthread_join(th, NULL);
 }
 #endif /* !_WIN32: the pthread TLS echo server and its connectTls
         * cases stay off Windows; listenTls cases below are in-process */
@@ -3340,6 +3413,7 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_custom_ca_accepts_self_signed, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_default_verify_rejects_self_signed, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_connect_refused_yields_error, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_pending_write_delivers_callback_on_peer_close, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),

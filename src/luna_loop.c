@@ -3365,7 +3365,11 @@ static void tls_pump_body(struct tsock *t)
             free(t->pend);
             t->pend = NULL;
             tsock_deliver(t, &t->writeref, NULL, NULL, 0);
-        } else if (r < 0) {
+        } else if (r <= 0) {
+            /* r == 0 (SSL_ERROR_ZERO_RETURN, peer close_notify on some
+             * OpenSSL builds) must not fall through silently: without
+             * this arm the writeref stayed armed forever on a socket
+             * that will never again accept the pending write */
             int e = SSL_get_error(t->ssl, r);
             if (e != SSL_ERROR_WANT_READ && e != SSL_ERROR_WANT_WRITE) {
                 tls_fail(t, NULL);
@@ -3752,7 +3756,11 @@ static int l_tsock_write(lua_State *L)
         tsock_deliver(t, &t->writeref, NULL, NULL, 0);
         return 0;
     }
-    if (r < 0) {
+    if (r <= 0) {
+        /* r == 0 with len > 0 is a protocol-level failure (peer
+         * close_notify / zero-return on some builds), not a retryable
+         * block: holding the payload as pend would arm the callback
+         * forever on a write that can never complete */
         int e = SSL_get_error(t->ssl, r);
         if (e != SSL_ERROR_WANT_READ && e != SSL_ERROR_WANT_WRITE) {
             tls_fail(t, NULL);

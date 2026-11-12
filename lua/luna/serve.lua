@@ -34,6 +34,7 @@ local serve = {}
 serve.srv = nil       -- listening socket
 serve.path = nil      -- socket file path
 serve.client = nil    -- current client socket (nil until accepted)
+serve.pending = nil   -- unsent reply tail (partial send on small SO_SNDBUF)
 serve.enabled = true  -- cleared by --no-serve
 
 function serve.path_for(pid)
@@ -78,6 +79,7 @@ end
 local function drop_client()
     pcall(function() serve.client:close() end)
     serve.client = nil
+    serve.pending = nil
 end
 
 -- Thin attach session: just enough of the REPL session shape for the
@@ -246,6 +248,20 @@ function serve.step()
         end
     end
     while serve.client do
+        -- flush an earlier partial send first: one non-blocking send may
+        -- take only part of a large frame (macOS unix SO_SNDBUF is ~8KB),
+        -- so the tail parks here until the socket drains
+        if serve.pending then
+            local okp, sentp = pcall(function() return serve.client:send(serve.pending) end)
+            if not okp or not sentp or sentp == 0 then
+                return -- still backed up: stop polling this round
+            end
+            if sentp >= #serve.pending then
+                serve.pending = nil
+            else
+                serve.pending = serve.pending:sub(sentp + 1)
+            end
+        end
         local okr, chunk, rerr = pcall(function()
             return serve.client:receive("*l")
         end)
@@ -270,6 +286,13 @@ function serve.step()
         local oks, sent = pcall(function() return serve.client:send(reply) end)
         if not oks or not sent then
             drop_client()
+            break
+        end
+        if sent < #reply then
+            -- partial write: keep the unsent tail for the next poll
+            -- instead of silently truncating the frame (the client would
+            -- wait for a terminator that never arrives)
+            serve.pending = reply:sub(sent + 1)
             break
         end
     end

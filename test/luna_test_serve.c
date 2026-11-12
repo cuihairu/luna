@@ -115,14 +115,21 @@ static int setup_serve(void **state)
     run(L,
         "function exchange(line)\n"
         "  assert(C:send(line .. '\\n'))\n"
-        "  S.step()\n"
         "  local parts = {}\n"
-        "  while true do\n"
-        "    local part = assert(C:receive('*l'))\n"
-        "    if part == '\\30' then break end\n"
-        "    parts[#parts + 1] = part\n"
+        "  -- pump until the frame terminator: large replies go out in\n"
+        "  -- multiple partial sends (macOS unix SO_SNDBUF is ~8KB), so the\n"
+        "  -- tail only lands after several serve.step polls\n"
+        "  for _ = 1, 2000 do\n"
+        "    S.step()\n"
+        "    C:settimeout(0.02)\n"
+        "    local part = C:receive('*l')\n"
+        "    while part do\n"
+        "      if part == '\\30' then return table.concat(parts, '|') end\n"
+        "      parts[#parts + 1] = part\n"
+        "      part = C:receive('*l')\n"
+        "    end\n"
         "  end\n"
-        "  return table.concat(parts, '|')\n"
+        "  error('exchange: no frame terminator')\n"
         "end\n");
     return 0;
 }

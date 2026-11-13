@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -116,18 +117,29 @@ static int setup_serve(void **state)
         "function exchange(line)\n"
         "  assert(C:send(line .. '\\n'))\n"
         "  local parts = {}\n"
+        "  local frag = ''\n"
         "  -- pump until the frame terminator: large replies go out in\n"
         "  -- multiple partial sends (macOS unix SO_SNDBUF is ~8KB), so the\n"
-        "  -- tail only lands after several serve.step polls\n"
+        "  -- tail only lands after several serve.step polls. A poll can\n"
+        "  -- split a line mid-stream and the 20ms timeout expires before\n"
+        "  -- the next poll flushes the rest: luasocket hands the unconsumed\n"
+        "  -- fragment back as its third value, so it is re-fed as the\n"
+        "  -- prefix -- dropping it would swallow the \\30 terminator itself\n"
+        "  -- when a chunk ends between it and its newline\n"
         "  for _ = 1, 2000 do\n"
         "    S.step()\n"
         "    C:settimeout(0.02)\n"
-        "    local part = C:receive('*l')\n"
+        "    local part, err, got = C:receive('*l', frag)\n"
+        "    frag = ''\n"
         "    while part do\n"
         "      if part == '\\30' then return table.concat(parts, '|') end\n"
         "      parts[#parts + 1] = part\n"
-        "      part = C:receive('*l')\n"
+        "      part, err, got = C:receive('*l')\n"
         "    end\n"
+        "    if err ~= 'timeout' then\n"
+        "      error('exchange: stream ' .. tostring(err))\n"
+        "    end\n"
+        "    frag = got or ''\n"
         "  end\n"
         "  error('exchange: no frame terminator')\n"
         "end\n");
@@ -1393,6 +1405,95 @@ static void test_attach_history_recorded_and_bounded(void **state)
         "assert(H:find('c1002 = 1002', 1, true) ~= nil, 'newest cmd present')\n");
 }
 
+/* The pending flush must read luasocket's blocked-send shape as
+ * progress: send returns (nil, 'timeout', index) with index equal to
+ * the accepted prefix -- bytes went out even on a 'timeout'. Reading
+ * that shape as a dead socket killed the client mid-frame (the macOS
+ * ~8KB unix sndbuf truncation flake); ignoring the index resends the
+ * accepted prefix and duplicates it on the wire. The fake pins both:
+ * the flush advances by exactly the accepted prefix and the client
+ * survives. */
+static void test_partial_send_advances_pending(void **state)
+{
+    (void)state;
+    const char *r = eval_string(
+        "local calls, wire = 0, ''\n"
+        "local fake = {}\n"
+        "function fake:send(s)\n"
+        "  calls = calls + 1\n"
+        "  if calls == 1 then\n"
+        "    wire = wire .. s:sub(1, 5)\n"
+        "    return nil, 'timeout', 5\n"
+        "  end\n"
+        "  wire = wire .. s\n"
+        "  return #s\n"
+        "end\n"
+        "function fake:receive() return nil, 'timeout' end\n"
+        "function fake:settimeout() return 1 end\n"
+        "function fake:close() fake.was_closed = true end\n"
+        "local real_client, real_pending = S.client, S.pending\n"
+        "S.client = fake\n"
+        "S.pending = ('x'):rep(12)\n"
+        "S.step()\n"
+        "S.step()\n"
+        "local ok = not fake.was_closed and wire == ('x'):rep(12)\n"
+        "S.client, S.pending = real_client, real_pending\n"
+        "return tostring(ok) .. '|' .. #wire .. '|'\n"
+        "  .. tostring(fake.was_closed) .. '|' .. tostring(S.pending == nil)\n");
+    assert_string_equal(r, "true|12|nil|true");
+}
+
+/* A reply larger than the socket send buffer must reach the client
+ * whole: the server parks the unsent tail in serve.pending and flushes
+ * it across later polls, and the client reassembles lines a poll
+ * boundary splits (luasocket hands back the unconsumed fragment of a
+ * timed-out line as its third value; dropping it would swallow the
+ * \30 terminator itself when a chunk ends between it and its newline).
+ * Shrinking SO_SNDBUF on the server side makes partial sends
+ * deterministic instead of macOS-only. */
+static void test_big_reply_flushes_across_partial_sends(void **state)
+{
+    (void)state;
+    run(L, "return tonumber(S.client and S.client:getfd() or -1)");
+    int fd = (int)lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    assert_true(fd >= 0);
+    int oldbuf = 0;
+    socklen_t oldlen = sizeof(oldbuf);
+    assert_int_equal(getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &oldbuf, &oldlen), 0);
+    int small = 2048;
+    assert_int_equal(setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &small,
+                                sizeof(small)), 0);
+
+    /* byte-exact replies: truncation, duplicated prefixes and dropped
+     * line fragments all show up as content mismatches (the result is
+     * repr'd, so the string arrives quoted) */
+    static char want[16384];
+    snprintf(want, sizeof(want), "OK|'");
+    for (int i = 0; i < 4096; i++) {
+        strcat(want, "ab");
+    }
+    strcat(want, "'");
+    const char *r1 = eval_string(
+        "return exchange('return string.rep(\"ab\", 4096)')");
+    assert_string_equal(r1, want);
+
+    /* a second large reply right behind the first exercises the
+     * pending-drained-then-next-command path */
+    static char want2[16384];
+    snprintf(want2, sizeof(want2), "OK|'tok");
+    for (int i = 0; i < 3000; i++) {
+        strcat(want2, "c");
+    }
+    strcat(want2, "'");
+    const char *r2 = eval_string(
+        "return exchange('return \"tok\" .. string.rep(\"c\", 3000)')");
+    assert_string_equal(r2, want2);
+
+    assert_int_equal(setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &oldbuf,
+                                sizeof(oldbuf)), 0);
+}
+
 /* capture_start stops collecting past MAX_CAPTURE — the cap counts
  * sink CHUNKS, not bytes: each print is one chunk, so past 65536
  * chunks the frame stops growing while the target keeps running. The
@@ -1604,6 +1705,8 @@ int main(void)
         cmocka_unit_test(test_wake_and_chmod_report_errors),
         cmocka_unit_test(test_ps_handles_stale_socket),
         cmocka_unit_test(test_attach_history_recorded_and_bounded),
+        cmocka_unit_test(test_partial_send_advances_pending),
+        cmocka_unit_test(test_big_reply_flushes_across_partial_sends),
         cmocka_unit_test(test_capture_cap_bounds_the_frame),
         cmocka_unit_test(test_counted_dispatch_reaches_luacov),
         /* destructive for the shared serve state: keep it late */

@@ -82,6 +82,24 @@ local function drop_client()
     serve.pending = nil
 end
 
+-- luasocket send contract: a blocked send returns (nil, 'timeout',
+-- index) where index is the accepted prefix -- bytes went out even on
+-- a 'timeout'. Reading that shape as a dead socket truncated large
+-- frames mid-flight (the client then waited for a terminator that
+-- never came on small sndbufs), and ignoring the index would resend
+-- the accepted prefix and duplicate it on the wire. Returns (alive,
+-- accepted): accepted = bytes that went out on this call.
+local function try_send(sock, s)
+    local ok, first, err, idx = pcall(sock.send, sock, s)
+    if ok and first then
+        return true, first -- fully sent; first == #s
+    end
+    if ok and err == "timeout" and type(idx) == "number" then
+        return true, idx -- partial progress: idx bytes accepted
+    end
+    return false, 0 -- 'closed' or a raise: the socket is gone
+end
+
 -- Thin attach session: just enough of the REPL session shape for the
 -- magics to work remotely (%hist reads inputs, %reset clears the out
 -- registers). __attach marks the mode for magics that branch on it
@@ -252,8 +270,12 @@ function serve.step()
         -- take only part of a large frame (macOS unix SO_SNDBUF is ~8KB),
         -- so the tail parks here until the socket drains
         if serve.pending then
-            local okp, sentp = pcall(function() return serve.client:send(serve.pending) end)
-            if not okp or not sentp or sentp == 0 then
+            local alive, sentp = try_send(serve.client, serve.pending)
+            if not alive then
+                drop_client()
+                break
+            end
+            if sentp == 0 then
                 return -- still backed up: stop polling this round
             end
             if sentp >= #serve.pending then
@@ -283,8 +305,8 @@ function serve.step()
         if not okd then
             reply = "ERR\n" .. tostring(reply) .. "\n\30\n"
         end
-        local oks, sent = pcall(function() return serve.client:send(reply) end)
-        if not oks or not sent then
+        local alive, sent = try_send(serve.client, reply)
+        if not alive then
             drop_client()
             break
         end

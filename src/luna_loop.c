@@ -39,6 +39,7 @@
  * listen(); a killed child reports signal = <number> with a
  * meaningless status, mirroring libuv. */
 #include <stddef.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -802,6 +803,18 @@ static void fs_read_stat(uv_fs_t *req)
         return;
     }
     off_t size = req->statbuf.st_size;
+    if ((uint64_t)size > UINT_MAX) {
+        /* uv_buf_init takes an unsigned int: a file past 4 GiB would
+         * truncate silently in the cast below — refuse it through the
+         * callback instead (the same single-buffer limit sock:write
+         * enforces) */
+        op->errcode = UV_EFBIG;
+        int fd = op->fd;
+        op->fd = -1;
+        uv_fs_req_cleanup(req);
+        uv_fs_close(&g_loop, req, fd, fs_done);
+        return;
+    }
     op->size = (size_t)size;
     op->data = malloc(op->size ? op->size : 1);
     if (!op->data) {
@@ -885,6 +898,14 @@ static int l_fs_write_file(lua_State *L)
     size_t len;
     const char *data = luaL_checklstring(L, 2, &len);
     luaL_checktype(L, 3, LUA_TFUNCTION);
+    /* uv_buf_init takes an unsigned int: past UINT_MAX (4 GiB) the size
+     * would truncate silently and the tail of the file would never land
+     * (the same single-buffer limit sock:write enforces) */
+    if (len > UINT_MAX) {
+        return luaL_error(L, "loop.fs: write of %I bytes exceeds the "
+                          "4 GiB libuv single-buffer limit",
+                          (lua_Integer)len);
+    }
     struct fsop *op = fsop_new(L, 3, FS_WRITE);
     op->size = len;
     op->data = malloc(len ? len : 1);
@@ -910,6 +931,13 @@ static int l_fs_append_file(lua_State *L)
     size_t len;
     const char *data = luaL_checklstring(L, 2, &len);
     luaL_checktype(L, 3, LUA_TFUNCTION);
+    /* the same single-buffer limit writeFile enforces: both share the
+     * FS_WRITE chain and its (unsigned) buffer cast */
+    if (len > UINT_MAX) {
+        return luaL_error(L, "loop.fs: write of %I bytes exceeds the "
+                          "4 GiB libuv single-buffer limit",
+                          (lua_Integer)len);
+    }
     struct fsop *op = fsop_new(L, 3, FS_WRITE);
     op->size = len;
     op->data = malloc(len ? len : 1);
@@ -2482,6 +2510,13 @@ static int l_udp_send(lua_State *L)
         luaL_checktype(L, 5, LUA_TFUNCTION);
     }
     luaL_argcheck(L, !u->closed, 1, "socket is closed");
+    /* uv_buf_init takes an unsigned int: the same single-buffer limit
+     * sock:write enforces — refuse rather than silently truncate */
+    if (len > UINT_MAX) {
+        return luaL_error(L, "loop.udp: send of %I bytes exceeds the "
+                          "4 GiB libuv single-buffer limit",
+                          (lua_Integer)len);
+    }
     struct sockaddr_storage ss;
     if (bind_addr_of(host, (int)port, &ss) != 0) {
         return luaL_error(L, "loop.udp: cannot send to '%s' (numeric "
@@ -3359,7 +3394,9 @@ static void tls_pump_body(struct tsock *t)
     if (t->pend) {
         /* OpenSSL's retry contract: until a partial write completes,
          * every SSL_write must pass the SAME (buf, len) — it remembers
-         * how far the earlier call got, so this restarts full-length */
+         * how far the earlier call got, so this restarts full-length.
+         * pend_len is INT_MAX-bounded at the write entry, so this cast
+         * cannot wrap. */
         int r = SSL_write(t->ssl, t->pend, (int)t->pend_len);
         if (r == (int)t->pend_len) {
             free(t->pend);
@@ -3723,6 +3760,18 @@ static int tls_dial_next(struct tsock *t)
     return 0;
 }
 
+/* OOM after the write callback was pinned: release it before raising so
+ * the failed write leaves no armed ref behind — a leaked writeref would
+ * hand this callback a later write's delivery */
+static int tls_write_oom(lua_State *L, struct tsock *t)
+{
+    if (t->writeref != LUA_NOREF) {
+        luaL_unref(L, LUA_REGISTRYINDEX, t->writeref);
+        t->writeref = LUA_NOREF;
+    }
+    return luaL_error(L, "loop.net: out of memory");
+}
+
 /* tsock:write(data, cb(err)?) — payload held until fully flushed */
 static int l_tsock_write(lua_State *L)
 {
@@ -3731,6 +3780,15 @@ static int l_tsock_write(lua_State *L)
     luaL_argcheck(L, !t->closed, 1, "tls sock is closed");
     size_t len;
     const char *data = luaL_checklstring(L, 2, &len);
+    /* SSL_write takes an int: a payload past INT_MAX (2 GiB) would wrap
+     * the (int) casts here and in the pend flush. Refuse at this single
+     * entry — it feeds both SSL_write call sites (same guard shape as
+     * sock:write's UINT_MAX check). */
+    if (len > INT_MAX) {
+        return luaL_error(L, "loop.net: write of %I bytes exceeds the "
+                          "2 GiB TLS single-write limit",
+                          (lua_Integer)len);
+    }
     int with_cb = !lua_isnoneornil(L, 3);
     if (with_cb) {
         luaL_checktype(L, 3, LUA_TFUNCTION);
@@ -3745,7 +3803,7 @@ static int l_tsock_write(lua_State *L)
         /* hold the payload until the handshake completes */
         t->pend = malloc(len ? len : 1);
         if (!t->pend) {
-            return luaL_error(L, "loop.net: out of memory");
+            return tls_write_oom(L, t);
         }
         memcpy(t->pend, data, len);
         t->pend_len = len;
@@ -3772,7 +3830,7 @@ static int l_tsock_write(lua_State *L)
      * past this allocation and trip OpenSSL's bad-write-retry check */
     t->pend = malloc(len ? len : 1);
     if (!t->pend) {
-        return luaL_error(L, "loop.net: out of memory");
+        return tls_write_oom(L, t);
     }
     memcpy(t->pend, data, len);
     t->pend_len = len;

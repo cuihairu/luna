@@ -1520,12 +1520,14 @@ static void test_big_reply_flushes_across_partial_sends(void **state)
 }
 
 /* capture_start stops collecting past MAX_CAPTURE — the cap counts
- * sink CHUNKS, not bytes: each print is one chunk, so past 65536
- * chunks the frame stops growing while the target keeps running. The
- * command runs against a recorded fake client: a real 1.1 MB reply
- * would trip the server's slow-client drop before the frame could be
- * read (non-blocking send on a full unix buffer), and io.write is
- * stubbed so the mirror stays out of the log. */
+ * BYTES: each print is one sink chunk, and the chunk that crosses the
+ * limit is truncated so the frame stops at exactly MAX_CAPTURE while
+ * the target keeps running (a chunk-count cap let one oversized print
+ * carry the frame past the limit). The command runs against a
+ * recorded fake client: a real 1.1 MB reply would trip the server's
+ * slow-client drop before the frame could be read (non-blocking send
+ * on a full unix buffer), and io.write is stubbed so the mirror stays
+ * out of the log. */
 static void test_capture_cap_bounds_the_frame(void **state)
 {
     (void)state;
@@ -1553,8 +1555,9 @@ static void test_capture_cap_bounds_the_frame(void **state)
         "io.write = w\n"
         "assert(sent:sub(1, 3) == 'OK\\n', 'runaway print still succeeds')\n"
         "local body = #sent - 6\n" /* minus "OK\n" and "\30\n" */
-        "assert(body > 65000 * 17, 'cap kept the capped stream: ' .. body)\n"
-        "assert(body < 66000 * 17, 'cap bounded the chunk count: ' .. body)\n"
+        /* 65536 = the byte cap; the trailing 3 = the statement-form
+         * "nil" result the dispatch glues on after the capture */
+        "assert(body == 65536 + 3, 'byte cap, not chunk cap: ' .. body)\n"
         "return 'ok'\n");
 }
 

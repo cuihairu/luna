@@ -126,13 +126,24 @@ end
 local MAX_CAPTURE = 64 * 1024
 
 -- Install a capture sink: kernel output lands in acc AND mirrors to
--- the target's own stdout, so both consoles see the same stream.
+-- the target's own stdout, so both consoles see the same stream. The
+-- cap counts BYTES and truncates the chunk that crosses it -- a
+-- chunk-count cap let one oversized print carry the frame past the
+-- limit (its size scaled with the chunk, not the count).
 local function capture_start(acc)
+    local held = 0
     kernel.sink(function(s)
-        if #acc < MAX_CAPTURE then
-            acc[#acc + 1] = s
+        if held < MAX_CAPTURE then
+            local room = MAX_CAPTURE - held
+            if #s > room then
+                acc[#acc + 1] = s:sub(1, room)
+                held = MAX_CAPTURE
+            else
+                acc[#acc + 1] = s
+                held = held + #s
+            end
         end
-        io.write(s)
+        io.write(s) -- the mirror keeps the whole chunk
     end)
 end
 

@@ -1561,6 +1561,45 @@ static void test_capture_cap_bounds_the_frame(void **state)
         "return 'ok'\n");
 }
 
+/* The flip side of the cap: ONE huge print crossing it in a single
+ * chunk. A chunk-count cap let this through whole (its size scaled with
+ * the chunk, not the count); the byte cap must truncate it to exactly
+ * the cap while the mirror still sees every byte. */
+static void test_capture_cap_truncates_one_huge_chunk(void **state)
+{
+    (void)state;
+    run(L,
+        "local w = io.write\n"
+        "local mirrored = 0\n"
+        "io.write = function(s) mirrored = mirrored + #s end\n"
+        "local sent\n"
+        "S.client = setmetatable({}, {__index = {\n"
+        "  receive = function(self)\n"
+        "    local l = self.line\n"
+        "    self.line = nil\n"
+        "    if l then return l end\n"
+        "    return nil, 'timeout'\n"
+        "  end,\n"
+        "  send = function(self, s)\n"
+        "    sent = (sent or '') .. s\n"
+        "    return #s\n"
+        "  end,\n"
+        "  close = function() end,\n"
+        "}})\n"
+        "S.client.line = 'print(string.rep(\"x\", 200000))'\n"
+        "S.step()\n"
+        "assert(sent, 'fake client received the reply')\n"
+        "S.client = nil\n"
+        "io.write = w\n"
+        "assert(mirrored == 200001, 'mirror keeps the whole chunk: ' .. mirrored)\n"
+        "assert(sent:sub(1, 3) == 'OK\\n', 'huge print still succeeds')\n"
+        "local body = sent:sub(4, #sent - 3)\n"
+        "assert(#body == 65536 + 3, 'one huge chunk capped in bytes: ' .. #body)\n"
+        "assert(body:sub(1, 65536) == string.rep('x', 65536),\n"
+        "       'the cap keeps the first 65536 bytes of the chunk')\n"
+        "return 'ok'\n");
+}
+
 /* The count hook pcall's __LUNA_SERVE_STEP with hooks suspended, so a
  * dispatch driven by that poll executes uncounted -- every framed
  * reply above is behavior-tested yet invisible to luacov. Neutralizing
@@ -1737,6 +1776,7 @@ int main(void)
         cmocka_unit_test(test_pending_send_dead_client_is_dropped),
         cmocka_unit_test(test_big_reply_flushes_across_partial_sends),
         cmocka_unit_test(test_capture_cap_bounds_the_frame),
+        cmocka_unit_test(test_capture_cap_truncates_one_huge_chunk),
         cmocka_unit_test(test_counted_dispatch_reaches_luacov),
         /* destructive for the shared serve state: keep it late */
         cmocka_unit_test(test_stop_clears_socket_and_poll_noops),

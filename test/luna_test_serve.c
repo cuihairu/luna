@@ -1443,6 +1443,31 @@ static void test_partial_send_advances_pending(void **state)
     assert_string_equal(r, "true|12|nil|true");
 }
 
+/* A peer that dies while a frame tail is still parked must be released
+ * at once: try_send reports (false, 0) for 'closed', the step drops
+ * the client and clears the pending tail, and the single-client
+ * server is free to accept the next connection instead of spinning
+ * forever on a socket that will never drain. */
+static void test_pending_send_dead_client_is_dropped(void **state)
+{
+    (void)state;
+    const char *r = eval_string(
+        "local fake = {}\n"
+        "function fake:send() return nil, 'closed' end\n"
+        "function fake:receive() return nil, 'closed' end\n"
+        "function fake:settimeout() return 1 end\n"
+        "function fake:close() fake.was_closed = true end\n"
+        "local real_client, real_pending = S.client, S.pending\n"
+        "S.client = fake\n"
+        "S.pending = 'tail'\n"
+        "S.step()\n"
+        "local ok = fake.was_closed and S.client == nil and S.pending == nil\n"
+        "S.client, S.pending = real_client, real_pending\n"
+        "return tostring(ok) .. '|' .. tostring(fake.was_closed) .. '|'\n"
+        "  .. tostring(S.client == real_client) .. '|' .. tostring(S.pending == nil)\n");
+    assert_string_equal(r, "true|true|true|true");
+}
+
 /* A reply larger than the socket send buffer must reach the client
  * whole: the server parks the unsent tail in serve.pending and flushes
  * it across later polls, and the client reassembles lines a poll
@@ -1706,6 +1731,7 @@ int main(void)
         cmocka_unit_test(test_ps_handles_stale_socket),
         cmocka_unit_test(test_attach_history_recorded_and_bounded),
         cmocka_unit_test(test_partial_send_advances_pending),
+        cmocka_unit_test(test_pending_send_dead_client_is_dropped),
         cmocka_unit_test(test_big_reply_flushes_across_partial_sends),
         cmocka_unit_test(test_capture_cap_bounds_the_frame),
         cmocka_unit_test(test_counted_dispatch_reaches_luacov),

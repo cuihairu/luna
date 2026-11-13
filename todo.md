@@ -153,3 +153,16 @@
 - [x] 审核发现（audit-batch4 luna 节，P0-1≡P1a，裁定误报不改码）：称 tcp_dial_next/on_retry_closed 跨多地址重试复用同一 uv_connect_t 在前请求未完成时属 UB；vendored libuv 1.44.2 三重反证——(1) deps/libuv/src/unix/tcp.c:288-289 在途守卫 `connect_req != NULL` 同步返 UV_EALREADY，即便真复用也只是错误返回非 UB；(2) 同步失败各路径（family 检查 uv-common.c:405、maybe_new_socket tcp.c:294、connect() 非 EINPROGRESS/ECONNREFUSED tcp.c:331）均先于 `connect_req = req`（tcp.c:341）返回，while 迭代复用时无在途请求；(3) 异步路径 stream.c:1295 先清 connect_req 再调 cb（tcp.c 场景 1302-1303），on_retry_closed 复用时前请求已完结，属文档化生命周期。审核者给的触发「首个地址立即拒绝」：Linux ECONNREFUSED 走 delayed_error（tcp.c:321-330）rc==0 异步交付、根本不进 while 同步迭代；ENETUNREACH 走同步失败路径、同样无在途。两调用点（on_resolved:1591/on_retry_closed:1554）互斥于在途请求
 - [x] 审核发现（audit-batch4 luna 节，P1b≡P1-3/P1-4，裁定误报不改码）：称 serve.lua:192 pcall 三值解包使成功 magic 落入 not okm 误报 ERR；实际 magic.dispatch 契约是成功返 true（magic.lua:62）失败返 (nil, err)（magic.lua:53,57），pcall 成功得 (true, true)→okm=true→not okm 假→OK 帧，失败得 (true, nil, err)→ERR 带真消息，逻辑正确；审核者漏算 dispatch 首个 true 落在 okm（其假设「成功时 okm=nil」与契约不符）。既有回归 test_magic_runs_against_live_state 锁 %whos→OK|
 - [x] 审核发现（audit-batch4 luna 节，其余项裁定）：P0-2（luna_loop.c:3750 tls_fail 后继续执行）、报告条目3（:3630 connectref 未赋值）、P1-2、P1d、P1e 均审核者自行撤回（报告内已注「无 bug/撤回」）；P1c（repl.lua:161 表达式探测对 `--` 结尾/含 return 块误判）与 P1-5（toml datetime_shape offset 校验不一致）审核者自列 P2 低危，超出本批 P0/P1 范围；P2 合并段逐条自查均「无 bug/可接受」，无需处理
+
+## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/5M/2m，待修）
+
+- [ ] 将 capture 上限从 chunk 数改为字节数并截断最终 chunk（`lua/luna/serve.lua:108`）——当前 64 KiB 保护可被超大 chunk 绕过。
+- [ ] 增加超大 chunk 与海量小 chunk 的 capture 回归（`test/luna_test_serve.c:1396`）——现有测试验证的是 1.1 MiB 错误行为。
+- [ ] 区分 pending send 的 timeout 与致命错误并释放客户端（`lua/luna/serve.lua:255`）——对端关闭后当前单客户端服务永久卡死。
+- [ ] 为 TLS 写入增加 `INT_MAX` 显式拒绝（`src/luna_loop.c:3754`）——避免 `size_t` 到 `int` 的协议边界破坏。
+- [ ] 对 TLS pending 长度做同一校验（`src/luna_loop.c:3363`）——防止握手前保存的超长载荷进入 `SSL_write`。
+- [ ] 拒绝超过 libuv 单 buffer 上限的文件与 UDP 输入（`src/luna_loop.c:815`、`src/luna_loop.c:863`、`src/luna_loop.c:2498`）——消除 `(unsigned)` 静默截断同型残留。
+- [ ] 修复 TLS 写两处 OOM 的 callback/状态清理（`src/luna_loop.c:3746`、`src/luna_loop.c:3773`）——失败路径不能泄漏已 pin 的回调。
+- [ ] 为 TLS 写 OOM 增加故障注入测试（`src/luna_loop.c:3742`）——锁住 ref 释放与错误交付。
+- [ ] 注入 `SSL_write()==0` 并补齐判别性回归（`test/luna_test_loop.c:1596`）——现有测试无法证明 zero-return 分支本身。
+- [ ] 让 serve teardown 安全处理 `L == NULL`（`test/luna_test_serve.c:140`）——setup 失败时避免二次空指针崩溃。

@@ -149,10 +149,12 @@ static int setup_serve(void **state)
 static int teardown_serve(void **state)
 {
     (void)state;
-    luna_cov_teardown(L);
-    run(L, "S.stop()");
-    lua_close(L);
-    L = NULL;
+    if (L) {
+        luna_cov_teardown(L);
+        run(L, "S.stop()");
+        lua_close(L);
+        L = NULL;
+    }
     unsetenv("LUNA_SOCK_DIR");
     if (rmdir(sockdir) != 0) {
         /* forensics: name whatever stopped the cleanup — on macOS a

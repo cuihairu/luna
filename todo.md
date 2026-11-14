@@ -156,14 +156,14 @@
 
 ## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/5M/2m，待修）
 
-- [ ] 将 capture 上限从 chunk 数改为字节数并截断最终 chunk（`lua/luna/serve.lua:108`）——当前 64 KiB 保护可被超大 chunk 绕过。
-- [ ] 增加超大 chunk 与海量小 chunk 的 capture 回归（`test/luna_test_serve.c:1396`）——现有测试验证的是 1.1 MiB 错误行为。
-- [ ] 区分 pending send 的 timeout 与致命错误并释放客户端（`lua/luna/serve.lua:255`）——对端关闭后当前单客户端服务永久卡死。
-- [ ] 为 TLS 写入增加 `INT_MAX` 显式拒绝（`src/luna_loop.c:3754`）——避免 `size_t` 到 `int` 的协议边界破坏。
-- [ ] 对 TLS pending 长度做同一校验（`src/luna_loop.c:3363`）——防止握手前保存的超长载荷进入 `SSL_write`。
-- [ ] 拒绝超过 libuv 单 buffer 上限的文件与 UDP 输入（`src/luna_loop.c:815`、`src/luna_loop.c:863`、`src/luna_loop.c:2498`）——消除 `(unsigned)` 静默截断同型残留。
-- [ ] 修复 TLS 写两处 OOM 的 callback/状态清理（`src/luna_loop.c:3746`、`src/luna_loop.c:3773`）——失败路径不能泄漏已 pin 的回调。
-- [ ] 为 TLS 写 OOM 增加故障注入测试（`src/luna_loop.c:3742`）——锁住 ref 释放与错误交付。
-- [ ] 注入 `SSL_write()==0` 并补齐判别性回归（`test/luna_test_loop.c:1596`）——现有测试无法证明 zero-return 分支本身。
-- [ ] 让 serve teardown 安全处理 `L == NULL`（`test/luna_test_serve.c:140`）——setup 失败时避免二次空指针崩溃。
+- [x] 将 capture 上限从 chunk 数改为字节数并截断最终 chunk（`lua/luna/serve.lua:108`）——当前 64 KiB 保护可被超大 chunk 绕过。——已完成 18be7f3：`lua/luna/serve.lua:126`/`133-148` capture_start 按字节计数并截断跨越 chunk（镜像 io.write 仍收整 chunk）；回归 `test/luna_test_serve.c:1533` 断言 body==65536+3（cap+语句 nil 尾）。
+- [x] 增加超大 chunk 与海量小 chunk 的 capture 回归（`test/luna_test_serve.c:1396`）——现有测试验证的是 1.1 MiB 错误行为。——已完成 53c6576：海量小 chunk 由既有 70000×17B 测试覆盖，新增 `test/luna_test_serve.c:1570` 单个 200001B chunk：镜像收满 200001、capture 恰好截 65536、成功 OK 帧。serve 44/44。
+- [x] 区分 pending send 的 timeout 与致命错误并释放客户端（`lua/luna/serve.lua:255`）——对端关闭后当前单客户端服务永久卡死。——已完成 3eecbf2+2ade7fc：`lua/luna/serve.lua:92` try_send 读 luasocket (nil,'timeout',idx) 形态，'closed'/raise 才 drop_client；回归 test_pending_send_dead_client_is_dropped（2ade7fc）。
+- [x] 为 TLS 写入增加 `INT_MAX` 显式拒绝（`src/luna_loop.c:3754`）——避免 `size_t` 到 `int` 的协议边界破坏。——已完成 9f58ecd：`src/luna_loop.c:3811` l_tsock_write 入口 `len > INT_MAX` 拒绝（同 sock:write 的 UINT_MAX 形态）。
+- [x] 对 TLS pending 长度做同一校验（`src/luna_loop.c:3363`）——防止握手前保存的超长载荷进入 `SSL_write`。——已完成 9f58ecd：同一入口校验覆盖 pend 路径——pend_len 仅由 l_tsock_write 写入（:3811 之后），tls_pump 重启处（:3400）强制转换不可能回绕，注释已注明。
+- [x] 拒绝超过 libuv 单 buffer 上限的文件与 UDP 输入（`src/luna_loop.c:815`、`src/luna_loop.c:863`、`src/luna_loop.c:2498`）——消除 `(unsigned)` 静默截断同型残留。——已完成 9f58ecd：读路径 `src/luna_loop.c:806` >4GiB 文件经 UV_EFBIG 回调报错；writeFile `:904`、appendFile `:937`、udp send `:2516` 入口 luaL_error（与 sock:write `:1761` 同型）。
+- [x] 修复 TLS 写两处 OOM 的 callback/状态清理（`src/luna_loop.c:3746`、`src/luna_loop.c:3773`）——失败路径不能泄漏已 pin 的回调。——已完成 9f58ecd+7a9173b：握手前 OOM `src/luna_loop.c:3790` tls_write_oom 释放 writeref 后 raise（套接字仍健康）；阻塞写 OOM `:3867` OpenSSL 重试契约已楔死 SSL 对象，改为交付 cb("out of memory") 并 tls_fail 整条连接，两分支 ref 均落地。
+- [x] 为 TLS 写 OOM 增加故障注入测试（`src/luna_loop.c:3742`）——锁住 ref 释放与错误交付。——已完成 7a9173b：注入 seam `src/luna_loop.c:3303`（luna_tls_pend_malloc_fail，`src/luna_loop.c:3308` tls_pend_alloc 消费一次）；`test/luna_test_loop.c:1669` 64MiB 阻塞写注入 malloc 失败：cb 收到 OOM、weak 表两轮 GC 确认 ref 释放、closed 套接字拒二次写。
+- [x] 注入 `SSL_write()==0` 并补齐判别性回归（`test/luna_test_loop.c:1596`）——现有测试无法证明 zero-return 分支本身。——已完成 7a9173b：seam `src/luna_loop.c:3304`/`3317`（tls_write_now 覆盖直写与 pend 刷新两处 SSL_write 位点）；`test/luna_test_loop.c:1726` 合成 0 返回：cb 必须触发、loop 必须排空（删除 r<=0 分支则 writeref 永久挂起、套件超时）。loop 119/119。
+- [x] 让 serve teardown 安全处理 `L == NULL`（`test/luna_test_serve.c:140`）——setup 失败时避免二次空指针崩溃。——已完成 c1539ac：`test/luna_test_serve.c:152` teardown_serve 以 `if (L)` 守卫，L 为 NULL 时跳过 lua 段仍清理 sockdir。
 - [x] CI flake 修复(2026-11-13,daily-build luna-nightly-macos-aarch64 三红中两红):test_attach_history_recorded_and_bounded 报 "exchange: no frame terminator" + GROUP TEARDOWN 残留 luna-<pid>.sock。根因是 luasocket send 契约误读(vendored deps/luasocket/src/buffer.c:85-91:阻塞 send 返回 (nil, 'timeout', index),index 是已收前缀长度,字节实际已上线):serve.lua 回复路径 `not sent` 把部分进度当死 socket → drop_client → 大帧截断,客户端收 'closed' 瞬时返回,2000 轮瞬时耗尽(CI 23ms 完赛的时序吻合);pending 重发路径忽略 index → 整段重发 → 字节重复(fake 钉子实测 wire 17=5 已发+12 重发)。2c95c16(6618f1c 之前)同红吻合——6618f1c 只加了 pending 分支、没修回复路径的同一误读。已修:try_send 返回 (alive, accepted),pending 按已发字节数推进、0 进度仍 return 等下轮(保住 6618f1c 跨 poll 重发语义)、真死才 drop;测试客户端 exchange() 半行重组(receive 第三值作 prefix 回喂,防止 poll 边界劈开 '\30' 与换行被 20ms 超时吞掉)。回归两例:test_partial_send_advances_pending(fake client 钉契约:12 字节 pending 分两轮精确上齐 wire、无重复、client 存活)、test_big_reply_flushes_across_partial_sends(C 侧 setsockopt 把服务端 SO_SNDBUF 压到 2048,8.2KB 帧跨 poll 重发,字节全对断言;Linux 默认 AF_UNIX sndbuf 208KB 不自然触发,此法 100% 复现——修复前红:同款 "no frame terminator",修复后绿)。实测:修复后 test/luna_test_serve 连续 20/20 绿(每次 42/42、teardown rmdir 零残留),全量 ctest 17/17。lua/luna/serve.lua:85,test/luna_test_serve.c:1175,1407,3eecbf2

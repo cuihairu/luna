@@ -1,0 +1,89 @@
+{
+  "name": "luna-vscode",
+  "displayName": "luna",
+  "description": "luna runtime support — completions and hover from the real runtime's own introspection, attach REPL, run file/selection",
+  "version": "0.1.0",
+  "publisher": "cuihairu",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cuihairu/luna.git",
+    "directory": "tools/luna-vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:lua",
+    "onCommand:luna.runFile",
+    "onCommand:luna.runSelection",
+    "onCommand:luna.attach"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "luna.runFile",
+        "title": "luna: Run Lua File",
+        "category": "luna"
+      },
+      {
+        "command": "luna.runSelection",
+        "title": "luna: Run Selection",
+        "category": "luna"
+      },
+      {
+        "command": "luna.attach",
+        "title": "luna: Attach to luna Process",
+        "category": "luna"
+      },
+      {
+        "command": "luna.attach.sendLine",
+        "title": "luna: Send Line to Attached Process",
+        "category": "luna"
+      },
+      {
+        "command": "luna.detach",
+        "title": "luna: Detach",
+        "category": "luna"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "luna.attach.sendLine",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == lua && luna.attached"
+      }
+    ],
+    "configuration": {
+      "title": "luna",
+      "properties": {
+        "luna.runtimePath": {
+          "type": "string",
+          "default": "luna",
+          "description": "The luna binary. Absolute path or a name found on PATH."
+        },
+        "luna.attachTimeoutMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "Reply timeout for attach exchanges. A busy target answers at its poll points, which can take a moment."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "test": "npm run compile && node --test \"test/**/*.test.mjs\"",
+    "package": "vsce package --no-git-tag-version"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}

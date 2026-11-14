@@ -1,0 +1,10 @@
+.vscode/**
+src/**
+test/**
+scripts/**
+tsconfig.json
+.gitignore
+*.vsix
+node_modules/**
+# The extension has no runtime dependencies (vscode only), so nothing
+# from node_modules ships in the vsix; test/package.test.mjs asserts it.

@@ -1497,6 +1497,46 @@ static void *tls_close_main(void *arg)
     return NULL;
 }
 
+/* accept one TLS connection, complete the handshake, then neither read
+ * nor write for the rest of the case: the client's bulk write fills its
+ * own socket buffer (SSL_write WANT_WRITE, pend armed) and stays parked */
+static void tls_stall_serve(int listener)
+{
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx) {
+        BIO *cb = BIO_new_mem_buf(TLS_TEST_CERT, -1);
+        BIO *kb = BIO_new_mem_buf(TLS_TEST_KEY, -1);
+        X509 *x = PEM_read_bio_X509(cb, NULL, 0, NULL);
+        EVP_PKEY *k = PEM_read_bio_PrivateKey(kb, NULL, NULL, NULL);
+        SSL_CTX_use_certificate(ctx, x);
+        SSL_CTX_use_PrivateKey(ctx, k);
+        int c = accept(listener, NULL, NULL);
+        SSL *ssl = SSL_new(ctx);
+        SSL_set_fd(ssl, c);
+        SSL_accept(ssl);
+        usleep(800 * 1000); /* the stall: the case finishes inside it */
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(c);
+        X509_free(x);
+        EVP_PKEY_free(k);
+        BIO_free(cb);
+        BIO_free(kb);
+        SSL_CTX_free(ctx);
+    }
+    close(listener);
+}
+
+static void *tls_stall_main(void *arg)
+{
+    tls_stall_serve((int)(intptr_t)arg);
+    return NULL;
+}
+
+/* the unit-suite seams in luna_loop.c; nothing else writes these */
+extern int luna_tls_pend_malloc_fail;
+extern int (*luna_tls_write_seam)(SSL *, const void *, int);
+
 /* connect + handshake + one write/read round trip, then the server's
  * close_notify arrives as the EOF signal; opts is the Lua table text */
 static void tls_roundtrip_case(const char *opts, int port)
@@ -1619,6 +1659,94 @@ static void test_tls_pending_write_delivers_callback_on_peer_close(void **state)
     const char *got = eval_string(code);
     assert_non_null(got);
     assert_true(strstr(got, "write:") != NULL);
+    pthread_join(th, NULL);
+}
+
+/* OOM on the pend allocation must release the just-pinned write
+ * callback and raise — a leaked writeref would hand this callback a
+ * later write's delivery, and the weak-table check fails GC-wide if
+ * the ref survives. The socket must stay usable afterwards. */
+static void test_tls_write_oom_releases_the_callback(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_stall_main,
+                                    (void *)(intptr_t)listener), 0);
+    /* the stalled peer parks the 64 MiB write at WANT_WRITE, so the
+     * pend allocation is the next one this socket makes */
+    luna_tls_pend_malloc_fail = 1;
+    char code[1024];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "out = ''\n"
+        "local function note(k, v) out = out .. k .. '=' .. tostring(v) .. '; ' end\n"
+        "weak = setmetatable({}, {__mode = 'v'})\n"
+        "net.connectTls('127.0.0.1', %d, {insecure = true}, function(e, s)\n"
+        "  if e then note('connect', e) return end\n"
+        "  GS = s\n"
+        "  local payload = {}\n"
+        "  weak.cb = function(e2) payload.x = 1 note('cberr', e2) end\n"
+        "  local ok, err = pcall(s.write, s, ('x'):rep(64 * 1024 * 1024), weak.cb)\n"
+        "  note('write', ok)\n"
+        "  note('err', err)\n"
+        "end)\n"
+        "loop.setTimeout(function()\n"
+        "  collectgarbage()\n"
+        "  collectgarbage()\n"
+        "  note('weakalive', weak.cb ~= nil)\n"
+        "  note('write2', pcall(GS.write, GS, 'ok', function() end))\n"
+        "  GS:close()\n"
+        "end, 100)\n"
+        "assert(loop.run())\n"
+        "return out", tcp_port_of(listener));
+    const char *got = eval_string(code);
+    luna_tls_pend_malloc_fail = 0;
+    /* the write itself returned cleanly, the pinned callback heard the
+     * OOM (conn failed: OpenSSL's retry contract wedges the SSL object
+     * after a blocked write), the weak entry was collected (no leaked
+     * ref), and the closed sock refuses a second write. A leaked ref
+     * keeps weak.cb alive and fails here. */
+    assert_string_equal(got,
+        "cberr=loop.net: out of memory; write=true; err=nil; "
+        "weakalive=false; write2=false; ");
+    pthread_join(th, NULL);
+}
+
+/* A synthetic SSL_write()==0 must take the fatal arm (its close_notify
+ * semantics), not park the payload as pend: the callback fires and the
+ * loop drains. The pre-fix shape armed the writeref forever — the loop
+ * would hang and this case would hit the suite timeout. */
+static int tls_write_zero_seam(SSL *ssl, const void *buf, int len)
+{
+    (void)ssl; (void)buf; (void)len;
+    return 0;
+}
+
+static void test_tls_write_zero_return_fails_the_socket(void **state)
+{
+    (void)state;
+    int listener = tcp_listen_loopback();
+    pthread_t th;
+    assert_int_equal(pthread_create(&th, NULL, tls_stall_main,
+                                    (void *)(intptr_t)listener), 0);
+    luna_tls_write_seam = tls_write_zero_seam;
+    char code[768];
+    snprintf(code, sizeof code,
+        "local net = loop.net\n"
+        "log = {}\n"
+        "net.connectTls('127.0.0.1', %d, {insecure = true}, function(e, s)\n"
+        "  if e then log[1] = 'connect:' .. e return end\n"
+        "  s:write('ping', function(e2, d)\n"
+        "    log[1] = 'write-fired:' .. tostring(e2) .. '/' .. tostring(d)\n"
+        "  end)\n"
+        "end)\n"
+        "assert(loop.run())\n"
+        "return table.concat(log, ',')", tcp_port_of(listener));
+    const char *got = eval_string(code);
+    luna_tls_write_seam = NULL;
+    assert_non_null(got);
+    assert_true(strstr(got, "write-fired:") != NULL);
     pthread_join(th, NULL);
 }
 #endif /* !_WIN32: the pthread TLS echo server and its connectTls
@@ -3414,6 +3542,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(test_tls_default_verify_rejects_self_signed, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_connect_refused_yields_error, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_pending_write_delivers_callback_on_peer_close, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_oom_releases_the_callback, setup_loop, teardown_loop),
+        cmocka_unit_test_setup_teardown(test_tls_write_zero_return_fails_the_socket, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_with_custom_ca_roundtrips, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_default_verify_rejected, setup_loop, teardown_loop),
         cmocka_unit_test_setup_teardown(test_tls_listen_bad_cert_throws, setup_loop, teardown_loop),

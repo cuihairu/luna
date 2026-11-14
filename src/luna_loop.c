@@ -3294,6 +3294,29 @@ static void tls_connect_ok(struct tsock *t)
     }
 }
 
+/* Unit-suite seams (test/luna_test_loop.c): nothing in production
+ * writes these. The malloc flag fails the NEXT tls pend allocation
+ * once; the function pointer stands in for SSL_write so the
+ * zero-return arm can be forced without a live peer. Both SSL_write
+ * call sites go through tls_write_now so an injected shape reaches the
+ * direct write and the pend flush alike. */
+int luna_tls_pend_malloc_fail = 0;
+int (*luna_tls_write_seam)(SSL *, const void *, int) = NULL;
+
+static char *tls_pend_alloc(size_t len)
+{
+    if (luna_tls_pend_malloc_fail) {
+        luna_tls_pend_malloc_fail = 0;
+        return NULL;
+    }
+    return malloc(len ? len : 1);
+}
+
+static int tls_write_now(SSL *ssl, const void *buf, int len)
+{
+    return (luna_tls_write_seam ? luna_tls_write_seam : SSL_write)(ssl, buf, len);
+}
+
 static void tls_fail(struct tsock *t, const char *err)
 {
     char msg[256];
@@ -3397,7 +3420,7 @@ static void tls_pump_body(struct tsock *t)
          * how far the earlier call got, so this restarts full-length.
          * pend_len is INT_MAX-bounded at the write entry, so this cast
          * cannot wrap. */
-        int r = SSL_write(t->ssl, t->pend, (int)t->pend_len);
+        int r = tls_write_now(t->ssl, t->pend, (int)t->pend_len);
         if (r == (int)t->pend_len) {
             free(t->pend);
             t->pend = NULL;
@@ -3760,9 +3783,10 @@ static int tls_dial_next(struct tsock *t)
     return 0;
 }
 
-/* OOM after the write callback was pinned: release it before raising so
- * the failed write leaves no armed ref behind — a leaked writeref would
- * hand this callback a later write's delivery */
+/* OOM on the pre-handshake hold (SSL_write has not touched the payload,
+ * so the socket stays healthy): release the just-pinned callback and
+ * raise. The blocked-write site cannot recover that way — OpenSSL's
+ * retry contract wedges the SSL object — and fails the conn instead. */
 static int tls_write_oom(lua_State *L, struct tsock *t)
 {
     if (t->writeref != LUA_NOREF) {
@@ -3801,7 +3825,7 @@ static int l_tsock_write(lua_State *L)
     }
     if (!t->handshaked) {
         /* hold the payload until the handshake completes */
-        t->pend = malloc(len ? len : 1);
+        t->pend = tls_pend_alloc(len);
         if (!t->pend) {
             return tls_write_oom(L, t);
         }
@@ -3809,7 +3833,7 @@ static int l_tsock_write(lua_State *L)
         t->pend_len = len;
         return 0;
     }
-    int r = SSL_write(t->ssl, data, (int)len);
+    int r = tls_write_now(t->ssl, data, (int)len);
     if (r == (int)len) {
         tsock_deliver(t, &t->writeref, NULL, NULL, 0);
         return 0;
@@ -3828,9 +3852,20 @@ static int l_tsock_write(lua_State *L)
     /* partial or blocked: hold the WHOLE payload — the flush retries
      * with the original (buf, len), so a shifted window would read
      * past this allocation and trip OpenSSL's bad-write-retry check */
-    t->pend = malloc(len ? len : 1);
+    t->pend = tls_pend_alloc(len);
     if (!t->pend) {
-        return tls_write_oom(L, t);
+        /* OpenSSL already took partial progress on this payload: its
+         * retry contract pins the SAME (buf, len) for any retry, so no
+         * later write can ever succeed on this object — fail the whole
+         * conn instead of leaving a wedged SSL behind. The pinned
+         * callback still hears the OOM: deliver it here (tls_fail's
+         * server-side leg would drop a pend-less writeref). */
+        if (t->writeref != LUA_NOREF) {
+            tsock_deliver(t, &t->writeref, "loop.net: out of memory",
+                          NULL, 0);
+        }
+        tls_fail(t, "loop.net: out of memory");
+        return 0;
     }
     memcpy(t->pend, data, len);
     t->pend_len = len;

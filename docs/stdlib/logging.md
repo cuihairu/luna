@@ -11,6 +11,7 @@ The [lualogging](https://github.com/lunarmodules/lualogging) (lunarmodules, 1.8.
 | `require "logging.file"` | Append-write file; `{ filename=, logLevel=, datePattern=, logPattern=, timestampPattern= }` |
 | `require "logging.rolling_file"` | Rolls on `maxFileSize`, keeps `maxBackupIndex` archives; other params same as file |
 | `require "logging.socket"` | Each message goes over luasocket to a TCP peer at `{ hostname=, port= }` |
+| `require "logging.envconfig"` | Boots the default logger from environment variables — default prefix `LL_` (`LL_LOGLEVEL`, `LL_LOGPATTERNS_DEBUG`, …; boolean/number strings are converted); `set_default_settings` changes prefix/defaults, `set_default_logger` applies it and returns the default logger |
 | logger methods | `:debug/:info/:warn/:error/:fatal(msg, ...)`, arguments expanded via `string.format`; `:setLevel()`, `:getPrint()` |
 
 ## Levels

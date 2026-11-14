@@ -8,9 +8,9 @@
 | --- | --- |
 | `zlib.compress(data, level?)` | 一发式 deflate;`level` 0-9(zlib 口径),缺省 6 |
 | `zlib.decompress(data)` | 一发式 inflate |
-| `zlib.deflate([level])` | lua-zlib 原样:返回流式压缩闭包 |
-| `zlib.inflate()` | lua-zlib 原样:返回流式解压闭包 |
-| (其余) | lua-zlib C 核心函数经 `__index` 透传:`deflate`/`inflate`/`adler32`/`crc32`/`version` 与窗口位常量 |
+| `zlib.deflate([level], [windowSize])` | lua-zlib 原样:返回流式压缩闭包。`windowSize` 缺省 `15`(zlib 格式);gzip 传 `15+16`,raw deflate 传 `-15` |
+| `zlib.inflate([windowSize])` | lua-zlib 原样:返回流式解压闭包。不传 `windowSize` 即自动探测 |
+| (其余) | lua-zlib C 核心函数经 `__index` 透传:`deflate`/`inflate`/`adler32`/`crc32`/`version` |
 
 ## 用法
 
@@ -53,4 +53,4 @@ print(#zlib.inflate()(part1 .. part2, "finish"))
 ## 契约与边界
 
 - `compress`/`decompress` 是一次性进出——大文件请用流式闭包分片,别整块读内存。
-- 一发式便利产出的是 **deflate 裸流**(无 gzip 头);要 gzip 格式走流式闭包给窗口位——`zlib.deflate(level)(data, "finish", 15+16)`(raw deflate 是 -15,gzip 是 15+16)。
+- 一发式便利产出的是 **zlib 格式流**(2 字节头 + adler32 尾,不是 gzip)。窗口位在**创建闭包时**定死,不在调用时:`zlib.deflate(level, windowSize)`,闭包只吃 `(data, flush)`。要 gzip 就 `zlib.deflate(level, 15+16)`——传 `31`,别在闭包调用上补第三个参数(raw deflate 是 `-15`)。

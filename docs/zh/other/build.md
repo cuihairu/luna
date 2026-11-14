@@ -63,7 +63,7 @@ cmake --build build -j
 
 ## 测试组
 
-`ctest --test-dir build` 跑十六组:
+`ctest --test-dir build` 跑十七组:
 
 | 组 | 覆盖面 |
 | --- | --- |
@@ -83,6 +83,7 @@ cmake --build build -j
 | `linedit` | replxx 绑定、增量检索、历史持久化 |
 | `main` | 入口分发、信号安装、模块嵌入、启动流程 |
 | `covsum` | 覆盖率汇总目标(`gcovr_summary`、`lua_coverage`) |
+| `install_sh` | `install.sh` 校验和硬化与 sidecar 拉取,以 shell 脚本形式跑(桩 uname/curl/sha256sum/unzip,无网络) |
 
 ### 单组跑法
 

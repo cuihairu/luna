@@ -63,7 +63,7 @@ The bundle's `PLATFORM-NOTES.txt` has the same notes. First run needs `xattr -cr
 
 ## Test groups
 
-`ctest --test-dir build` runs sixteen groups:
+`ctest --test-dir build` runs seventeen groups:
 
 | Group | Coverage |
 | --- | --- |
@@ -83,6 +83,7 @@ The bundle's `PLATFORM-NOTES.txt` has the same notes. First run needs `xattr -cr
 | `linedit` | replxx binding, incremental search, history persistence |
 | `main` | Entry dispatch, signal installation, module embedding, startup flow |
 | `covsum` | Coverage summary targets (`gcovr_summary`, `lua_coverage`) |
+| `install_sh` | `install.sh` checksum hardening and sidecar fetch, run as a shell script with fake `uname`/`curl`/`sha256sum`/`unzip` (no network) |
 
 ### Run a single group
 

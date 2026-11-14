@@ -107,7 +107,7 @@ macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用
 
 ## 开发
 
-- 测试:ctest 十六组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/zh/other/build);
+- 测试:ctest 十七组(luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum / install_sh),改完跑 `ctest --test-dir build`;覆盖率用独立 Profiling 插桩树,见[构建与自测](https://cuihairu.github.io/luna/zh/other/build);
 - 推送 main 且触及 `docs/` 时 CI 自动构建并发布文档站到 Pages(部署不计为发布)。
 
 ## 本地测试口径

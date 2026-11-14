@@ -107,7 +107,7 @@ On macOS, `brew install pkg-config autoconf cmake`; the optional `libssl-dev` en
 
 ## Development
 
-- Tests: sixteen ctest suites (luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum); run `ctest --test-dir build` after changes. Coverage uses a separate Profiling-instrumented tree, see [Build and testing](https://cuihairu.github.io/luna/other/build);
+- Tests: seventeen ctest suites (luna / repl / cli / complete / introspect / highlight / magic / modules / plugins / serve / loop / rocks / line / linedit / main / covsum / install_sh); run `ctest --test-dir build` after changes. Coverage uses a separate Profiling-instrumented tree, see [Build and testing](https://cuihairu.github.io/luna/other/build);
 - Pushes to main that touch `docs/` trigger CI to build and publish the docs site to Pages (deployment does not count as a release).
 
 ## Local test policy

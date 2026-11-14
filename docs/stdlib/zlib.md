@@ -8,9 +8,9 @@ Compression. Backed by [lua-zlib](https://github.com/brimworks/lua-zlib) (binds 
 | --- | --- |
 | `zlib.compress(data, level?)` | One-shot deflate; `level` 0-9 (zlib convention), default 6 |
 | `zlib.decompress(data)` | One-shot inflate |
-| `zlib.deflate([level])` | lua-zlib verbatim: returns a streaming compression closure |
-| `zlib.inflate()` | lua-zlib verbatim: returns a streaming decompression closure |
-| (everything else) | lua-zlib's C core functions pass through `__index`: `deflate`/`inflate`/`adler32`/`crc32`/`version` and the window-bit constants |
+| `zlib.deflate([level], [windowSize])` | lua-zlib verbatim: returns a streaming compression closure. `windowSize` defaults to `15` (zlib format); pass `15+16` for gzip, `-15` for raw deflate |
+| `zlib.inflate([windowSize])` | lua-zlib verbatim: returns a streaming decompression closure. No `windowSize` means auto-detect |
+| (everything else) | lua-zlib's C core functions pass through `__index`: `deflate`/`inflate`/`adler32`/`crc32`/`version` |
 
 ## Usage
 
@@ -53,5 +53,5 @@ print(#zlib.inflate()(part1 .. part2, "finish"))
 ## Boundary rules
 
 - `compress`/`decompress` are one-shot in/out — for large files use the streaming closures in chunks, don't read the whole thing into memory.
-- The one-shot convenience produces a **raw deflate stream** (no gzip header); for gzip format use the streaming closure with window bits — `zlib.deflate(level)(data, "finish", 15+16)` (raw deflate is -15, gzip is 15+16).
+- The one-shot convenience produces a **zlib-format stream** (2-byte header plus adler32 trailer — not gzip). The window bits are fixed at closure *creation*, not at call time: `zlib.deflate(level, windowSize)` with the closure taking only `(data, flush)`. For gzip, `zlib.deflate(level, 15+16)` — pass `31`, don't append a third argument to the closure call (`-15` for raw deflate).
 

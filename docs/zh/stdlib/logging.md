@@ -11,6 +11,7 @@
 | `require "logging.file"` | 追加写文件;`{ filename=, logLevel=, datePattern=, logPattern=, timestampPattern= }` |
 | `require "logging.rolling_file"` | 按 `maxFileSize` 滚动、留 `maxBackupIndex` 份档;其余参数同 file |
 | `require "logging.socket"` | 每条消息经 luasocket 连 `{ hostname=, port= }` 发往 TCP 对端 |
+| `require "logging.envconfig"` | 从环境变量拉起默认 logger——缺省前缀 `LL_`(`LL_LOGLEVEL`、`LL_LOGPATTERNS_DEBUG` 等;布尔/数字字符串会被转换);`set_default_settings` 改前缀/缺省值,`set_default_logger` 应用并返回默认 logger |
 | logger 方法 | `:debug/:info/:warn/:error/:fatal(msg, ...)`,参数按 `string.format` 展开;`:setLevel()`、`:getPrint()` |
 
 ## 级别

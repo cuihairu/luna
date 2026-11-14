@@ -83,7 +83,8 @@ export default defineConfig({
               { text: 'Configuration and environment', link: '/other/config' },
               { text: 'Error model and exit codes', link: '/other/errors' },
               { text: 'Building and self-testing', link: '/other/build' },
-              { text: 'FAQ', link: '/other/faq' }
+              { text: 'FAQ', link: '/other/faq' },
+              { text: 'Documentation consistency audit', link: '/审计-文档一致性' }
             ]
           },
           {

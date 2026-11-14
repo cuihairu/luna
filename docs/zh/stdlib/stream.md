@@ -16,7 +16,7 @@ Node 流的 v1 收窄面,纯 Lua,地基是 [events](/zh/stdlib/events)。语义�
 | `r:pipe(w)` | 管道;写侧缓冲到 highWaterMark 即暂停,`drain` 事件续推(背压);`opts.end = false` 不自动关写侧 |
 | `r:unpipe(w)` | 摘除管道 |
 
-事件:`data`/`end`(读侧)、`finish`(写侧排空)、`drain`(缓冲回退)、`error` → `destroy` → `close`。`end` 是 Lua 关键字,拼作 `s["end"]` 或 `s:end_()`。
+事件:`data`/`end`(读侧)、`finish`(写侧排空)、`drain`(缓冲回退)、`error` → `close`(流收口时两个都发)。`destroy(err)` 是**方法**,不是事件:它幂等地收口流,`err` 非 nil 时先发 `error`、再发 `close`;纯流一张脸到位即自动收口,duplex/transform 要 `end` 与 `finish` 都到齐。`end` 是 Lua 关键字,拼作 `s["end"]` 或 `s:end_()`。
 
 ## 用法
 

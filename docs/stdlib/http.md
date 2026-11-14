@@ -150,7 +150,7 @@ true	true
 `require "http"` also re-exports all of luasocket's `socket.http` (`request` and its option fields). Two postures:
 
 ```lua
-local h = require "socket.http"     -- or require "http", same table
+local h = require "socket.http"     -- `http` wraps this: same `request`, not the same table
 -- simple form: returns (body, code, headers, status_line), all four values
 local body, code, headers, line = h.request("http://127.0.0.1:8000/a.txt")
 print(body, code, line)             -- hello luna  200  HTTP/1.1 200 OK

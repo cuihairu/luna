@@ -16,7 +16,7 @@ A v1 narrow face of Node streams, pure Lua, built on [events](/stdlib/events). S
 | `r:pipe(w)` | Pipes; the write side pauses when buffered to highWaterMark and resumes on the `drain` event (backpressure); `opts.end = false` does not auto-close the write side |
 | `r:unpipe(w)` | Removes the pipe |
 
-Events: `data`/`end` (read side), `finish` (write side drained), `drain` (buffer receded), `error` → `destroy` → `close`. `end` is a Lua keyword, spelled `s["end"]` or `s:end_()`.
+Events: `data`/`end` (read side), `finish` (write side drained), `drain` (buffer receded), `error` → `close` (both emitted when the stream tears down). `destroy(err)` is a **method**, not an event: it closes the stream idempotently, emitting `error` first when `err` is non-nil and then `close`; the stream also closes itself once both halves are done (a plain stream needs one, duplex/transform need both `end` and `finish`). `end` is a Lua keyword, spelled `s["end"]` or `s:end_()`.
 
 ## Usage
 

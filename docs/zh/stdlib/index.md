@@ -48,7 +48,7 @@ REPL 自带的面(`repl`/`introspect`/`magic`/`complete`/`highlight`,内嵌策�
 
 两个贯穿契约:
 
-- **数据错误不抛,参数错误才抛**:格式类模块(json/csv/ini/toml/xml/yaml)的 `decode`/`encode` 遇到坏数据返回 `nil, err`(消息带行列;toml 例外,只报行号);传错参数类型(比如 `decode(42)`)直接 raise。循环/脚本里喂不可信数据建议 `pcall` 或显式接第二个返回值。
+- **数据错误不抛,参数错误才抛**:格式类模块(json/csv/ini/toml/xml/yaml)的 `decode`/`encode` 遇到坏数据返回 `nil, err`(消息带行列;toml 例外,只报行号)。传错参数类型(比如 `decode(42)`)在 csv/ini/xml/yaml 里 **raise**,但 `toml.decode(42)` 返回 `nil, err`(按数据论),`json.decode(42)` 返回 `42, 3`——json 跟随 Node 的 `JSON.parse`,参数会被转成字符串。循环/脚本里喂不可信数据建议 `pcall` 或显式接第二个返回值。
 - **字符串按字节计**:所有模块对 Lua 字符串不做编码转换;UTF-8 只是"透传并尽量在错误定位里数对"。
 
 ## 随二进制分发的底层模块

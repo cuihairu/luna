@@ -48,7 +48,7 @@ The async face (TCP/TLS/async fs/subprocess/timers, `require "loop"` explicit en
 
 Two cross-cutting contracts:
 
-- **Data errors do not throw; argument errors do**: format-class modules (json/csv/ini/toml/xml/yaml) `decode`/`encode` return `nil, err` for bad data (message carries line and column; toml is the exception, line only); a wrong argument type (such as `decode(42)`) raises directly. Feeding untrusted data in a loop/script suggests `pcall` or explicitly taking the second return value.
+- **Data errors do not throw; argument errors usually do**: format-class modules (json/csv/ini/toml/xml/yaml) `decode`/`encode` return `nil, err` for bad data (message carries line and column; toml is the exception, line only). A wrong argument type (such as `decode(42)`) **raises** in csv/ini/xml/yaml, but `toml.decode(42)` returns `nil, err` (treated as data) and `json.decode(42)` returns `42, 3` — json follows Node's `JSON.parse`, which coerces the argument to a string. Feeding untrusted data in a loop/script suggests `pcall` or explicitly taking the second return value.
 - **Strings count in bytes**: no module does encoding conversion on Lua strings; UTF-8 is just "pass through and try to count correctly in error locations."
 
 ## Bottom-layer modules shipped with the binary

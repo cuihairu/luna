@@ -7,8 +7,8 @@ RFC 4180-style CSV encode/decode. LPeg-grammar-driven (luna bundles lpeg, zero n
 | Call | Description |
 | --- | --- |
 | `csv.decode(str, opts?)` | Parses into **an array of rows, each a field array**; fields are always strings (CSV has no types; conversion is the caller's business, same as Node csv-parse's default); `opts.delimiter` (default `,`), `opts.headers = true` changes the return to **an array of record tables** (the first row is keys; extra columns land under numeric keys) |
-| `csv.encode(rows, opts?)` | Encodes an array of rows; `opts.eol` defaults to CRLF (RFC 4180 wire format), **does not append a trailing eol**; `opts.delimiter` changes the separator; `opts.headers = true` writes a header row first (encode an array of record tables) |
-| `csv.lines(str)` | A per-line iterator yielding each row's field array; bad data **raises** (an iterator's nil is the end, with nowhere to put an error); `opts` same as `decode` |
+| `csv.encode(rows, opts?)` | Encodes an array of rows; `opts.eol` defaults to CRLF (RFC 4180 wire format), **does not append a trailing eol**; `opts.delimiter` changes the separator; `opts.headers` must be **an explicit array** (`{"a","b"}`) which is written as the header row — `true` raises, because a record table's keys have no reliable order |
+| `csv.lines(str, opts?)` | A per-line iterator yielding each row's field array; bad data **raises** (an iterator's nil is the end, with nowhere to put an error); only `opts.delimiter` is read — `headers` and the other decode options do not apply here |
 
 ## Usage
 

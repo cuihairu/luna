@@ -150,7 +150,7 @@ true	true
 `require "http"` 同时再导出 luasocket `socket.http` 的全部(`request` 及其选项字段)。两种姿势:
 
 ```lua
-local h = require "socket.http"     -- 或 require "http",同一张表
+local h = require "socket.http"     -- `http` 是包在外面的壳:同一个 `request`,不是同一张表
 -- 简单形:返回 (body, code, headers, status_line),四个值全给
 local body, code, headers, line = h.request("http://127.0.0.1:8000/a.txt")
 print(body, code, line)             -- hello luna  200  HTTP/1.1 200 OK

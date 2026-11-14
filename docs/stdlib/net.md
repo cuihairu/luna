@@ -12,7 +12,7 @@ TCP/UDP sockets. Backed by [luasocket](https://github.com/lunarmodules/luasocket
 | `net.serve(host, port, handler)` | One-line blocking TCP service: bind → accept loop, `handler(client)` called once per connection; a handler error goes to stderr and the service stands; returning `false` stops it; the actual listen address is announced on stderr (`port` 0 grabs an ephemeral port); accept carries a 250 ms deadline so the loop periodically turns — a pending `^C` stops the service with code 130, the deadline hangs only on the master, and the client a handler gets is unaffected by the timeout |
 | `net.udp()` | A new UDP socket |
 | `net.select(recvt, sendt[, timeout])` | Readiness polling: first arg waits for **readable**, second for **writable** (luasocket convention); returns two ready arrays |
-| `net.dns` | The DNS face (`resolve`/`toip` …) |
+| `net.dns` | The DNS face: `toip`/`tohostname`/`getaddrinfo`/`getnameinfo`/`gethostname` (luasocket `dns`; there is no `resolve`) |
 
 Socket objects follow luasocket semantics:
 

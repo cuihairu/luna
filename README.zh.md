@@ -96,6 +96,10 @@ macOS 需要 `brew install pkg-config autoconf cmake`;可选 `libssl-dev` 启用
 | 插件 | `./plugins` → `~/.luna/plugins` → `$LUNA_PLUGIN_PATH`,manifest + 入口,失败隔离 | [插件开发](https://cuihairu.github.io/luna/zh/guide/plugins) |
 | 架构 | C 内核薄层 + 嵌入 Lua 策略层 + 扩展点;选型对比与事件循环 rationale | [架构设计](https://cuihairu.github.io/luna/zh/architecture) |
 
+## VS Code
+
+`tools/luna-vscode/` 是官方扩展,以 vsix 分发(不上市场):`cd tools/luna-vscode && npm install && npm run package` 打包,然后用 **Extensions: Install from VSIX…** 安装。补全与悬停来自真实运行时自省生成的符号快照(`scripts/regen.sh` 重新导出;禁止手写符号表);attach 到进程后,补全会经 serve 协议合并目标进程的实时候选。`Run Lua File` / `Run Selection` 起子进程 `luna` 输出到通道;attach 后 `ctrl+enter` 逐行驱动活进程。不内置 Lua 语法——语法交给社区 Lua 插件,本扩展只做 luna 专属能力。
+
 ## 文档
 
 - 文档站:**https://cuihairu.github.io/luna/zh/** — 指南(快速上手 / CLI 与 REPL / 模块系统 / 插件开发 / 包管理 / 事件循环 / 异步任务 / 示例与脚手架 / 沙箱运行时)、标准库逐模块参照、配置与环境变量、构建与自测、FAQ、架构设计;

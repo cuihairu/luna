@@ -237,7 +237,13 @@ test('run file spawns the real luna and streams to the channel', { skip: haveLun
   assert.ok(channel, 'the luna output channel is registered');
 
   await vscode.commands.executeCommand('luna.runFile');
-  for (let i = 0; i < 100 && !channel._buf.includes('hello from the file run'); i++) {
+  // wait for BOTH the stdout text and the exit line: the exit line comes from
+  // the child's close event, which fires after the stdio streams drain, so it
+  // can land a tick after the output under load — asserting straight after the
+  // first marker raced on slow runners
+  const done = () =>
+    channel._buf.includes('hello from the file run') && channel._buf.includes('[exit 0]');
+  for (let i = 0; i < 100 && !done(); i++) {
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.match(channel._buf, /hello from the file run/);

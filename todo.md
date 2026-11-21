@@ -4,6 +4,7 @@
 
 ## 待办
 
+- [x] vscode 工具链 install 期脚本收紧(2026-11-21):npm 报 `@vscode/vsce-sign@2.1.1 (postinstall)` 未被 allowScripts 覆盖,该 postinstall 从 npm 注册表拉平台签名二进制并执行。本仓只 `vsce package --no-git-tag-version`(unsigned、无 tag、无 marketplace),签名面用不到。已修:package.json 加 `allowScripts: { "@vscode/vsce-sign": false }` 显式拒,install 期不再跑未审阅脚本;干净 `npm ci` 后 `npm install-scripts ls` =「No packages with unreviewed install scripts」、`npm audit` = 0 漏洞、`vsce package` 仍出 luna-vscode-0.1.0.vsix(10 文件)、测试 37/37 绿。tools/luna-vscode/package.json,5b1ee77
 - [ ] BLOCKED(等用户拍板:是否对本站做浏览器语言自动跳转,2026-11-14 巡检单明确「只调查不实现」;缺=用户对该增强项的裁定) 文档站无双语自动切换,仅手动链接(docs/.vitepress/config.mts:19-21 根 locale en-US、:101-104 zh-CN link '/zh/',切换只靠 VitePress 内置导航 translations 下拉)。G2 审计(2026-11-14)核查主题源码与构建产物 JS,navigator.language/自动重定向/语言探测钩子均 0 命中,当前无自动识别。P2,增强项待拍板:默认「手动切换+显式链接」为受规基线,是否对本站做浏览器语言自动跳转由用户裁定,暂不实现。docs/审计-文档一致性.md「-G2」节
 - [x] en 文档补齐(2026-11-02):33 个 en 页全数落库(guide 11、stdlib 17、other 4、node-parity 1);6 页 guide 工作树 WIP 先核完整后按批提交,余 27 页按审计表 A1 顺序分三批提交(guide 5→stdlib 17→other 4+node-parity 1),每批 docs build 绿后单 commit+push(禁 force push);最后补齐 EN sidebar(标准库四类分法/Other/Design 全链)并归一化全部跨页链接为 en 目标。README/sidebar 链接自此自然可达。5897506,840762e,17b7196,8438d38,e293366
 - [x] util.parseEnv 引号多行值跳行死代码:lua/modules/util/init.lua:701 的跨行跳过被 :714 无条件覆盖,续行被重解析为 key=value(如 'A="x\ny=z"\nB=1' 多出 y='z"')。P2,码审 Finding 1。已修:底部回退改为仅当 i<=nl 时推进,跨行跳过不再被覆盖;新增 2 例跨行引号含 = 回归。lua/modules/util/init.lua:700,test/luna_test_modules.c:3550

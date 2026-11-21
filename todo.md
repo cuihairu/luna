@@ -155,7 +155,7 @@
 - [x] 审核发现（audit-batch4 luna 节，P1b≡P1-3/P1-4，裁定误报不改码）：称 serve.lua:192 pcall 三值解包使成功 magic 落入 not okm 误报 ERR；实际 magic.dispatch 契约是成功返 true（magic.lua:62）失败返 (nil, err)（magic.lua:53,57），pcall 成功得 (true, true)→okm=true→not okm 假→OK 帧，失败得 (true, nil, err)→ERR 带真消息，逻辑正确；审核者漏算 dispatch 首个 true 落在 okm（其假设「成功时 okm=nil」与契约不符）。既有回归 test_magic_runs_against_live_state 锁 %whos→OK|
 - [x] 审核发现（audit-batch4 luna 节，其余项裁定）：P0-2（luna_loop.c:3750 tls_fail 后继续执行）、报告条目3（:3630 connectref 未赋值）、P1-2、P1d、P1e 均审核者自行撤回（报告内已注「无 bug/撤回」）；P1c（repl.lua:161 表达式探测对 `--` 结尾/含 return 块误判）与 P1-5（toml datetime_shape offset 校验不一致）审核者自列 P2 低危，超出本批 P0/P1 范围；P2 合并段逐条自查均「无 bug/可接受」，无需处理
 
-## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/5M/2m，待修）
+## Codex 深审发现（2026-11-13，luna profile 近5 commit 审核，0C/5M/2m，12 项已全部修完）
 
 - [x] 将 capture 上限从 chunk 数改为字节数并截断最终 chunk（`lua/luna/serve.lua:108`）——当前 64 KiB 保护可被超大 chunk 绕过。——已完成 18be7f3：`lua/luna/serve.lua:126`/`133-148` capture_start 按字节计数并截断跨越 chunk（镜像 io.write 仍收整 chunk）；回归 `test/luna_test_serve.c:1533` 断言 body==65536+3（cap+语句 nil 尾）。
 - [x] 增加超大 chunk 与海量小 chunk 的 capture 回归（`test/luna_test_serve.c:1396`）——现有测试验证的是 1.1 MiB 错误行为。——已完成 53c6576：海量小 chunk 由既有 70000×17B 测试覆盖，新增 `test/luna_test_serve.c:1570` 单个 200001B chunk：镜像收满 200001、capture 恰好截 65536、成功 OK 帧。serve 44/44。

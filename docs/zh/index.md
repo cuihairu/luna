@@ -47,3 +47,30 @@ features:
 <p align="center">
   <img src="/terminal.svg" alt="luna 终端会话:REPL 求值、多行函数定义、%timeit 与 json 编码" width="560"/>
 </p>
+
+<script setup lang="ts">
+// 与英文首页对称：双向记录手动语言选择、双向跟随 localStorage，否则英文用户点中文会被弹回
+// 优先级：localStorage 手动选择 > navigator.language > 保持当前 locale
+import { onBeforeMount } from 'vue'
+const KEY = 'luna-lang-auto-picked'
+const BASE = '/luna/'
+const ROOT_PATH = BASE
+const ZH_PATH = BASE + 'zh/'
+onBeforeMount(() => {{
+  if (typeof window === 'undefined') return
+  const p = window.location.pathname
+  if (p !== ZH_PATH && p !== ZH_PATH.slice(0, -1)) return
+  const picked = localStorage.getItem(KEY)
+  if (picked) {{ if (picked !== p) window.location.replace(picked); return }}
+  const langs = (navigator.languages?.length ? navigator.languages : [navigator.language]).map(l => l.toLowerCase())
+  if (!langs.some(l => l.startsWith('zh'))) window.location.replace(ROOT_PATH)
+}})
+if (typeof window !== 'undefined') {{
+  window.addEventListener('click', (e) => {{
+    const a = (e.target as HTMLElement)?.closest?.('a') as HTMLAnchorElement | null
+    const href = a?.getAttribute('href') || ''
+    if (href.startsWith(ZH_PATH) || href.startsWith('zh/')) localStorage.setItem(KEY, ZH_PATH)
+    else if (href === ROOT_PATH || href === ROOT_PATH.slice(0, -1)) localStorage.setItem(KEY, ROOT_PATH)
+  }}, true)
+}}
+</script>
